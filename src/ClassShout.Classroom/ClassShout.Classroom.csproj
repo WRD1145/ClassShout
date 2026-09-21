@@ -29,4 +29,13 @@
     <ProjectReference Include="..\ClassShout.Design\ClassShout.Design.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      托盘图标要求把 .ico 作为 Avalonia 资源嵌进程序集。
+      ApplicationIcon 只决定 exe 自己在资源管理器里长什么样，运行时的 TrayIcon 读不到它，
+      所以同一个文件要按两种方式各引一次。
+    -->
+    <AvaloniaResource Include="..\..\assets\classroom.ico" Link="Assets\classroom.ico" />
+  </ItemGroup>
+
 </Project>

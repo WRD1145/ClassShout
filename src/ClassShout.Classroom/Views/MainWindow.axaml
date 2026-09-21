@@ -355,6 +355,18 @@
         </md3:Md3Card>
 
         <md3:Md3Card Classes="outlined">
+          <StackPanel Spacing="8">
+            <TextBlock Classes="cardTitle" Text="后台运行" />
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="点关闭按钮不会退出，而是缩到通知区域继续接收喊话 —— 教室里顺手点一下 × 不该让全班失联。双击托盘图标可以重新打开，要完全退出请右键托盘图标选「退出」。" />
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="电脑关机、注销或重启时会正常退出，不会被窗口拦住。" />
+          </StackPanel>
+        </md3:Md3Card>
+
+        <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="10">
             <TextBlock Classes="cardTitle" Text="在线教师端" />
             <TextBlock Classes="bodyMedium" IsVisible="{Binding !HasTeachers}"
