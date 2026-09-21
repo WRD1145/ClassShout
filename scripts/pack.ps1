@@ -21,6 +21,10 @@
 .PARAMETER SkipAndroid
     跳过 Android 打包（本机未配置 Android SDK 时用）。
 
+.PARAMETER IncludeLinuxServer
+    额外为 linux-x64 发布一份中继服务器。服务器常部署在 Linux 上，
+    而开发机通常是 Windows，单独出一个 Linux 包比事后手动发布省事。
+
 .EXAMPLE
     .\scripts\pack.ps1
     .\scripts\pack.ps1 -FrameworkDependent -SkipAndroid
@@ -38,6 +42,8 @@ param(
     [switch]$SplitApk,
 
     [switch]$SkipAndroid,
+
+    [switch]$IncludeLinuxServer,
 
     [string]$OutputRoot = 'dist'
 )
@@ -119,11 +125,50 @@ try {
         throw "中继服务器发布失败（退出码 $LASTEXITCODE）"
     }
 
+    # 同上：把 web.config 之类的 IIS 专用文件清掉
+    Get-ChildItem $serverOut -File |
+        Where-Object { $_.Name -ne 'ClassShout.RelayServer.exe' } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+
     Write-Host ("    server\{0,-32} {1,8:N1} MB" -f 'ClassShout.RelayServer.exe', ((Get-Item (Join-Path $serverOut 'ClassShout.RelayServer.exe')).Length / 1MB))
 
     Write-Host ''
     Get-ChildItem $windowsOut -File | Sort-Object Name | ForEach-Object {
         Write-Host ("    {0,-40} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB))
+    }
+
+    # ---------- 中继服务器（Linux） ----------
+    if ($IncludeLinuxServer) {
+        Write-Host ''
+        Write-Host '[Linux] 发布中继服务器（linux-x64）' -ForegroundColor Yellow
+
+        $linuxOut = Join-Path $OutputRoot 'linux'
+        New-Item -ItemType Directory -Force -Path $linuxOut | Out-Null
+
+        $linuxArgs = @(
+            '-c', $Configuration
+            '-r', 'linux-x64'
+            '--self-contained=true'
+            '-p:PublishSingleFile=true'
+            '-p:IncludeNativeLibrariesForSelfExtract=true'
+            '-p:EnableCompressionInSingleFile=true'
+            '-p:DebugType=none'
+        )
+
+        & dotnet publish 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj' @linuxArgs -o $linuxOut --nologo -v q
+        if ($LASTEXITCODE -ne 0) {
+            throw "Linux 服务器发布失败（退出码 $LASTEXITCODE）"
+        }
+
+        # Web SDK 会带出几个只对 IIS 有意义的文件，独立运行时用不到，清掉免得干扰部署
+        Get-ChildItem $linuxOut -File |
+            Where-Object { $_.Name -notin 'ClassShout.RelayServer' } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
+        Write-Host ''
+        Get-ChildItem $linuxOut -File | Sort-Object Name | ForEach-Object {
+            Write-Host ("    {0,-40} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB))
+        }
     }
 
     # ---------- Android ----------

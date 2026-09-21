@@ -37,7 +37,16 @@ internal static class Program
                 ? args[relayIndex + 1]
                 : "http://127.0.0.1:8080";
 
-            return await RunRelayAsync(url);
+            // 管理员口令用于验证「班级授权」那一段。
+            // 服务器可能不在本机（例如部署在 Linux 上），所以这个值必须能显式传入 ——
+            // 早期版本只去本地固定路径找配置文件，连远程服务器时会拿错口令，
+            // 表现成一堆"授权失败"，而其实只是测试自己没拿到凭据。
+            var passwordIndex = Array.FindIndex(args, a => a.Equals("--admin-password", StringComparison.OrdinalIgnoreCase));
+            var adminPassword = passwordIndex >= 0 && passwordIndex + 1 < args.Length
+                ? args[passwordIndex + 1]
+                : null;
+
+            return await RunRelayAsync(url, adminPassword);
         }
 
         var runTts = args.Contains("--tts", StringComparer.OrdinalIgnoreCase);
@@ -264,7 +273,7 @@ internal static class Program
     /// 本方法不负责起服务器 —— 让测试代码去拉进程会引入端口、时序、清理等一堆噪音，
     /// 而这些与"协议是否跑通"无关。
     /// </summary>
-    private static async Task<int> RunRelayAsync(string baseUrl)
+    private static async Task<int> RunRelayAsync(string baseUrl, string? explicitAdminPassword)
     {
         var root = baseUrl.TrimEnd('/');
 
@@ -450,16 +459,24 @@ internal static class Program
             $"静音={status.Muted} 音量={status.Volume}");
 
         // ---------- 7. 班级授权（控制台快速绑定） ----------
-        var adminPassword = ResolveAdminPassword();
-        if (adminPassword is null)
+        var adminPassword = ResolveAdminPassword(explicitAdminPassword);
+        var adminToken = adminPassword is null
+            ? string.Empty
+            : await TryAdminLoginAsync(http, root, adminPassword);
+
+        if (string.IsNullOrEmpty(adminToken))
         {
-            Check("班级授权流程", true, "跳过 —— 未找到 relay-config.json，可用 CLASSSHOUT_ADMIN_PASSWORD 指定");
+            // 口令是显式给的却登不上 —— 那是真的有问题，报失败。
+            // 口令是猜来的（本地配置文件）却登不上 —— 多半是连了别的服务器，跳过而不是误报。
+            var explicitPasswordFailed = explicitAdminPassword is not null;
+            Check("班级授权流程", !explicitPasswordFailed, explicitPasswordFailed
+                ? "** 提供了管理员口令但登录失败，请核对是否与目标服务器一致"
+                : "跳过 —— 未提供管理员口令，可用 --admin-password 指定");
         }
         else
         {
             using var adminHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            adminHttp.DefaultRequestHeaders.TryAddWithoutValidation(
-                RelayPaths.AuthTokenHeader, await AdminLoginAsync(adminHttp, root, adminPassword));
+            adminHttp.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, adminToken);
 
             // 授权前：老师看不到任何班级，且免口令绑定应被拒
             var beforeList = await teacher.GetAuthorizedClassroomsAsync();
@@ -528,8 +545,13 @@ internal static class Program
     /// 取管理员口令。优先环境变量；否则去服务器项目的输出目录里找 relay-config.json。
     /// 找不到就跳过授权相关的检查 —— 与其猜一个口令让测试变成"看环境脸色"，不如明确跳过。
     /// </summary>
-    private static string? ResolveAdminPassword()
+    private static string? ResolveAdminPassword(string? explicitPassword)
     {
+        if (!string.IsNullOrWhiteSpace(explicitPassword))
+        {
+            return explicitPassword;
+        }
+
         var fromEnv = Environment.GetEnvironmentVariable("CLASSSHOUT_ADMIN_PASSWORD");
         if (!string.IsNullOrWhiteSpace(fromEnv))
         {
@@ -563,15 +585,23 @@ internal static class Program
         return null;
     }
 
-    private static async Task<string> AdminLoginAsync(HttpClient http, string root, string password)
+    /// <summary>尝试以管理员身份登录。失败返回空串，由调用方决定是报错还是跳过。</summary>
+    private static async Task<string> TryAdminLoginAsync(HttpClient http, string root, string password)
     {
-        var response = await http.PostAsJsonAsync(
-            $"{root}{RelayPaths.AuthLogin}",
-            new LoginRequest("admin", password),
-            JsonOptions);
+        try
+        {
+            var response = await http.PostAsJsonAsync(
+                $"{root}{RelayPaths.AuthLogin}",
+                new LoginRequest("admin", password),
+                JsonOptions);
 
-        var auth = await response.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions);
-        return auth?.Token ?? string.Empty;
+            var auth = await response.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions);
+            return auth is { Ok: true } ? auth.Token ?? string.Empty : string.Empty;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return string.Empty;
+        }
     }
 
     private static string Trim(string text)

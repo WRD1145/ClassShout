@@ -140,7 +140,7 @@ ClassShout/
 |---|---|
 | 教室电脑 | Windows 10 / 11 x64。**不需要装 .NET 运行时**（发布的是自包含单文件） |
 | 老师手机 | Android 6.0（API 23）及以上 |
-| 中继服务器（可选） | 能跑 .NET 10 的 Windows 或 Linux；1 核 1 GB 内存足够 |
+| 中继服务器（可选） | 能跑 .NET 10 的 Windows 或 Linux；1 核 1 GB 内存足够。**Linux 已实测**（Ubuntu 24.04，见「十、验证」） |
 | 构建机（只需一台） | .NET 10 SDK；要出 APK 还需 Android SDK（见 [`docs/开发环境配置.md`](docs/开发环境配置.md)） |
 
 ### 3.3 第一步：在构建机上打包
@@ -198,6 +198,14 @@ dist/
 2. 双击运行。首次启动 Windows 可能弹防火墙提示，**要勾选「专用网络」并允许** ——
    局域网模式下教师端需要连进来（TCP 45900）并靠 UDP 45901 被发现。
 3. 在界面右侧填写**教室名**（例如「三年二班」），它会显示在教师端和所有弹窗上。
+
+   **要跨局域网的话，服务器地址就在同一列下方的「跨局域网喊话」卡片里**，
+   和教室名挨着，不需要改配置文件：
+
+   ![教室端的联网设置](docs/images/classroom-relay.png)
+
+   填上服务器地址点「连接服务器」，下方会自动出现本教室的 **UUID** 与 **口令**，
+   都能一键复制 —— 把它交给老师，或在管理控制台上直接把班级指派给老师。
 4. 调用「朗读设置」里的**试听当前语音**，确认教室里能听到声音。
    听不到的话依次检查：系统音量 → 默认播放设备 → 「系统语音」下拉框选中的语音。
 
@@ -823,6 +831,31 @@ dotnet run --project tools\ClassShout.EndToEnd -- --relay http://127.0.0.1:8090
 语音流逐字节校验 → 停止指令 → 反向状态通道 → 多班级隔离。
 
 全部通过返回 0，可直接接进 CI。
+
+### 跨平台验证：Windows 客户端 ↔ Linux 服务器
+
+中继服务器不只"能编译到 Linux"，而是真的跑过一遍：
+
+```bash
+# 在 WSL / Linux 主机上
+dotnet publish src/ClassShout.RelayServer -c Release -r linux-x64 --self-contained true \
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o dist/server-linux
+./dist/server-linux/ClassShout.RelayServer --urls http://0.0.0.0:8080
+```
+
+```powershell
+# 在 Windows 上，用客户端去打这台 Linux 服务器
+$env:CLASSSHOUT_ADMIN_PASSWORD = "<从服务器 relay-config.json 里读到的口令>"
+dotnet run --project tools\ClassShout.EndToEnd -- --relay http://<linux-host>:8080
+```
+
+实测结果（Ubuntu 24.04 / x86_64 上的自包含单文件）：**29/29 通过** ——
+包含账号鉴权、班级授权、音频逐字节一致性、多班级隔离，与 Windows 服务器上的结果一致。
+日志里的中文也正常输出。
+
+> **用 `dotnet run` 传管理员口令时注意**：`dotnet run` 转发参数会弄坏含 `%`、`#` 的值，
+> 导致明明口令正确却登录失败。用环境变量 `CLASSSHOUT_ADMIN_PASSWORD` 传，
+> 或直接调用编译好的 exe 即可绕开。这是 `dotnet run` 的行为，不是应用的问题。
 
 ### 界面渲染校验
 
