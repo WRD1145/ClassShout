@@ -26,6 +26,17 @@ foreach ($path in @($e2e, $srv)) {
     }
 }
 
+# 先构建再测。
+#
+# 这一步不是可有可无的礼节：中继服务器是独立进程，如果忘了重建，上面那两个
+# 可执行文件还是上一次的，于是"全部通过"测的是旧代码 —— 而你会以为新改动没问题。
+# 这个坑真的踩过一次，所以让脚本自己保证被测二进制是最新的。
+Write-Host "构建中（$Configuration）…" -ForegroundColor Yellow
+& dotnet build (Join-Path $root 'ClassShout.DesktopOnly.slnf') -c $Configuration -v q --nologo
+if ($LASTEXITCODE -ne 0) {
+    throw "构建失败（退出码 $LASTEXITCODE），先修好再跑回归。"
+}
+
 $state = Join-Path ([System.IO.Path]::GetTempPath()) ('cs-regress-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $state -Force | Out-Null
 Write-Host "状态目录：$state" -ForegroundColor Cyan

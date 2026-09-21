@@ -175,6 +175,7 @@ tr:hover td { background: color-mix(in srgb, var(--on-surface) 4%, transparent);
 .chip.ok { background: var(--primary-container); color: var(--on-primary-container); }
 .chip.warn { background: var(--tertiary-container); color: var(--on-surface); }
 .chip.bad { background: var(--error-container); color: var(--on-error-container); }
+.chip.info { background: var(--secondary-container); color: var(--on-secondary-container); }
 
 /* ---------- 提示条 ---------- */
 .banner {
@@ -284,6 +285,9 @@ tr:hover td { background: color-mix(in srgb, var(--on-surface) 4%, transparent);
       <div class="card">
         <h2>用户账号</h2>
         <p>面向任课老师的账号。口令以 PBKDF2 派生值保存，忘记后只能由这里重置。</p>
+        <p>列表第一行是服务器内置的管理员账号，它不在用户库里，口令以明文存在服务器本地的
+          <span class="mono">relay-config.json</span> 里，可以在这里改。它默认就可以使用所有班级，
+          不需要逐条授权。</p>
         <div id="userList"></div>
       </div>
     </section>
@@ -294,6 +298,7 @@ tr:hover td { background: color-mix(in srgb, var(--on-surface) 4%, transparent);
         <h2>班级授权</h2>
         <p>把班级直接指派给某位老师。被授权的老师在自己手机上一点即可绑定，不必抄 UUID、也不必传口令 ——
           口令一旦转发就会扩散，授权则始终收在服务器上，取消也只在服务器上按一下。</p>
+        <p>内置管理员不在此列：它默认对所有班级可用，无需授权。</p>
         <div id="bindingList"></div>
       </div>
     </section>
@@ -525,18 +530,24 @@ async function loadUsers() {
       const status = u.disabled
         ? '<span class="chip bad">已停用</span>'
         : '<span class="chip ok">正常</span>';
+
+      // 内置管理员没有"停用"这个动作：它不是用户库里的一条记录，
+      // 停掉等于把自己锁在控制台外面，所以那个按钮对它干脆不出现。
+      const actions =
+        '<button class="tonal small" onclick="openReset(\'' + u.id + '\',\'' + escapeAttr(u.displayName) + '\')">重置口令</button>' +
+        (u.isAdmin ? '' :
+          '<button class="outlined small" onclick="toggleDisabled(\'' + u.id + '\',' + (!u.disabled) + ')">' +
+            (u.disabled ? '启用' : '停用') + '</button>');
+
       return '<tr>' +
-        '<td>' + escapeHtml(u.displayName) + '</td>' +
+        '<td>' + escapeHtml(u.displayName) +
+          (u.isAdmin ? ' <span class="chip info">内置管理员</span>' : '') + '</td>' +
         '<td class="mono">' + (u.username ? escapeHtml(u.username) : '—') + '</td>' +
         '<td class="mono">' + (u.email ? escapeHtml(u.email) : '—') + '</td>' +
         '<td>' + status + '</td>' +
-        '<td>' + fmtTime(u.createdAt) + '</td>' +
+        '<td>' + (u.isAdmin ? '—' : fmtTime(u.createdAt)) + '</td>' +
         '<td>' + fmtTime(u.lastLoginAt) + '</td>' +
-        '<td style="text-align:right;white-space:nowrap">' +
-          '<button class="tonal small" onclick="openReset(\'' + u.id + '\',\'' + escapeAttr(u.displayName) + '\')">重置口令</button>' +
-          '<button class="outlined small" onclick="toggleDisabled(\'' + u.id + '\',' + (!u.disabled) + ')">' +
-            (u.disabled ? '启用' : '停用') + '</button>' +
-        '</td>' +
+        '<td style="text-align:right;white-space:nowrap">' + actions + '</td>' +
       '</tr>';
     }).join('') +
     '</tbody></table>';
@@ -559,7 +570,8 @@ async function loadBindings() {
   const host = document.getElementById('bindingList');
 
   if (!list || list.length === 0) {
-    host.innerHTML = '<div class="empty">还没有授权记录。到「教室」页点「授权给老师」即可指派。</div>';
+    host.innerHTML = '<div class="empty">还没有授权记录。到「教室」页点「授权给老师」即可指派。' +
+      '（内置管理员默认对所有班级可用，不需要授权。）</div>';
     return;
   }
 
@@ -589,10 +601,14 @@ function openGrant(uuid, name) {
   setBanner('grantError', '');
 
   const select = document.getElementById('grantUser');
-  if (!cachedUsers || cachedUsers.length === 0) {
+
+  // 管理员默认就对所有班级可用，把它列进"授权给谁"只会误导人
+  const candidates = (cachedUsers || []).filter(u => !u.isAdmin);
+
+  if (candidates.length === 0) {
     select.innerHTML = '<option value="">（还没有老师注册账号）</option>';
   } else {
-    select.innerHTML = cachedUsers.map(u =>
+    select.innerHTML = candidates.map(u =>
       '<option value="' + u.id + '">' + escapeHtml(u.displayName) +
       (u.disabled ? '（已停用）' : '') + '</option>'
     ).join('');

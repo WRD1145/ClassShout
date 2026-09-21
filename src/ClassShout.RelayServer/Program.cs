@@ -232,7 +232,14 @@ app.MapGet(RelayPaths.TeacherAuthorized, ([FromHeader(Name = RelayPaths.AuthToke
 
     var result = new List<AuthorizedClassroom>();
 
-    foreach (var uuid in bindings.ClassroomsOf(profile.Id))
+    // 内置管理员默认对所有班级可用，不需要逐条授权。
+    // 把它做成"隐式全通"而不是启动时写一堆授权记录，是因为后者会在每次新教室
+    // 注册时都要求回头补一条 —— 一个永远追不上的循环。
+    var uuids = profile.Id == AdminUserId
+        ? store.ListForConsole().Select(r => r.Uuid).ToList()
+        : bindings.ClassroomsOf(profile.Id);
+
+    foreach (var uuid in uuids)
     {
         var record = store.Get(uuid);
         if (record is null)
@@ -270,7 +277,9 @@ app.MapPost(RelayPaths.BindTeacher, (
 
     // 管理员在控制台上把该班级授权给了这位老师 → 不必再要口令。
     // 口令一旦转发就会扩散，而授权始终收在服务器上，这也是控制台快速绑定的意义。
-    var authorized = profile is not null && bindings.IsAuthorized(profile.Id, request.Uuid);
+    // 内置管理员则更进一步：它默认对所有班级可用，连授权这一步都省掉。
+    var authorized = profile is not null
+                     && (profile.Id == AdminUserId || bindings.IsAuthorized(profile.Id, request.Uuid));
 
     if (!authorized && !store.Verify(request.Uuid, request.Secret))
     {
@@ -546,6 +555,9 @@ app.MapDelete("/api/console/classrooms/{uuid}", (
     return Results.Ok(new { ok = removed });
 });
 
+// 管理员排在第一位。它是唯一能登录控制台的账号，而控制台又正好是"改管理员口令"
+// 的地方 —— 之前它不出现在这个列表里，界面上那条"到「用户」页里尽快修改"的提示
+// 就成了让人找不到入口的空话。
 app.MapGet("/api/console/users", ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
 {
     if (!userSessions.IsAdminSession(authToken))
@@ -553,7 +565,7 @@ app.MapGet("/api/console/users", ([FromHeader(Name = RelayPaths.AuthTokenHeader)
         return Results.Unauthorized();
     }
 
-    return Results.Ok(users.List().Select(ToDto));
+    return Results.Ok(users.List().Select(ToDto).Prepend(ToAdminDto()));
 });
 
 /// <summary>停用 / 启用账号。</summary>
@@ -565,6 +577,12 @@ app.MapPost("/api/console/users/{id}/disabled", (
     if (!userSessions.IsAdminSession(authToken))
     {
         return Results.Unauthorized();
+    }
+
+    // 内置管理员不是用户库里的一条记录，停用它等于把自己锁在控制台外面
+    if (id == AdminUserId)
+    {
+        return Results.BadRequest(new { error = "内置管理员账号不能被停用。" });
     }
 
     var ok = users.SetDisabled(id, request.Value);
@@ -613,6 +631,13 @@ app.MapPost(RelayPaths.ConsoleBindings, (
     if (!userSessions.IsAdminSession(authToken))
     {
         return Results.Unauthorized();
+    }
+
+    // 管理员本来就对所有班级可用，给它授权既无意义，写进去还会在列表里
+    // 显得像是真的多了一条权限记录。直接说明白，而不是含糊地回一句"账号不存在"。
+    if (request.UserId == AdminUserId)
+    {
+        return Results.Ok(new { ok = true, message = $"「{config.AdminUsername}」是内置管理员，默认就可以使用所有班级，不需要单独授权。" });
     }
 
     var user = users.FindById(request.UserId);
@@ -740,7 +765,18 @@ void NotifyTeachers(string uuid, RelayEnvelope envelope)
 UserProfile? ResolveUser(string? authToken)
 {
     var userId = userSessions.Resolve(authToken);
-    return userId is null ? null : users.FindById(userId);
+    if (userId is null)
+    {
+        return null;
+    }
+
+    // 内置管理员不在用户库里 —— 它是由配置文件描述的。这里给它一份内存中的档案，
+    // 这样"管理员也能像老师一样绑定教室喊话"就不必在每个端点上各写一遍特判，
+    // 而且它默认对所有班级可用这件事（见 TeacherAuthorized 与 BindTeacher）才落得下去。
+    // 账号名取自配置而不是写死 "admin"，运维改过管理员账号名时显示才对得上。
+    return userId == AdminUserId
+        ? new UserProfile(AdminUserId, config.AdminUsername, null, "管理员", config.AdminPasswordGeneratedAt, null, false)
+        : users.FindById(userId);
 }
 
 UserProfileDto ToDto(UserProfile profile)

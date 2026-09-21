@@ -4,6 +4,7 @@
     "projects": [
       "src\\ClassShout.Core\\ClassShout.Core.csproj",
       "src\\ClassShout.Design\\ClassShout.Design.csproj",
+      "src\\ClassShout.RelayServer\\ClassShout.RelayServer.csproj",
       "src\\ClassShout.Teacher\\ClassShout.Teacher.csproj",
       "src\\ClassShout.Teacher.Desktop\\ClassShout.Teacher.Desktop.csproj",
       "src\\ClassShout.Classroom\\ClassShout.Classroom.csproj",

@@ -511,6 +511,60 @@ internal static class Program
 
             // 后续步骤要正常发喊话，这里用口令重新绑上
             await teacher.BindAsync(uuid, secret, "周老师");
+
+            // ---------- 7b. 内置管理员 ----------
+            //
+            // 管理员是唯一能登录控制台的账号，而控制台又正是改管理员口令的地方。
+            // 它必须先出现在用户列表里，界面上那句"到用户页里改口令"才有落点。
+
+            var usersResponse = await adminHttp.GetAsync($"{root}/api/console/users");
+            var userList = await usersResponse.Content.ReadFromJsonAsync<List<UserProfileDto>>(JsonOptions) ?? [];
+            var adminEntry = userList.FirstOrDefault(u => u.IsAdmin);
+
+            Check("用户列表里能看到内置管理员",
+                adminEntry is not null && userList[0] == adminEntry,
+                adminEntry is null
+                    ? $"列表里没有 isAdmin 的账号（共 {userList.Count} 个）"
+                    : $"共 {userList.Count} 个，首项={adminEntry.DisplayName}（{adminEntry.Username}）");
+
+            Check("内置管理员不能被停用",
+                (await adminHttp.PostAsJsonAsync($"{root}/api/console/users/builtin-admin/disabled",
+                    new ConsoleFlagRequest(true), JsonOptions)).StatusCode == System.Net.HttpStatusCode.BadRequest,
+                "已拒绝停用内置管理员");
+
+            // 管理员默认对所有班级可用：授权列表里应当直接出现已注册的教室。
+            // 这里不用 GetFromJsonAsync —— 它在非 2xx 时直接抛异常，
+            // 会让一次断言失败变成整个测试进程崩溃，看不到后面的检查项。
+            var adminAuthorizedResponse = await adminHttp.GetAsync($"{root}{RelayPaths.TeacherAuthorized}");
+            var adminAuthorized = adminAuthorizedResponse.IsSuccessStatusCode
+                ? await adminAuthorizedResponse.Content.ReadFromJsonAsync<List<AuthorizedClassroom>>(JsonOptions) ?? []
+                : [];
+            Check("管理员无需授权即可看到所有班级",
+                adminAuthorized.Any(item => item.Uuid == uuid),
+                adminAuthorizedResponse.IsSuccessStatusCode
+                    ? $"共 {adminAuthorized.Count} 个"
+                    : $"HTTP {(int)adminAuthorizedResponse.StatusCode}");
+
+            // 空口令也能绑上 —— 这是"默认绑定所有班级"最直接的证据
+            var adminBindResponse = await adminHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.BindTeacher}",
+                new TeacherBindRequest(uuid, string.Empty, "不该被采用的名字"),
+                JsonOptions);
+            var adminBind = await adminBindResponse.Content.ReadFromJsonAsync<TeacherBindResponse>(JsonOptions);
+            Check("管理员可以空口令绑定任意班级",
+                adminBind is { Ok: true },
+                adminBind is { Ok: true }
+                    ? $"教室={adminBind.ClassroomName}"
+                    : adminBind?.Error ?? "绑定失败");
+
+            var adminGrantResponse = await adminHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.ConsoleBindings}",
+                new GrantBindingRequest("builtin-admin", uuid),
+                JsonOptions);
+            var adminGrantBody = await adminGrantResponse.Content.ReadAsStringAsync();
+            Check("给管理员授权会被明确告知无需授权",
+                adminGrantResponse.IsSuccessStatusCode && adminGrantBody.Contains("不需要单独授权"),
+                Trim(adminGrantBody));
         }
 
         // ---------- 8. 多班级隔离 ----------
