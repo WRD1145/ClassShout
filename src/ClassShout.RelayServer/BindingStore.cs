@@ -180,9 +180,7 @@ public sealed class BindingStore
     {
         try
         {
-            var temp = _statePath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(_bindings.ToList(), SerializerOptions));
-            File.Move(temp, _statePath, overwrite: true);
+            AtomicStateFile.Write(_statePath, JsonSerializer.Serialize(_bindings.ToList(), SerializerOptions));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

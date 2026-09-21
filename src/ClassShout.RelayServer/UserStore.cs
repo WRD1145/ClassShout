@@ -306,9 +306,7 @@ public sealed class UserStore
         try
         {
             var json = JsonSerializer.Serialize(_users.ToList(), SerializerOptions);
-            var temp = _statePath + ".tmp";
-            File.WriteAllText(temp, json);
-            File.Move(temp, _statePath, overwrite: true);
+            AtomicStateFile.Write(_statePath, json);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

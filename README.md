@@ -311,6 +311,7 @@ sudo chmod 755 /opt/classshout/ClassShout.RelayServer
 sudo -u classshout /opt/classshout/ClassShout.RelayServer --urls http://127.0.0.1:8080
 
 # 4. 收紧状态文件权限：口令是明文存的，只给宿主自己看
+#    （新生成的文件本来就按 600 创建，这一步是给手工放宽过的机器兜底）
 sudo chmod 600 /opt/classshout/relay-config.json
 sudo chmod 600 /opt/classshout/relay-users.json
 
@@ -356,6 +357,13 @@ fail: ClassShout.RelayServer[0]
           sudo chmod 700 /opt/classshout
           sudo chmod 600 /opt/classshout/*.json
 ```
+
+> **状态文件的权限会被保留**
+>
+> 四个状态文件都是"先写 `.tmp` 再改名替换"，而替换会让新文件带上进程 umask 的权限。
+> 如果不做处理，你把 `relay-config.json` 收紧成 600 之后，只要在 WebUI 里改一次口令，
+> 它就会悄悄变回 644 —— 里面是明文口令，却变成同机所有账号都能读。服务器现在会在
+> 替换前把原文件的模式位搬到新文件上：**存在就沿用你的设置，全新创建则默认 600**。
 
 #### 用 HTTPS 反向代理（公网部署强烈建议）
 

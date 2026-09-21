@@ -248,9 +248,7 @@ public sealed class ClassroomStore
             var json = JsonSerializer.Serialize(snapshot, SerializerOptions);
 
             // 先写临时文件再替换，避免写一半断电导致状态文件损坏
-            var temp = _statePath + ".tmp";
-            File.WriteAllText(temp, json);
-            File.Move(temp, _statePath, overwrite: true);
+            AtomicStateFile.Write(_statePath, json);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -174,9 +174,7 @@ public sealed class ServerConfig
     {
         try
         {
-            var temp = Path + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(this, SerializerOptions));
-            File.Move(temp, Path, overwrite: true);
+            AtomicStateFile.Write(Path, JsonSerializer.Serialize(this, SerializerOptions));
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
