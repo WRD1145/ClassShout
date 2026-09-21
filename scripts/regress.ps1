@@ -95,9 +95,14 @@ finally {
 }
 
 Write-Host ''
-Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit" -ForegroundColor Cyan
+Write-Host '================ 教室端托盘驻留 ================' -ForegroundColor Yellow
+& (Join-Path $PSScriptRoot 'smoke-tray.ps1') -ErrorAction Continue
+$trayExit = $LASTEXITCODE
 
-if ($lanExit -ne 0 -or $relayExit -ne 0) {
+Write-Host ''
+Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit    托盘退出码：$trayExit" -ForegroundColor Cyan
+
+if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0) {
     Write-Host '存在失败项。' -ForegroundColor Red
     exit 1
 }

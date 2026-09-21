@@ -954,6 +954,24 @@ dotnet run --project tools\ClassShout.EndToEnd -- --relay http://127.0.0.1:8090
 > 用 `dotnet run` 传管理员口令时注意参数转义会弄坏含 `%`、`#` 的值，
 > 改用环境变量 `CLASSSHOUT_ADMIN_PASSWORD` 或直接调用编译好的 exe。
 
+### 教室端托盘驻留的运行时验证
+
+关闭窗口缩到托盘这种事，改坏了不会有任何报错 —— 程序照样编译通过、照样启动、
+点关闭也确实关掉了，只是"关掉了"和"藏起来了"从代码上看不出区别。
+所以它有一条专门的冒烟测试：
+
+```powershell
+pwsh -File scripts\smoke-tray.ps1
+pwsh -File scripts\smoke-tray.ps1 -Exe dist\windows\ClassShout.Classroom.exe   # 直接测打包产物
+```
+
+做法是给主窗口发 `WM_CLOSE`（等价于用户点右上角的 ×），然后断言**进程仍存活
+且主窗口句柄消失**。这一条顺带覆盖了托盘图标资源路径 —— 图标是作为 Avalonia
+资源嵌入的，路径写错会让 `TryInstall` 返回 null、程序退回"关闭即退出"，
+于是进程就没了，断言随之失败。
+
+`scripts/regress.ps1` 已经把它作为第三段接了进去。
+
 ### 跨平台验证：Windows 客户端 ↔ Linux 服务器
 
 中继服务器不只"能编译到 Linux"，而是真的跑过一遍：
