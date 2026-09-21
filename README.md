@@ -12,6 +12,25 @@
 
 ---
 
+## 目录
+
+| | |
+|---|---|
+| [一、能做什么](#一能做什么) | 功能一览 |
+| [二、项目结构](#二项目结构) | 各模块职责与分层原则 |
+| [**三、安装与部署**](#三安装与部署) | **从零到能用：打包、部署、首次配置、运维** |
+| [四、通信协议](#四通信协议) | TCP 分帧、控制消息、音频格式 |
+| [五、跨局域网（中继服务器）](#五跨局域网中继服务器) | 为什么用长轮询、怎么部署、线路一览 |
+| [六、账号与安全](#六账号与安全) | 两类账号、口令存储、姓名为何不可冒充 |
+| [七、屏幕弹窗](#七屏幕弹窗) | 三档置顶强度与它的边界 |
+| [八、WebUI 管理控制台](#八webui-管理控制台) | 服务器自带的管理界面 |
+| [九、Material Design 3 设计系统](#九material-design-3-设计系统) | 令牌、控件主题、如何换主题色 |
+| [十、验证](#十验证) | 两套自检怎么跑、覆盖了什么 |
+| [十一、已知限制](#十一已知限制) | 上线前需要知道的取舍 |
+| [十二、开发环境](#十二开发环境) | SDK 与 Android 工具链 |
+
+---
+
 ## 一、能做什么
 
 | 能力 | 说明 |
@@ -100,95 +119,324 @@ ClassShout/
 
 ---
 
-## 三、快速开始
+## 三、安装与部署
 
-### 教室端（Windows）
+这一节是给**要把它用起来的人**写的：从零开始，到老师能在手机上喊话为止。
+只改代码的人可以直接跳到「九、Material Design 3 设计系统」。
 
-```powershell
-dotnet run --project src\ClassShout.Classroom
-```
+### 3.1 先想清楚要部署哪些组件
 
-启动后窗口顶栏会显示本机地址（例如 `192.168.1.5:45900`），把这个地址告诉教师端即可，
-或者让教师端自动搜索。
+| 场景 | 需要部署 | 说明 |
+|---|---|---|
+| 老师与教室在**同一网络** | 教室端 + 教师端 | 两台设备，不碰服务器，最简单 |
+| 老师与教室**不在同一网络** | 再加一台中继服务器 | 例如老师在家、教室在学校 |
 
-### 教师端桌面头（在 PC 上调手机界面）
+两种模式不互斥：**装好服务器后，同网段时仍然自动走局域网直连**，只有直连不可用才会用服务器。
+所以「先只装局域网、以后再加服务器」是完全平滑的。
 
-```powershell
-dotnet run --project src\ClassShout.Teacher.Desktop
-```
+### 3.2 环境要求
 
-窗口按手机比例（430×900），跑的是和 Android 完全相同的界面。
+| 组件 | 要求 |
+|---|---|
+| 教室电脑 | Windows 10 / 11 x64。**不需要装 .NET 运行时**（发布的是自包含单文件） |
+| 老师手机 | Android 6.0（API 23）及以上 |
+| 中继服务器（可选） | 能跑 .NET 10 的 Windows 或 Linux；1 核 1 GB 内存足够 |
+| 构建机（只需一台） | .NET 10 SDK；要出 APK 还需 Android SDK（见 [`docs/开发环境配置.md`](docs/开发环境配置.md)） |
 
-### 教师端 Android
-
-```powershell
-dotnet build src\ClassShout.Teacher.Android -c Release
-adb install -r src\ClassShout.Teacher.Android\bin\Release\net10.0-android36.0\com.classshout.teacher-Signed.apk
-```
-
-首次启动会申请麦克风权限；拒绝也不影响文字喊话。
-
-### 没装 Android SDK 时
+### 3.3 第一步：在构建机上打包
 
 ```powershell
-dotnet build ClassShout.DesktopOnly.slnf
-```
-
----
-
-## 三之二、打包分发
-
-```powershell
+git clone <仓库地址>
+cd ClassShout
 .\scripts\pack.ps1
 ```
 
-一次产出可直接分发的文件：
+产物：
 
 ```
 dist/
 ├─ windows/
-│  ├─ ClassShout.Classroom.exe          教室端，60.9 MB
-│  └─ ClassShout.Teacher.Desktop.exe    教师端桌面头，47.2 MB
+│  ├─ ClassShout.Classroom.exe           教室端（拷到教室电脑）
+│  ├─ ClassShout.Teacher.Desktop.exe     教师端桌面头（调试用，可不分发）
+│  └─ server/ClassShout.RelayServer.exe  中继服务器（跨局域网部署用，见 3.6）
 ├─ android/
-│  └─ classshout-teacher-1.0.0-universal.apk   63.3 MB（arm64 + x64）
-└─ SHA256SUMS.txt
+│  └─ classshout-teacher-1.0.0-universal.apk   教师端（发到老师手机）
+└─ SHA256SUMS.txt                        校验清单
 ```
 
-两个 exe 都是**自包含单文件**：拷到目标机双击即可，不需要预先安装 .NET 运行时 ——
-教室电脑往往没有开发环境，这一点对实际部署很关键。
+三个 exe 都是**自包含单文件**：拷到目标机双击即可，不需要预先安装 .NET 运行时。
 
-可选项：
+> 部署到 **Linux 服务器**时单独发布一次即可：
+>
+> ```powershell
+> dotnet publish src\ClassShout.RelayServer -c Release -r linux-x64 --self-contained true `
+>   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+>   -o dist\server-linux
+> ```
+
+打包脚本的其它开关：
 
 | 开关 | 作用 |
 |---|---|
 | `-FrameworkDependent` | 改为依赖框架发布：教室端 60.9 → 34.0 MB，但目标机必须先装 .NET 10 运行时 |
 | `-SplitApk` | 额外为 arm64 / x64 / arm 各出一个 APK（实测 32.6 / 33.3 / 32.0 MB） |
 | `-SkipAndroid` | 跳过 Android 打包（本机未配 SDK 时用） |
-| `-Configuration Debug` | 出调试包 |
 
-> 依赖框架模式省不到一半：原生库（Skia、HarfBuzz）仍会打进单文件，
-> 而单文件压缩在该模式下不被支持（会报 `NETSDK1176`）。
-> 如果教室电脑没把握装运行时，直接用默认的自包含模式更省事。
+### 3.4 第二步：部署教室端
 
-> 单 ABI 打包用的是项目自定义的 `-p:AndroidAbi=android-arm64` 开关。
-> 不能直接传 `RuntimeIdentifiers`：那是全局属性，会传播到被引用的 Core / Design / Teacher，
-> 导致它们被要求按 Android RID 构建而编译失败。
+1. 把 `ClassShout.Classroom.exe` 拷到教室电脑，放在一个固定目录，例如 `C:\ClassShout\`。
 
-### 应用图标
+   教室端的配置**不在 exe 旁边**，而是写在当前 Windows 账户的用户目录里：
 
-图标不是外挂素材，而是由 `tools\ClassShout.IconGen` 用代码生成的：
+   ```
+   %LOCALAPPDATA%\ClassShout\classroom.json               教室名、UUID、口令、服务器地址
+   %LOCALAPPDATA%\ClassShout\classroom-notification.json  弹窗设置
+   ```
+
+   这一点是有意为之：程序可能被装在 `Program Files` 这类只读位置，
+   而且同一台机器上不同 Windows 账户应当有各自独立的教室身份。
+2. 双击运行。首次启动 Windows 可能弹防火墙提示，**要勾选「专用网络」并允许** ——
+   局域网模式下教师端需要连进来（TCP 45900）并靠 UDP 45901 被发现。
+3. 在界面右侧填写**教室名**（例如「三年二班」），它会显示在教师端和所有弹窗上。
+4. 调用「朗读设置」里的**试听当前语音**，确认教室里能听到声音。
+   听不到的话依次检查：系统音量 → 默认播放设备 → 「系统语音」下拉框选中的语音。
+
+**设为开机自启**（教室电脑通常没人管，重启后要能自己起来）：
 
 ```powershell
-dotnet run --project tools\ClassShout.IconGen -- .
+$exe = "C:\ClassShout\ClassShout.Classroom.exe"
+$action  = New-ScheduledTaskAction -Execute $exe
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+Register-ScheduledTask -TaskName "ClassShout 教室端" -Action $action -Trigger $trigger `
+  -RunLevel Highest -Description "课堂喊话教室端"
 ```
 
-- 图形取自 Material.Icons 的路径数据，配色取自 MD3 基线色板，与界面同一套设计语言
-- 教师端：喇叭图形 + 主色 `#6750A4`；教室端：学校图形 + 次级色 `#625B71`（便于任务栏区分）
-- 一次产出 Windows 的 `.ico`（16/24/32/48/64/128/256 七个尺寸）
-  与 Android 的 mipmap（5 档密度 × 普通/圆形两种形状）
-- 每个尺寸都独立渲染而非缩放，小尺寸下笔画不会糊
+> 用**计划任务**而不是启动文件夹：计划任务可以设「最高权限」并以指定账户运行，
+> 也能在无人登录时以服务方式跑（需改 `-AtStartup` 并配置账户密码）。
 
-改配色或换图形只需改 `Program.cs` 里的两个常量，重新生成即可保持全部尺寸一致。
+### 3.5 第三步：部署教师端
+
+**方式 A：adb 安装（手机已开 USB 调试）**
+
+```powershell
+adb install -r dist\android\classshout-teacher-1.0.0-universal.apk
+```
+
+**方式 B：直接发文件**。把 APK 发给老师（微信/网盘），手机上点开安装。
+需要老师在系统设置里允许「安装未知来源应用」。
+
+首次启动会申请**麦克风权限**：允许才能用语音喊话；拒绝也不影响文字喊话。
+
+**关于 ABI**：通用包含 arm64 与 x64，约 63 MB，任何手机都能装。
+只发真机的话用 `-SplitApk` 出的 `arm64` 包，约 32 MB。
+
+### 3.6 第四步（可选）：部署中继服务器
+
+**把服务器发布产物拷到服务器上**，然后：
+
+```bash
+# Linux
+chmod +x ClassShout.RelayServer
+./ClassShout.RelayServer --urls "http://0.0.0.0:8080"
+```
+
+```powershell
+# Windows
+.\ClassShout.RelayServer.exe --urls "http://0.0.0.0:8080"
+```
+
+**首次启动**会在程序目录生成 `relay-config.json`，并把管理员账号与随机口令
+**打印到日志**，务必记下来：
+
+```
+──────────────────────────────────────────────────────────
+  已生成管理员账号，请立即记录并妥善保存：
+      账号：admin
+      口令：LpseCk+kbL5Uy=YR^95v
+  该口令同时保存在配置文件：.../relay-config.json
+──────────────────────────────────────────────────────────
+```
+
+#### 用 systemd 常驻（Linux）
+
+`/etc/systemd/system/classshout.service`：
+
+```ini
+[Unit]
+Description=ClassShout 中继服务器
+After=network.target
+
+[Service]
+Type=simple
+User=classshout
+WorkingDirectory=/opt/classshout
+ExecStart=/opt/classshout/ClassShout.RelayServer --urls http://127.0.0.1:8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin classshout
+sudo mkdir -p /opt/classshout && sudo chown classshout: /opt/classshout
+# 把发布产物和三个状态文件拷进 /opt/classshout
+sudo chmod 600 /opt/classshout/relay-config.json      # 里面有管理员明文口令
+sudo systemctl daemon-reload && sudo systemctl enable --now classshout
+sudo journalctl -u classshout -f                       # 看日志
+```
+
+#### 用 HTTPS 反向代理（公网部署强烈建议）
+
+服务器本身只监听 HTTP，公网部署请放在反向代理后面。**Caddy 最简单**，证书自动申请续期：
+
+`/etc/caddy/Caddyfile`：
+
+```
+relay.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+**Nginx** 版本：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name relay.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/relay.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/relay.example.com/privkey.pem;
+
+    client_max_body_size 8m;      # 音频分片不大，但要留够余量
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+
+        # 长轮询会挂住 25 秒，读超时必须比它长
+        proxy_read_timeout 120s;
+        proxy_buffering off;
+    }
+}
+```
+
+> **`proxy_read_timeout` 一定要放宽**：教室端与教师端靠长轮询接收消息，
+> 默认 60 秒在正常情况下够用，但网络抖动时容易被代理提前掐断，
+> 表现为"喊话偶尔收不到"。
+
+**防火墙**只需放行 443（或 8080，如果不走反代）：
+
+```bash
+sudo ufw allow 443/tcp
+```
+
+#### 状态文件与环境变量
+
+| 文件 | 内容 | 备份优先级 |
+|---|---|---|
+| `relay-config.json` | 管理员账号与口令（**明文**） | 中 |
+| `relay-users.json` | 老师账号（口令为哈希） | **高** |
+| `relay-state.json` | 教室注册记录与口令哈希 | **高** |
+| `relay-bindings.json` | 班级授权 | 中 |
+
+存放目录与监听地址都可以用环境变量或参数指定，方便放进容器：
+
+```bash
+export CLASSSHOUT_CONFIG=/data/relay-config.json
+export CLASSSHOUT_USER_STATE=/data/relay-users.json
+export CLASSSHOUT_RELAY_STATE=/data/relay-state.json
+export CLASSSHOUT_BINDING_STATE=/data/relay-bindings.json
+./ClassShout.RelayServer --urls http://0.0.0.0:8080
+```
+
+### 3.7 第五步：跑通第一个班级
+
+按顺序做完，就有一个能用的班级了。
+
+1. **教室端连服务器**（如果用）：「跨局域网喊话」→ 填服务器地址（例如
+   `https://relay.example.com`）→ **连接服务器**。
+   首次会在服务器上注册并生成口令，界面上出现 **UUID** 和 **口令**，都能一键复制。
+
+2. **老师注册账号**：教师端「设备」页 → 没有账号？切换到注册 →
+   填用户名（3~20 位、字母开头）、邮箱、**姓名**、口令 → 注册并登录。
+   这里填的姓名会显示在教室端的弹窗上，**填真名**。
+
+3. **把班级给老师**，两条路选一条：
+
+   | 路径 | 做法 | 适合 |
+   |---|---|---|
+   | **分配绑定**（推荐） | 管理员打开 `https://relay.example.com` 用 admin 登录 → 「教室」页 → 找到该班级 → **授权给老师** → 选这位老师 | 学校统一管理 |
+   | 口令绑定 | 把教室端的 UUID 与口令抄给老师，老师在「跨局域网」里填进去 | 没有控制台、或临时用一下 |
+
+4. **老师绑定**：分配绑定的话，老师在「设备」页的**管理员分配的班级**里点一下即可；
+   口令绑定的话点「绑定教室」。绑定成功后顶栏会显示教室名。
+
+5. **验证**：老师发一条文字喊话。教室里应当听到朗读，屏幕边缘弹出提示卡，
+   教师端顶栏显示当前链路（同网段是「局域网直连」，跨网络是「公网中继」）。
+
+### 3.8 日常运维
+
+#### 升级
+
+教室端与教师端都是**单文件替换**：关掉旧的、覆盖新文件、重新打开。
+配置（教室名、UUID、口令、账号）都存在用户目录里，升级不会丢。
+
+```powershell
+# 教室端配置位置（升级前建议备份）
+%LOCALAPPDATA%\ClassShout\classroom.json
+%LOCALAPPDATA%\ClassShout\classroom-notification.json
+```
+
+服务器升级：停服务 → 覆盖程序文件 → **保留四个 `relay-*.json`** → 启服务。
+状态文件都在，教室与账号不需要重新注册。
+
+#### 备份
+
+只需备份服务器上的 `relay-users.json`、`relay-state.json`、`relay-bindings.json`
+（`relay-config.json` 也备上，它含管理员口令）。三个文件都很小，直接拷走即可。
+
+```bash
+tar czf classshout-backup-$(date +%F).tar.gz \
+  /opt/classshout/relay-*.json
+```
+
+#### 忘记管理员口令
+
+口令就写在服务器的 `relay-config.json` 里，直接查看：
+
+```bash
+cat /opt/classshout/relay-config.json
+```
+
+如果文件也丢了，删掉它重启即可重新生成 —— 但**普通用户与教室注册不会受影响**，
+它们存在另外两个文件里。
+
+#### 忘记教室口令
+
+登录管理控制台 → 「教室」页 → 删除该教室的注册记录。
+教室端下次启动时会重新注册并生成新口令（UUID 不变，所以已授权的老师无需重配）。
+
+#### 排错
+
+| 现象 | 检查方向 |
+|---|---|
+| 教师端搜不到教室端 | 两台设备是否同一网段；教室电脑防火墙是否放行 TCP 45900 / UDP 45901；是否连了不同的 Wi-Fi（有些校园网会隔离客户端） |
+| 教室端没声音 | 系统音量与默认播放设备；「系统语音」是否选中了中文语音；是否被静音 |
+| 教室端收不到跨网喊话 | 教室端界面是否显示「已连接服务器」；服务器上该教室的「最后在线」是否是刚刚 |
+| 老师能连上但一喊话就断 | 反代的 `proxy_read_timeout` 是否够长（见 3.6） |
+| WebUI 打不开 | 服务器是否在跑；反代是否配好；端口是否放行 |
+| 弹窗被别的窗口盖住 | 把置顶档位调到「UIA 置顶（强制）」；注意它仍盖不住开始菜单、任务管理器这类更高窗口段的系统窗口（原因见「七、屏幕弹窗」） |
+| 中文显示成方块（Android） | 已知问题的修复已包含在代码里；若自行改过设计系统，见「踩过的坑：Android 上非 Normal 字重的中文会变方块」 |
+
+还有一条通用手段：教师端「设备」页有**运行日志**，教室端右下角也有，
+绝大多数连接问题直接看日志比猜快。
+
+---
+
+---
+
 
 ---
 
@@ -240,7 +488,7 @@ Android 头若换用别的采样率，教室端会自动按收到的参数播放
 
 ---
 
-## 四之二、跨局域网（中继服务器）
+## 五、跨局域网（中继服务器）
 
 老师和教室不在同一个网络时（老师在家、教室在学校），直连不可能建立。
 这时让两端都去连一台双方都能访问到的服务器，由它转发。
@@ -334,7 +582,7 @@ dotnet run --project src\ClassShout.RelayServer -- --urls "http://0.0.0.0:8080"
 
 ---
 
-## 四之三、账号与安全
+## 六、账号与安全
 
 ### 两类账号，两套存储
 
@@ -366,7 +614,7 @@ dotnet run --project src\ClassShout.RelayServer -- --urls "http://0.0.0.0:8080"
 
 ---
 
-## 四之四、屏幕弹窗
+## 七、屏幕弹窗
 
 教室端收到喊话时，在屏幕边缘弹出一张小卡片，显示老师姓名、时间与喊话内容。
 
@@ -399,7 +647,7 @@ dotnet run --project src\ClassShout.RelayServer -- --urls "http://0.0.0.0:8080"
 
 ---
 
-## 四之五、WebUI 管理控制台
+## 八、WebUI 管理控制台
 
 服务器自己提供管理界面，登录与数据都走同一套通道 —— 不需要额外部署前端。
 
@@ -437,7 +685,7 @@ http://<服务器地址>:8080/
 
 ---
 
-## 五、Material Design 3 设计系统
+## 九、Material Design 3 设计系统
 
 ### 应用接入方式
 
@@ -489,6 +737,21 @@ Fluent 底座负责 Md3 没有重做的控件（下拉框、滚动条、弹窗�
 应用层资源查找优先级更高，会自动生效。完整色角色清单见
 `src/ClassShout.Design/Themes/Tokens/Color.axaml`。
 
+### 应用图标
+
+图标不是外挂素材，而是由 `tools\ClassShout.IconGen` 用代码生成的：
+
+```powershell
+dotnet run --project tools\ClassShout.IconGen -- .
+```
+
+- 图形取自 Material.Icons 的路径数据，配色取自 MD3 基线色板，与界面同一套设计语言
+- 教师端：喇叭图形 + 主色 `#6750A4`；教室端：学校图形 + 次级色 `#625B71`（便于任务栏区分）
+- 一次产出 Windows 的 `.ico`（16/24/32/48/64/128/256 七个尺寸）
+  与 Android 的 mipmap（5 档密度 × 普通/圆形两种形状）
+- 每个尺寸都独立渲染而非缩放，小尺寸下笔画不会糊
+
+改配色或换图形只需改 `Program.cs` 里的两个常量，重新生成即可保持全部尺寸一致。
 ### 踩过的坑：Android 上非 Normal 字重的中文会变方块
 
 **现象**：教师端在 Android 真机上，部分中文显示成方块（tofu），而同一行里的
@@ -532,7 +795,7 @@ Windows 保持 `Medium`，MD3 的层次感不受影响。
 
 ---
 
-## 六、验证
+## 十、验证
 
 这个项目自带两套自检，改动后可以直接跑一遍确认没坏。
 
@@ -590,7 +853,7 @@ dotnet run --project tools\ClassShout.DesignPreview -- artifacts
 
 ---
 
-## 七、已知限制
+## 十一、已知限制
 
 1. **SkiaSharp 16 KB 页对齐告警**
    构建 Android 时会看到 `warning XA0141`：Avalonia 11.3.12 锁定的 SkiaSharp 2.88.9
@@ -634,7 +897,7 @@ dotnet run --project tools\ClassShout.DesignPreview -- artifacts
 
 ---
 
-## 八、开发环境
+## 十二、开发环境
 
 见 [`docs/开发环境配置.md`](docs/开发环境配置.md)，其中包含实测过的
 Android SDK 组件版本（`android-36` + `build-tools 36.0.0` + JDK 17）

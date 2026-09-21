@@ -264,8 +264,15 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private async Task RefreshRelayRegistrationAsync()
     {
-        await _relay.DisposeAsync().ConfigureAwait(true);
+        // 调用方已经判过非空，但方法签名上 _relay 仍是可空的 —— 这里再取一次局部引用，
+        // 既消掉了可空警告，也避免了 await 期间字段被别处改掉的可能。
+        var previous = _relay;
         _relay = null;
+
+        if (previous is not null)
+        {
+            await previous.DisposeAsync().ConfigureAwait(true);
+        }
 
         var client = new ClassroomRelayClient(_http, _relaySettings);
         client.ShoutReceived += OnRelayShoutReceived;

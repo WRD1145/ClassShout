@@ -108,6 +108,19 @@ try {
     Get-ChildItem $windowsOut -File | Where-Object { $_.Extension -notin '.exe', '.dll', '.json' } |
         Remove-Item -Force -ErrorAction SilentlyContinue
 
+    # 中继服务器：跨局域网部署要用，一起打出来省得部署时再翻命令。
+    # 单独放子目录，避免和桌面应用的依赖文件混在一起。
+    Write-Host '  正在发布中继服务器…'
+    $serverOut = Join-Path $windowsOut 'server'
+    New-Item -ItemType Directory -Force -Path $serverOut | Out-Null
+
+    & dotnet publish 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj' @publishArgs -o $serverOut --nologo -v q
+    if ($LASTEXITCODE -ne 0) {
+        throw "中继服务器发布失败（退出码 $LASTEXITCODE）"
+    }
+
+    Write-Host ("    server\{0,-32} {1,8:N1} MB" -f 'ClassShout.RelayServer.exe', ((Get-Item (Join-Path $serverOut 'ClassShout.RelayServer.exe')).Length / 1MB))
+
     Write-Host ''
     Get-ChildItem $windowsOut -File | Sort-Object Name | ForEach-Object {
         Write-Host ("    {0,-40} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB))
