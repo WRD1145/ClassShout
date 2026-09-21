@@ -256,6 +256,10 @@ chmod +x ClassShout.RelayServer
 **首次启动**会在程序目录生成 `relay-config.json`，并把管理员账号与随机口令
 **打印到日志**，务必记下来：
 
+> 用 systemd 部署时，这次"首次启动"**必须以服务账号的身份完成**，
+> 否则生成的文件归 root 所有，服务账号随后读不到它。
+> 具体命令见下面部署步骤的第 3 步。
+
 ```
 ──────────────────────────────────────────────────────────
   已生成管理员账号，请立即记录并妥善保存：
@@ -281,18 +285,76 @@ WorkingDirectory=/opt/classshout
 ExecStart=/opt/classshout/ClassShout.RelayServer --urls http://127.0.0.1:8080
 Restart=always
 RestartSec=5
+# 78 是服务器在"状态文件权限不对/内容损坏"时主动返回的退出码。
+# 这类问题重启一万次也不会自己好，只会刷爆日志，所以让 systemd 直接放弃。
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+部署顺序很重要，**尤其是第 3 步**：
+
 ```bash
+# 1. 建服务账号和目录
 sudo useradd -r -s /usr/sbin/nologin classshout
-sudo mkdir -p /opt/classshout && sudo chown classshout: /opt/classshout
-# 把发布产物和三个状态文件拷进 /opt/classshout
-sudo chmod 600 /opt/classshout/relay-config.json      # 里面有管理员明文口令
+sudo mkdir -p /opt/classshout
+sudo chown classshout:classshout /opt/classshout
+sudo chmod 750 /opt/classshout
+
+# 2. 把发布产物拷进去
+sudo cp ClassShout.RelayServer /opt/classshout/
+sudo chown classshout:classshout /opt/classshout/ClassShout.RelayServer
+sudo chmod 755 /opt/classshout/ClassShout.RelayServer
+
+# 3. 让"首次启动"就以服务账号的身份发生，然后按 Ctrl+C 退出
+sudo -u classshout /opt/classshout/ClassShout.RelayServer --urls http://127.0.0.1:8080
+
+# 4. 收紧状态文件权限：口令是明文存的，只给宿主自己看
+sudo chmod 600 /opt/classshout/relay-config.json
+sudo chmod 600 /opt/classshout/relay-users.json
+
+# 5. 起服务
 sudo systemctl daemon-reload && sudo systemctl enable --now classshout
 sudo journalctl -u classshout -f                       # 看日志
+```
+
+> **第 3 步为什么不能省**
+>
+> 如果直接以 root 跑一次来生成配置，`/opt/classshout/relay-config.json` 的宿主就是
+> `root`。接着 `chmod 600` 让它变成"只有 root 能读"，而 systemd 是以 `classshout`
+> 身份启动的 —— 服务每次启动都会在读取配置时失败。
+>
+> 症状很好认：`journalctl` 里反复出现
+> `UnauthorizedAccessException: Access to the path '/opt/classshout/relay-config.json' is denied`，
+> 并且 `restart counter` 一路往上涨。
+>
+> 已经踩上去了？一条命令修好，`chown` 和 `chmod` 必须一起做：
+>
+> ```bash
+> sudo chown -R classshout:classshout /opt/classshout
+> sudo systemctl restart classshout
+> ```
+>
+> `chmod` 只改"谁能读写"，`chown` 才改"算谁的"。只做前者，权限位再漂亮也没用。
+
+服务在监听端口之前会先体检 `relay-state.json`、`relay-users.json`、`relay-config.json`、
+`relay-bindings.json` 四个文件，一次性把**全部**问题列出来再退出（而不是每修一处就
+要多重启一轮），并给出可以直接照抄的修正命令，例如：
+
+```
+fail: ClassShout.RelayServer[0]
+      启动中止：状态文件无法使用（共 1 处问题）
+      · 服务器配置：文件存在但读不出来
+          /opt/classshout/relay-config.json（Permission denied）
+      当前进程以账号「classshout」运行。常见原因是：
+        · 曾用 sudo 或 root 手工创建过这些文件，使宿主变成了 root；
+        · 按安全建议收紧过权限，但只改了 chmod，没有一起改 chown；
+        · 或者配置文件里填的路径写错了。
+      Linux 上修正（把 classshout 换成服务实际的运行账号）：
+          sudo chown -R classshout:classshout /opt/classshout
+          sudo chmod 700 /opt/classshout
+          sudo chmod 600 /opt/classshout/*.json
 ```
 
 #### 用 HTTPS 反向代理（公网部署强烈建议）

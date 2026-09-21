@@ -20,6 +20,11 @@ public sealed class ServerConfig
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+
+        // 口令字母表里有 & + < > 这类字符，默认编码器会把它们转义成 \u0026 这种形式。
+        // 可这个文件的用途之一就是让运维直接打开把口令抄出来，
+        // 一屏 \uXXXX 显然做不到这件事。这里不对 HTML 负责，只对人负责。
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
     /// <summary>内置管理员账号名。</summary>
@@ -43,26 +48,68 @@ public sealed class ServerConfig
 
         if (File.Exists(path))
         {
+            string raw;
+
             try
             {
-                var loaded = JsonSerializer.Deserialize<ServerConfig>(File.ReadAllText(path), SerializerOptions);
-                if (loaded is not null)
+                raw = File.ReadAllText(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 关键：读不出来的时候绝不能"顺手重新生成一份"。
+                //
+                // 这个文件里存着管理员明文口令。旧的实现把权限错误和内容损坏
+                // 一起当成"读不了就重建"，结果是进程直接带着未捕获的异常崩掉；
+                // 而如果当时只是把它 catch 住，那更糟 —— 口令会被静默换掉，
+                // 运维手上那张抄着口令的纸当场作废，日志里还只有一行"将使用新生成的配置"。
+                //
+                // 权限问题没有任何"自动修复"的余地，只能报错让人来改。
+                // 正常情况下启动前的体检已经拦住了这类问题，这里是最后一道保险。
+                throw new IOException(
+                    $"无法读取服务器配置 {path}：{ex.Message}。"
+                    + "该文件与所在目录需要对运行本服务的账号可读写。",
+                    ex);
+            }
+
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                // 空文件几乎总是上次写入中途中断留下的残骸。
+                // 内容已经没了，重新生成是唯一出路，但必须让人知道口令变了。
+                logger.LogWarning("服务器配置是空文件，将重新生成管理员口令：{Path}", path);
+            }
+
+            ServerConfig? loaded = null;
+
+            try
+            {
+                loaded = JsonSerializer.Deserialize<ServerConfig>(raw, SerializerOptions);
+                if (loaded is null && !string.IsNullOrWhiteSpace(raw))
                 {
-                    loaded.Path = path;
-                    config = loaded;
-
-                    if (!string.IsNullOrWhiteSpace(config.AdminPassword))
-                    {
-                        logger.LogInformation("已载入服务器配置：{Path}（管理员账号 {Admin}）", path, config.AdminUsername);
-                        return config;
-                    }
-
-                    logger.LogWarning("配置文件里没有管理员口令，将重新生成。");
+                    logger.LogWarning("服务器配置内容不是有效对象，将重新生成管理员口令：{Path}", path);
                 }
             }
-            catch (Exception ex) when (ex is IOException or JsonException)
+            catch (JsonException ex)
             {
-                logger.LogError(ex, "读取服务器配置失败，将使用新生成的配置：{Path}", path);
+                // 内容损坏和权限问题是两码事：文件已经不可能再用，
+                // 重新生成是安全的。但先把原始字节留一份 ——
+                // 抄过口令的运维还有机会从这里把旧口令捞回来。
+                var backup = $"{path}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
+                TryBackup(path, backup, logger);
+                logger.LogError(ex, "服务器配置内容损坏，原文件已备份为 {Backup}，将重新生成管理员口令。", backup);
+            }
+
+            if (loaded is not null)
+            {
+                loaded.Path = path;
+                config = loaded;
+
+                if (!string.IsNullOrWhiteSpace(config.AdminPassword))
+                {
+                    logger.LogInformation("已载入服务器配置：{Path}（管理员账号 {Admin}）", path, config.AdminUsername);
+                    return config;
+                }
+
+                logger.LogWarning("配置文件里没有管理员口令，将重新生成。");
             }
         }
 
@@ -70,7 +117,15 @@ public sealed class ServerConfig
         config.AdminPassword = GenerateStrongPassword();
         config.AdminPasswordGeneratedAt = DateTimeOffset.UtcNow;
         config.AdminPasswordIsInitial = true;
-        config.Save(logger);
+
+        if (!config.Save(logger))
+        {
+            // 写不进去还继续跑，等于给运维一个"记下来、重启后却登录不上"的口令。
+            // 与其留下这种陷阱，不如直接拒绝启动。
+            throw new IOException(
+                $"无法把新生成的服务器配置写入 {path}。"
+                + "请确认运行本服务的账号对该文件与所在目录有写权限。");
+        }
 
         // 醒目地打一条：这是运维第一次拿到口令的唯一机会，
         // 混在其他日志里很容易被忽略掉。
@@ -85,27 +140,62 @@ public sealed class ServerConfig
         return config;
     }
 
-    /// <summary>修改管理员口令并落盘。</summary>
-    public void UpdateAdminPassword(string newPassword, ILogger logger)
+    /// <summary>修改管理员口令并落盘。返回 false 表示落盘失败，本次修改没有生效。</summary>
+    public bool UpdateAdminPassword(string newPassword, ILogger logger)
     {
+        var previousPassword = AdminPassword;
+        var previousGeneratedAt = AdminPasswordGeneratedAt;
+        var previousIsInitial = AdminPasswordIsInitial;
+
         AdminPassword = newPassword;
         AdminPasswordGeneratedAt = DateTimeOffset.UtcNow;
         AdminPasswordIsInitial = false;
-        Save(logger);
+
+        // 先落盘再报成功。否则会出现"界面说改好了、重启后又是旧口令"这种
+        // 最难排查的情况 —— 运维多半会以为是自己记错了。
+        if (!Save(logger))
+        {
+            // 回滚内存状态，让"内存里的口令"和"磁盘上的口令"始终一致：
+            // 要么都是新的，要么都是旧的，不留一个只在当前进程有效的中间态。
+            AdminPassword = previousPassword;
+            AdminPasswordGeneratedAt = previousGeneratedAt;
+            AdminPasswordIsInitial = previousIsInitial;
+
+            logger.LogError("管理员口令修改未能写入磁盘，已放弃本次修改：{Path}", Path);
+            return false;
+        }
+
         logger.LogInformation("管理员口令已更新。");
+        return true;
     }
 
-    public void Save(ILogger logger)
+    /// <summary>把配置写到磁盘。返回 false 表示没有写成功。</summary>
+    public bool Save(ILogger logger)
     {
         try
         {
             var temp = Path + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(this, SerializerOptions));
             File.Move(temp, Path, overwrite: true);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             logger.LogError(ex, "保存服务器配置失败：{Path}", Path);
+            return false;
+        }
+    }
+
+    /// <summary>把损坏的配置复制一份留档，失败也不影响主流程。</summary>
+    private static void TryBackup(string path, string backup, ILogger logger)
+    {
+        try
+        {
+            File.Copy(path, backup, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "备份损坏的配置文件失败：{Path}", path);
         }
     }
 

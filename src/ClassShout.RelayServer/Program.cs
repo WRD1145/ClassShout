@@ -44,6 +44,24 @@ builder.Services.AddSingleton<MessageHub>();
 
 var app = builder.Build();
 
+// ======================== 启动前体检 ========================
+//
+// 必须在解析任何 Store 之前跑。各 Store 的载入逻辑在失败时会降级成空表并继续启动，
+// 那意味着服务看起来是好的，实际却在服务一份空注册表 —— 运维发现不了，
+// 而老师那边表现为"所有教室都提示未注册"。
+// 权限和损坏这类问题没有任何自动修复的余地，唯一正确的做法是拒绝启动并说清楚原因。
+if (!StatePreflight.Report(
+        [
+            new StateFileSpec("教室注册表", statePath),
+            new StateFileSpec("用户表", userStatePath),
+            new StateFileSpec("服务器配置", configPath),
+            new StateFileSpec("班级授权表", bindingStatePath),
+        ],
+        app.Logger))
+{
+    return StatePreflight.ConfigErrorExitCode;
+}
+
 var store = app.Services.GetRequiredService<ClassroomStore>();
 var users = app.Services.GetRequiredService<UserStore>();
 var bindings = app.Services.GetRequiredService<BindingStore>();
@@ -55,8 +73,23 @@ var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Rel
 // 内置管理员的 Id。它不是用户库里的一条记录，所以给一个不会与真实用户冲突的固定值。
 const string AdminUserId = "builtin-admin";
 
-// 首次启动会生成随机强口令并打进日志 —— 那是运维唯一一次"直接看到"它的机会
-var config = ServerConfig.LoadOrCreate(configPath, app.Services.GetRequiredService<ILoggerFactory>().CreateLogger<ServerConfig>());
+// 首次启动会生成随机强口令并打进日志 —— 那是运维唯一一次"直接看到"它的机会。
+// 这里仍然可能失败（体检之后权限被改掉、磁盘满了），所以不能让它把栈抛到运维脸上。
+ServerConfig config;
+try
+{
+    config = ServerConfig.LoadOrCreate(configPath, app.Services.GetRequiredService<ILoggerFactory>().CreateLogger<ServerConfig>());
+}
+catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+{
+    logger.LogError(string.Empty);
+    logger.LogError("启动中止：服务器配置不可用。");
+    logger.LogError("  {Message}", ex.Message);
+    logger.LogError("  路径：{Path}", configPath);
+    logger.LogError("  请修正该文件与所在目录的权限后重启服务。");
+    logger.LogError(string.Empty);
+    return StatePreflight.ConfigErrorExitCode;
+}
 
 /// <summary>长轮询单次等待上限。太短会空转费流量，太长则断线发现变慢。</summary>
 var pollTimeout = TimeSpan.FromSeconds(25);
@@ -651,7 +684,12 @@ app.MapPost("/api/console/password", (
 
     if (request.UserId == AdminUserId)
     {
-        config.UpdateAdminPassword(request.NewPassword, logger);
+        if (!config.UpdateAdminPassword(request.NewPassword, logger))
+        {
+            return Results.Json(
+                new { error = "口令未能写入磁盘（权限或磁盘问题），本次修改已放弃，管理员口令保持不变。" },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
 
         // 改完口令后旧会话仍然有效会让"改密码"失去意义，全部作废要求重新登录
         userSessions.RevokeAdminSessions();
@@ -677,6 +715,10 @@ logger.LogWarning("管理控制台已就绪：http://<服务器地址>{Port}/  �
     config.Path);
 
 app.Run();
+
+// 正常退出（收到停止信号）返回 0。上面那些 return 返回的是配置错误码，
+// systemd 靠它区分"重启也没用"和"进程意外挂了"。
+return 0;
 
 // ======================== 局部函数 ========================
 
