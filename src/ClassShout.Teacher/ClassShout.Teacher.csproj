@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 教师端共享 UI：手机端各平台头（Android / 桌面）共用这套界面与视图模型。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ClassShout.Teacher</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="FluentAvaloniaUI" Version="$(FluentAvaloniaVersion)" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClassShout.Core\ClassShout.Core.csproj" />
+    <ProjectReference Include="..\ClassShout.Design\ClassShout.Design.csproj" />
+  </ItemGroup>
+
+</Project>

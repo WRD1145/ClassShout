@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 形状令牌（Shape Scale）
+  用法：CornerRadius="{DynamicResource Md3.Shape.Large}"
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <CornerRadius x:Key="Md3.Shape.None">0</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.ExtraSmall">4</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Small">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Medium">12</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Large">16</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.ExtraLarge">28</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Full">9999</CornerRadius>
+
+  <!-- 常用组合别名，语义更清楚 -->
+  <CornerRadius x:Key="Md3.Shape.Button">9999</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Card">12</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.TextField">4</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Chip">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Dialog">28</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Sheet">28,28,0,0</CornerRadius>
+
+</ResourceDictionary>

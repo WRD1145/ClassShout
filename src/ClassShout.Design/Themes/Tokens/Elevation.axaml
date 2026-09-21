@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 高度令牌（Elevation）
+
+  MD3 的高度由「阴影 + 表面着色」共同表达。这里只定义阴影部分；
+  表面着色通过 SurfaceContainer 系列颜色角色体现（见 Color.axaml），
+  所以卡片这类控件应当「改背景色 + 加阴影」一起做，而不是只加阴影。
+
+  用法：BoxShadow="{DynamicResource Md3.Elevation.Level1}"
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Level 0：贴地，无阴影 -->
+  <BoxShadows x:Key="Md3.Elevation.Level0">0 0 0 0 #00000000</BoxShadows>
+
+  <!-- Level 1：卡片、搜索栏 -->
+  <BoxShadows x:Key="Md3.Elevation.Level1">0 1 2 0 #4D000000, 0 1 3 1 #26000000</BoxShadows>
+
+  <!-- Level 2：悬浮按钮、菜单 -->
+  <BoxShadows x:Key="Md3.Elevation.Level2">0 1 2 0 #4D000000, 0 2 6 2 #26000000</BoxShadows>
+
+  <!-- Level 3：对话框、抽屉 -->
+  <BoxShadows x:Key="Md3.Elevation.Level3">0 4 8 3 #26000000, 0 1 3 0 #4D000000</BoxShadows>
+
+  <!-- Level 4：导航栏 -->
+  <BoxShadows x:Key="Md3.Elevation.Level4">0 6 10 4 #26000000, 0 2 3 0 #4D000000</BoxShadows>
+
+  <!-- Level 5：模态窗 -->
+  <BoxShadows x:Key="Md3.Elevation.Level5">0 8 12 6 #26000000, 0 4 4 0 #4D000000</BoxShadows>
+
+</ResourceDictionary>

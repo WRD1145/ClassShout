@@ -1,0 +1,17 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:fa="using:FluentAvalonia.Styling"
+             x:Class="ClassShout.Classroom.App"
+             RequestedThemeVariant="Light">
+
+  <Application.Styles>
+    <!--
+      顺序不可颠倒：Md3 主题在后，才能覆盖 Fluent 的默认控件样式。
+      PreferSystemTheme=False 让主题完全由 RequestedThemeVariant 决定，
+      否则会跟随 Windows 系统主题，在教室投影场景下不可控。
+    -->
+    <fa:FluentAvaloniaTheme PreferSystemTheme="False" />
+    <StyleInclude Source="avares://ClassShout.Design/Md3Theme.axaml" />
+  </Application.Styles>
+
+</Application>

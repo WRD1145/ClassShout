@@ -1,0 +1,243 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:md3="using:ClassShout.Design.Controls"
+             x:Class="ClassShout.DesignPreview.Showcase"
+             Background="{DynamicResource Md3.Surface}">
+
+  <UserControl.Styles>
+    <!-- 分组标题：MD3 的 Label Large + 主色，用于区分画廊的每个区块 -->
+    <Style Selector="TextBlock.section">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="FontWeight" Value="Medium" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.Primary}" />
+      <Setter Property="Margin" Value="0,0,0,10" />
+    </Style>
+    <Style Selector="TextBlock.caption">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurfaceVariant}" />
+      <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <Style Selector="Border.swatch">
+      <Setter Property="Width" Value="72" />
+      <Setter Property="Height" Value="52" />
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.OutlineVariant}" />
+    </Style>
+  </UserControl.Styles>
+
+  <ScrollViewer>
+    <StackPanel Margin="28" Spacing="30">
+
+      <!-- ==================== 顶栏 ==================== -->
+      <StackPanel Orientation="Horizontal" Spacing="14">
+        <Border Background="{DynamicResource Md3.PrimaryContainer}"
+                CornerRadius="16" Width="52" Height="52">
+          <md3:Md3Icon Kind="Bullhorn" Size="28" Classes="secondary" />
+        </Border>
+        <StackPanel VerticalAlignment="Center">
+          <TextBlock Classes="headlineSmall" Text="ClassShout 设计系统" />
+          <TextBlock Classes="bodyMedium" Text="Material Design 3 · 基线配色 种子色 #6750A4"
+                     Foreground="{DynamicResource Md3.OnSurfaceVariant}" />
+        </StackPanel>
+      </StackPanel>
+
+      <!-- ==================== 字体排印 ==================== -->
+      <StackPanel>
+        <TextBlock Classes="section" Text="字体排印 / TYPE SCALE" />
+        <StackPanel Spacing="4">
+          <TextBlock Classes="displaySmall" Text="Display 36" />
+          <TextBlock Classes="headlineMedium" Text="Headline 28" />
+          <TextBlock Classes="titleLarge" Text="Title Large 22" />
+          <TextBlock Classes="titleMedium" Text="Title Medium 16 · Medium" />
+          <TextBlock Classes="bodyLarge" Text="Body Large 16 — 用于主要正文内容。" />
+          <TextBlock Classes="bodyMedium" Text="Body Medium 14 — 用于次要说明文字。" />
+          <TextBlock Classes="labelLarge" Text="LABEL LARGE 14 · MEDIUM" />
+        </StackPanel>
+      </StackPanel>
+
+      <!-- ==================== 颜色角色 ==================== -->
+      <StackPanel>
+        <TextBlock Classes="section" Text="颜色角色 / COLOR ROLES" />
+        <WrapPanel Orientation="Horizontal">
+          <StackPanel Margin="0,0,14,14">
+            <Border Classes="swatch" Background="{DynamicResource Md3.Primary}" />
+            <TextBlock Classes="caption" Text="Primary" />
+          </StackPanel>
+          <StackPanel Margin="0,0,14,14">
+            <Border Classes="swatch" Background="{DynamicResource Md3.PrimaryContainer}" />
+            <TextBlock Classes="caption" Text="PrimaryContainer" />
+          </StackPanel>
+          <StackPanel Margin="0,0,14,14">
+            <Border Classes="swatch" Background="{DynamicResource Md3.SecondaryContainer}" />
+            <TextBlock Classes="caption" Text="SecondaryContainer" />
+          </StackPanel>
+          <StackPanel Margin="0,0,14,14">
+            <Border Classes="swatch" Background="{DynamicResource Md3.TertiaryContainer}" />
+            <TextBlock Classes="caption" Text="TertiaryContainer" />
+          </StackPanel>
+          <StackPanel Margin="0,0,14,14">
+            <Border Classes="swatch" Background="{DynamicResource Md3.Error}" />
+            <TextBlock Classes="caption" Text="Error" />
+          </StackPanel>
+          <StackPanel Margin="0,0,14,14">
+            <Border Classes="swatch" Background="{DynamicResource Md3.SurfaceContainerHighest}" />
+            <TextBlock Classes="caption" Text="SurfaceHighest" />
+          </StackPanel>
+          <StackPanel Margin="0,0,14,14">
+            <Border Classes="swatch" Background="{DynamicResource Md3.InverseSurface}" />
+            <TextBlock Classes="caption" Text="InverseSurface" />
+          </StackPanel>
+        </WrapPanel>
+      </StackPanel>
+
+      <!-- ==================== 图标 ==================== -->
+      <StackPanel>
+        <TextBlock Classes="section" Text="图标 / MATERIAL ICONS" />
+        <WrapPanel Orientation="Horizontal">
+          <md3:Md3Icon Kind="Bullhorn" Size="28" Margin="0,0,18,0" Classes="primary" />
+          <md3:Md3Icon Kind="Microphone" Size="28" Margin="0,0,18,0" />
+          <md3:Md3Icon Kind="Send" Size="28" Margin="0,0,18,0" />
+          <md3:Md3Icon Kind="VolumeHigh" Size="28" Margin="0,0,18,0" />
+          <md3:Md3Icon Kind="VolumeOff" Size="28" Margin="0,0,18,0" />
+          <md3:Md3Icon Kind="Wifi" Size="28" Margin="0,0,18,0" />
+          <md3:Md3Icon Kind="School" Size="28" Margin="0,0,18,0" />
+          <md3:Md3Icon Kind="CastConnected" Size="28" Margin="0,0,18,0" />
+          <md3:Md3Icon Kind="Stop" Size="28" Margin="0,0,18,0" Classes="error" />
+          <md3:Md3Icon Kind="History" Size="28" />
+        </WrapPanel>
+      </StackPanel>
+
+      <!-- ==================== 按钮 ==================== -->
+      <StackPanel>
+        <TextBlock Classes="section" Text="按钮 / BUTTONS" />
+        <WrapPanel Orientation="Horizontal">
+          <Button Content="填充按钮" Margin="0,0,12,12" />
+          <Button Classes="tonal" Content="柔和按钮" Margin="0,0,12,12" />
+          <Button Classes="elevated" Content="抬升按钮" Margin="0,0,12,12" />
+          <Button Classes="outlined" Content="描边按钮" Margin="0,0,12,12" />
+          <Button Classes="text" Content="文字按钮" Margin="0,0,12,12" />
+          <Button Classes="danger" Content="停止喊话" Margin="0,0,12,12" />
+          <Button IsEnabled="False" Content="禁用" Margin="0,0,12,12" />
+        </WrapPanel>
+
+        <TextBlock Classes="caption" Margin="0,8,0,6" Text="尺寸与形态" />
+        <WrapPanel Orientation="Horizontal">
+          <Button Classes="small" Content="小号" Margin="0,0,12,12" />
+          <Button Classes="large" Content="大号" Margin="0,0,12,12" />
+          <Button Classes="icon" Margin="0,0,12,12">
+            <md3:Md3Icon Kind="Plus" Size="22" Classes="onSurface" />
+          </Button>
+          <Button Classes="icon" Margin="0,0,12,12">
+            <md3:Md3Icon Kind="Microphone" Size="22" Classes="onSurface" />
+          </Button>
+          <Button Classes="tonal" Margin="0,0,12,12">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <md3:Md3Icon Kind="Send" Size="18" Classes="secondary" />
+              <TextBlock Text="带图标的按钮" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </WrapPanel>
+      </StackPanel>
+
+      <!-- ==================== 输入框 ==================== -->
+      <StackPanel>
+        <TextBlock Classes="section" Text="输入框 / TEXT FIELDS" />
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="20">
+          <StackPanel Grid.Column="0" Spacing="10">
+            <TextBox Watermark="喊话内容" Text="同学们请安静" />
+            <TextBox Watermark="空状态（填充式）" />
+          </StackPanel>
+          <StackPanel Grid.Column="1" Spacing="10">
+            <TextBox Classes="outlined" Watermark="描边式" Text="第三题再讲一遍" />
+            <TextBox Classes="outlined" Watermark="带前置图标">
+              <TextBox.InnerLeftContent>
+                <md3:Md3Icon Kind="MessageText" Size="20" />
+              </TextBox.InnerLeftContent>
+            </TextBox>
+          </StackPanel>
+        </Grid>
+      </StackPanel>
+
+      <!-- ==================== 卡片 ==================== -->
+      <StackPanel>
+        <TextBlock Classes="section" Text="卡片 / CARDS" />
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="20" RowDefinitions="Auto,Auto" RowSpacing="20">
+          <md3:Md3Card Grid.Row="0" Grid.Column="0" Classes="elevated">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="titleMedium" Text="抬升卡片" />
+              <TextBlock Classes="bodyMedium" Text="带阴影，用于需要从背景中浮起的内容。"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}" />
+            </StackPanel>
+          </md3:Md3Card>
+
+          <md3:Md3Card Grid.Row="0" Grid.Column="1" Classes="filled">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="titleMedium" Text="填充卡片" />
+              <TextBlock Classes="bodyMedium" Text="用容器色表达高度，层次更平。"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}" />
+            </StackPanel>
+          </md3:Md3Card>
+
+          <md3:Md3Card Grid.Row="1" Grid.Column="0" Classes="outlined">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="titleMedium" Text="描边卡片" />
+              <TextBlock Classes="bodyMedium" Text="最轻量，适合大量并列。"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}" />
+            </StackPanel>
+          </md3:Md3Card>
+
+          <md3:Md3Card Grid.Row="1" Grid.Column="1" Classes="primary">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="titleMedium" Text="主色卡片"
+                         Foreground="{DynamicResource Md3.OnPrimaryContainer}" />
+              <TextBlock Classes="bodyMedium" Text="强调区，例如正在进行的喊话。"
+                         Foreground="{DynamicResource Md3.OnPrimaryContainer}" />
+            </StackPanel>
+          </md3:Md3Card>
+        </Grid>
+      </StackPanel>
+
+      <!-- ==================== 进度与波形 ==================== -->
+      <StackPanel>
+        <TextBlock Classes="section" Text="反馈 / FEEDBACK" />
+        <StackPanel Spacing="14">
+          <ProgressBar Value="65" Maximum="100" />
+          <ProgressBar Classes="thick" Value="40" Maximum="100" />
+          <Border Background="{DynamicResource Md3.SurfaceContainerHighest}"
+                  CornerRadius="16" Height="72" Padding="16">
+            <md3:Md3AudioWave Name="Wave" Height="40" BarBrush="{DynamicResource Md3.Primary}" />
+          </Border>
+        </StackPanel>
+      </StackPanel>
+
+      <!-- ==================== 列表 ==================== -->
+      <StackPanel>
+        <TextBlock Classes="section" Text="列表 / LISTS + DIVIDER" />
+        <md3:Md3Card Classes="outlined" CardPadding="8">
+          <StackPanel>
+            <ListBox SelectedIndex="0">
+              <ListBoxItem>
+                <StackPanel Orientation="Horizontal" Spacing="14">
+                  <md3:Md3Icon Kind="School" Size="24" />
+                  <TextBlock Text="三年二班" VerticalAlignment="Center" Classes="bodyLarge" />
+                </StackPanel>
+              </ListBoxItem>
+              <ListBoxItem>
+                <StackPanel Orientation="Horizontal" Spacing="14">
+                  <md3:Md3Icon Kind="School" Size="24" />
+                  <TextBlock Text="四年一班" VerticalAlignment="Center" Classes="bodyLarge" />
+                </StackPanel>
+              </ListBoxItem>
+            </ListBox>
+            <Separator Margin="12,6" />
+            <TextBlock Classes="bodySmall" Margin="12,4"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="以上为全部已发现的教室端" />
+          </StackPanel>
+        </md3:Md3Card>
+      </StackPanel>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

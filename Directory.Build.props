@@ -1,0 +1,31 @@
+<Project>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultAvaloniaItems>true</EnableDefaultAvaloniaItems>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
+  </PropertyGroup>
+
+  <!-- 统一版本号，避免各项目漂移 -->
+  <PropertyGroup>
+    <AvaloniaVersion>11.3.12</AvaloniaVersion>
+    <FluentAvaloniaVersion>2.5.1</FluentAvaloniaVersion>
+    <CommunityToolkitMvvmVersion>8.4.2</CommunityToolkitMvvmVersion>
+    <MaterialIconsVersion>2.1.9</MaterialIconsVersion>
+    <NaudioVersion>2.2.1</NaudioVersion>
+    <SystemSpeechVersion>8.0.0</SystemSpeechVersion>
+    <AndroidApiLevel>36</AndroidApiLevel>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Product>ClassShout</Product>
+    <Company>ClassShout</Company>
+    <Version>1.0.0</Version>
+    <NeutralLanguage>zh-Hans</NeutralLanguage>
+  </PropertyGroup>
+
+</Project>

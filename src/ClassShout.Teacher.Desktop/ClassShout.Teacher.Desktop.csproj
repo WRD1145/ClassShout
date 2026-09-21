@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 教师端桌面头：手机比例窗口，用于在 PC 上调试手机端界面与语音采集。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ClassShout.Teacher.Desktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 图标由 tools\ClassShout.IconGen 生成 -->
+    <ApplicationIcon>..\..\assets\teacher.ico</ApplicationIcon>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" />
+    <!-- 桌面头用它做麦克风采集（Android 头用 AudioRecord，互不影响） -->
+    <PackageReference Include="NAudio" Version="$(NaudioVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClassShout.Teacher\ClassShout.Teacher.csproj" />
+  </ItemGroup>
+
+</Project>

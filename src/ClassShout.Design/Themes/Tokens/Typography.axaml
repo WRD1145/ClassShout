@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 字体排印令牌（Type Scale）
+
+  15 种标准样式，分 5 组：Display / Headline / Title / Body / Label。
+  用法：<TextBlock Classes="headlineMedium" Text="正在喊话" />
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Styles.Resources>
+    <ResourceDictionary>
+      <!--
+        字体族：候选顺序会影响中文观感，但**不是**"中文变方块"的成因（见下）。
+
+        在 Android 模拟器（Android 16 / x86_64，系统仅有 NotoSansCJK-Regular.ttc）上
+        用 5 种字体链 × 4 档字重做过对照实验，结论是：
+          · 不指定字体族、只写 Noto Sans CJK SC、只写 sans-serif、只写 Roboto、
+            以及本文件用的这条链 —— 六种选择的表现**完全一致**；
+          · FontWeight.Normal 下中文全部正常，Medium / SemiBold / Bold 下中文全部变方块，
+            而同一行里的拉丁字母（Abc123）始终正常。
+        也就是说：Android 上 Avalonia 的逐字回退只在 Normal 字重生效，
+        换字体族解决不了，只能从字重入手 —— 见下面各号样式里的 OnPlatform。
+
+        这条链仍然值得保留：它让中文优先命中带中文字形的字体，
+        在 Windows 命中微软雅黑、macOS 命中苹方，比让平台随便挑一个要可控。
+      -->
+      <FontFamily x:Key="Md3.FontFamily">Noto Sans CJK SC, Noto Sans SC, Source Han Sans SC, Microsoft YaHei UI, Microsoft YaHei, PingFang SC, Hiragino Sans GB, sans-serif, Roboto</FontFamily>
+
+      <!--
+        强调字重：MD3 的 Label / Title / Button 用 Medium 表达层次。
+
+        做成资源而不是写死，是因为 Android 上必须降为 Normal ——
+        实测（Android 16 / x86_64 模拟器）Avalonia 只对 FontWeight.Normal 做中文字形回退，
+        Medium / SemiBold / Bold 下中文一律渲染成方块，而同一行的拉丁字母正常。
+        换字体族解决不了：试过 5 种链（含只写 Noto Sans CJK SC、只写 sans-serif），
+        表现完全一致。
+
+        Android 头会在启动时把它覆盖为 Normal，见 Md3Typography.ApplyPlatformDefaults。
+        之所以走"运行时覆盖资源"而不是 XAML 里的 {OnPlatform}：
+        平台条件语法放在 Setter 里只会得到字符串，不会转换成 FontWeight，
+        直接抛 InvalidCastException 把应用搞崩（已实测踩过）。
+      -->
+      <FontWeight x:Key="Md3.Weight.Emphasis">Medium</FontWeight>
+
+      <x:Double x:Key="Md3.Type.DisplayLarge">57</x:Double>
+      <x:Double x:Key="Md3.Type.DisplayMedium">45</x:Double>
+      <x:Double x:Key="Md3.Type.DisplaySmall">36</x:Double>
+      <x:Double x:Key="Md3.Type.HeadlineLarge">32</x:Double>
+      <x:Double x:Key="Md3.Type.HeadlineMedium">28</x:Double>
+      <x:Double x:Key="Md3.Type.HeadlineSmall">24</x:Double>
+      <x:Double x:Key="Md3.Type.TitleLarge">22</x:Double>
+      <x:Double x:Key="Md3.Type.TitleMedium">16</x:Double>
+      <x:Double x:Key="Md3.Type.TitleSmall">14</x:Double>
+      <x:Double x:Key="Md3.Type.BodyLarge">16</x:Double>
+      <x:Double x:Key="Md3.Type.BodyMedium">14</x:Double>
+      <x:Double x:Key="Md3.Type.BodySmall">12</x:Double>
+      <x:Double x:Key="Md3.Type.LabelLarge">14</x:Double>
+      <x:Double x:Key="Md3.Type.LabelMedium">12</x:Double>
+      <x:Double x:Key="Md3.Type.LabelSmall">11</x:Double>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <!-- ============================ Display ============================ -->
+  <Style Selector="TextBlock.displayLarge">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.DisplayLarge}" />
+    <Setter Property="LineHeight" Value="64" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="TextBlock.displayMedium">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.DisplayMedium}" />
+    <Setter Property="LineHeight" Value="52" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="TextBlock.displaySmall">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.DisplaySmall}" />
+    <Setter Property="LineHeight" Value="44" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+
+  <!-- ============================ Headline ============================ -->
+  <Style Selector="TextBlock.headlineLarge">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.HeadlineLarge}" />
+    <Setter Property="LineHeight" Value="40" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="TextBlock.headlineMedium">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.HeadlineMedium}" />
+    <Setter Property="LineHeight" Value="36" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="TextBlock.headlineSmall">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.HeadlineSmall}" />
+    <Setter Property="LineHeight" Value="32" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+
+  <!-- ============================ Title ============================ -->
+  <Style Selector="TextBlock.titleLarge">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.TitleLarge}" />
+    <Setter Property="LineHeight" Value="28" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="TextBlock.titleMedium">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.TitleMedium}" />
+    <Setter Property="LineHeight" Value="24" />
+    <Setter Property="FontWeight" Value="{DynamicResource Md3.Weight.Emphasis}" />
+  </Style>
+  <Style Selector="TextBlock.titleSmall">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.TitleSmall}" />
+    <Setter Property="LineHeight" Value="20" />
+    <Setter Property="FontWeight" Value="{DynamicResource Md3.Weight.Emphasis}" />
+  </Style>
+
+  <!-- ============================ Body ============================ -->
+  <Style Selector="TextBlock.bodyLarge">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.BodyLarge}" />
+    <Setter Property="LineHeight" Value="24" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="TextBlock.bodyMedium">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.BodyMedium}" />
+    <Setter Property="LineHeight" Value="20" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+  <Style Selector="TextBlock.bodySmall">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.BodySmall}" />
+    <Setter Property="LineHeight" Value="16" />
+    <Setter Property="FontWeight" Value="Normal" />
+  </Style>
+
+  <!-- ============================ Label ============================ -->
+  <Style Selector="TextBlock.labelLarge">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.LabelLarge}" />
+    <Setter Property="LineHeight" Value="20" />
+    <Setter Property="FontWeight" Value="{DynamicResource Md3.Weight.Emphasis}" />
+  </Style>
+  <Style Selector="TextBlock.labelMedium">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.LabelMedium}" />
+    <Setter Property="LineHeight" Value="16" />
+    <Setter Property="FontWeight" Value="{DynamicResource Md3.Weight.Emphasis}" />
+  </Style>
+  <Style Selector="TextBlock.labelSmall">
+    <Setter Property="FontSize" Value="{StaticResource Md3.Type.LabelSmall}" />
+    <Setter Property="LineHeight" Value="16" />
+    <Setter Property="FontWeight" Value="{DynamicResource Md3.Weight.Emphasis}" />
+  </Style>
+
+  <!-- 次级说明文字：套用 Body 尺寸但用弱化前景色 -->
+  <Style Selector="TextBlock.supporting">
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurfaceVariant}" />
+  </Style>
+
+</Styles>

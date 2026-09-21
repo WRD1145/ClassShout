@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    仅用于执行 MSBuild 目标 InstallAndroidDependencies：
+        dotnet build tools\AndroidSdkBootstrap\AndroidSdkBootstrap.csproj `
+          -t:InstallAndroidDependencies -f net10.0-android36.0 `
+          -p:AndroidSdkDirectory="D:\Android\Sdk" `
+          -p:JavaSdkDirectory="<JDK17 路径>" `
+          -p:AcceptAndroidSDKLicenses=True
+
+    InstallAndroidDependencies 是 MSBuild 目标而非独立命令，必须在某个项目上执行，
+    所以这里放一个不引用任何 NuGet 包的最小 android 项目：
+    既不需要联网还原，也不会被 Avalonia 的依赖问题卡住。
+    它不产出任何程序集，装完 SDK 后可以一直留着复用。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-android36.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);NETSDK1080</NoWarn>
+  </PropertyGroup>
+
+  <!-- 排除在本解决方案常规构建之外：它只在手动指定目标时才会被用到 -->
+  <PropertyGroup>
+    <IsBuildable>false</IsBuildable>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ClassShout.Classroom/ClassShout.Classroom.csproj" />
+    <Project Path="src/ClassShout.Core/ClassShout.Core.csproj" />
+    <Project Path="src/ClassShout.Design/ClassShout.Design.csproj" />
+    <Project Path="src/ClassShout.Teacher.Android/ClassShout.Teacher.Android.csproj" />
+    <Project Path="src/ClassShout.Teacher.Desktop/ClassShout.Teacher.Desktop.csproj" />
+    <Project Path="src/ClassShout.Teacher/ClassShout.Teacher.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/ClassShout.DesignPreview/ClassShout.DesignPreview.csproj" />
+    <Project Path="tools/ClassShout.EndToEnd/ClassShout.EndToEnd.csproj" />
+  </Folder>
+</Solution>

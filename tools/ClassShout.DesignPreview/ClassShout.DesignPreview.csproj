@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    界面预览与渲染校验工具。
+
+    用途有两层：
+      1. 导出设计系统与两个应用的真实渲染图（PNG），改动界面后可直接看效果；
+      2. 对渲染结果做像素级自检 —— 界面整片空白、主题令牌没解析到，
+         这两种最常见的故障都能被自动发现，不需要人逐张看图。
+
+    目标框架跟教室端一致（net10.0-windows），才能引用到教室端窗口。
+
+    运行：dotnet run 指定本项目，把输出目录作为参数传入。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>ClassShout.DesignPreview</RootNamespace>
+    <AssemblyName>ClassShout.DesignPreview</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UseHeadlessDrawing=false 时才会走 Skia 真实渲染，从而能截到像素 -->
+    <PackageReference Include="Avalonia.Headless" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Skia" Version="$(AvaloniaVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ClassShout.Design\ClassShout.Design.csproj" />
+    <ProjectReference Include="..\..\src\ClassShout.Teacher\ClassShout.Teacher.csproj" />
+    <ProjectReference Include="..\..\src\ClassShout.Classroom\ClassShout.Classroom.csproj" />
+  </ItemGroup>
+
+</Project>

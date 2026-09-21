@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <!-- 连接教室端 -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+  <!-- UDP 广播发现教室端需要 -->
+  <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+  <!-- 语音喊话：运行时还需要动态申请，见 MainActivity -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+  <uses-feature android:name="android.hardware.microphone" android:required="true" />
+
+  <!--
+    Activity 与 Application 节点由构建系统根据 [Activity] 特性和
+    csproj 里的 ApplicationId / 版本号自动生成，这里只声明权限与硬件特性。
+  -->
+
+</manifest>

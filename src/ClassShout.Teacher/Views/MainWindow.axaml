@@ -1,0 +1,20 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="using:ClassShout.Teacher.Views"
+        xmlns:vm="using:ClassShout.Teacher.ViewModels"
+        x:Class="ClassShout.Teacher.Views.MainWindow"
+        x:DataType="vm:TeacherShellViewModel"
+        Title="ClassShout 教师端"
+        Width="430" Height="900"
+        MinWidth="380" MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource Md3.Surface}">
+
+  <!--
+    桌面头存在的意义是"在 PC 上调手机界面"：
+    窗口按手机比例（约 19.5:9）设定，MainView 就是 Android 上跑的那个同款视图，
+    所以这里看到的效果和真机基本一致。
+  -->
+  <views:MainView />
+
+</Window>

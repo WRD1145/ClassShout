@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 表面类控件：卡片、图标、列表项
+
+  注意：本文件是 ResourceDictionary，只能放 ControlTheme / 资源。
+  直接作用于控件实例的 Style 必须放在 Md3Styles.axaml 里，
+  但 ControlTheme 内部的嵌套 Style（选择器以 ^ 开头）不受此限制。
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:md3="using:ClassShout.Design.Controls">
+
+  <!-- ============================ 卡片 ============================ -->
+  <ControlTheme x:Key="{x:Type md3:Md3Card}" TargetType="md3:Md3Card">
+    <Setter Property="Background" Value="{DynamicResource Md3.SurfaceContainerLow}" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Md3.Shape.Card}" />
+    <Setter Property="CardPadding" Value="16" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="PART_Border"
+                Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}"
+                Padding="{TemplateBinding CardPadding}">
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+    <!-- 默认抬升：MD3 的高度由"阴影 + 表面着色"共同表达 -->
+    <Style Selector="^ /template/ Border#PART_Border">
+      <Setter Property="BoxShadow" Value="{DynamicResource Md3.Elevation.Level1}" />
+    </Style>
+
+    <!-- 填充卡片：用容器色代替阴影，层次更平 -->
+    <Style Selector="^.filled">
+      <Setter Property="Background" Value="{DynamicResource Md3.SurfaceContainerHighest}" />
+    </Style>
+    <Style Selector="^.filled /template/ Border#PART_Border">
+      <Setter Property="BoxShadow" Value="{DynamicResource Md3.Elevation.Level0}" />
+    </Style>
+
+    <!-- 描边卡片：最轻量 -->
+    <Style Selector="^.outlined">
+      <Setter Property="Background" Value="{DynamicResource Md3.Surface}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.OutlineVariant}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="^.outlined /template/ Border#PART_Border">
+      <Setter Property="BoxShadow" Value="{DynamicResource Md3.Elevation.Level0}" />
+    </Style>
+
+    <!-- 主色卡片：强调区，例如"正在喊话" -->
+    <Style Selector="^.primary">
+      <Setter Property="Background" Value="{DynamicResource Md3.PrimaryContainer}" />
+    </Style>
+    <Style Selector="^.primary /template/ Border#PART_Border">
+      <Setter Property="BoxShadow" Value="{DynamicResource Md3.Elevation.Level0}" />
+    </Style>
+
+    <!-- 纯分组用：无背景无阴影 -->
+    <Style Selector="^.plain">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="^.plain /template/ Border#PART_Border">
+      <Setter Property="BoxShadow" Value="{DynamicResource Md3.Elevation.Level0}" />
+    </Style>
+
+    <Style Selector="^.compact">
+      <Setter Property="CardPadding" Value="12" />
+    </Style>
+    <Style Selector="^.roomy">
+      <Setter Property="CardPadding" Value="24" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ============================ 图标 ============================ -->
+  <ControlTheme x:Key="{x:Type md3:Md3Icon}" TargetType="md3:Md3Icon">
+    <!--
+      这里刻意不设 IconBrush 的默认值：
+      留空时控件会去读继承来的 TextElement.Foreground，
+      于是放在按钮/导航项里的图标能自动跟随前景色变化（含选中态）。
+      若无继承值，代码里会回退到 Md3.OnSurfaceVariant。
+    -->
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+
+    <!-- 配色变体：用于按钮内部或强调场景 -->
+    <Style Selector="^.onSurface">
+      <Setter Property="IconBrush" Value="{DynamicResource Md3.OnSurface}" />
+    </Style>
+    <Style Selector="^.onPrimary">
+      <Setter Property="IconBrush" Value="{DynamicResource Md3.OnPrimary}" />
+    </Style>
+    <Style Selector="^.primary">
+      <Setter Property="IconBrush" Value="{DynamicResource Md3.Primary}" />
+    </Style>
+    <Style Selector="^.error">
+      <Setter Property="IconBrush" Value="{DynamicResource Md3.Error}" />
+    </Style>
+    <Style Selector="^.inverse">
+      <Setter Property="IconBrush" Value="{DynamicResource Md3.InverseOnSurface}" />
+    </Style>
+    <Style Selector="^.secondary">
+      <Setter Property="IconBrush" Value="{DynamicResource Md3.OnSecondaryContainer}" />
+    </Style>
+  </ControlTheme>
+
+  <!-- ============================ 列表项 ============================ -->
+  <ControlTheme x:Key="{x:Type ListBoxItem}" TargetType="ListBoxItem">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Md3.Shape.Full}" />
+    <Setter Property="Padding" Value="16,12" />
+    <Setter Property="Margin" Value="0,2" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurface}" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Cursor" Value="Hand" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Panel Name="PART_Root">
+          <Border Name="PART_Background"
+                  Background="{TemplateBinding Background}"
+                  CornerRadius="{TemplateBinding CornerRadius}" />
+
+          <Border Name="PART_StateLayer"
+                  Background="{DynamicResource Md3.OnSurface}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Opacity="0"
+                  IsHitTestVisible="False" />
+
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            Padding="{TemplateBinding Padding}"
+                            HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                            Foreground="{TemplateBinding Foreground}" />
+        </Panel>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^:pointerover /template/ Border#PART_StateLayer">
+      <Setter Property="Opacity" Value="{DynamicResource Md3.State.Hover}" />
+    </Style>
+
+    <!-- 选中态：MD3 用 SecondaryContainer 作为选中容器色 -->
+    <Style Selector="^:selected /template/ Border#PART_Background">
+      <Setter Property="Background" Value="{DynamicResource Md3.SecondaryContainer}" />
+    </Style>
+    <Style Selector="^:selected /template/ Border#PART_StateLayer">
+      <Setter Property="Background" Value="{DynamicResource Md3.OnSecondaryContainer}" />
+    </Style>
+    <Style Selector="^:selected">
+      <Setter Property="Foreground" Value="{DynamicResource Md3.OnSecondaryContainer}" />
+    </Style>
+  </ControlTheme>
+
+</ResourceDictionary>

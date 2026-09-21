@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 颜色令牌（完整色角色 / Color Roles）
+  基线配色，种子色 #6750A4。数值取自 Material Theme Builder 的基线方案。
+
+  命名遵循 MD3 官方规范：<角色> / on<角色> / <角色>Container / on<角色>Container。
+  使用方式：Background="{DynamicResource Md3.Primary}"
+
+  想换主题色，不必改这个文件 —— 在应用层用同名 key 覆盖即可，见 Md3Theme.axaml 顶部说明。
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <ResourceDictionary.ThemeDictionaries>
+
+    <!-- ============================ 亮色主题 ============================ -->
+    <ResourceDictionary x:Key="Light">
+
+      <!-- Primary：主色，用于主要操作、激活态 -->
+      <SolidColorBrush x:Key="Md3.Primary" Color="#6750A4" />
+      <SolidColorBrush x:Key="Md3.OnPrimary" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.PrimaryContainer" Color="#EADDFF" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryContainer" Color="#21005D" />
+
+      <!-- Secondary：次级强调，用于筛选片、次要按钮 -->
+      <SolidColorBrush x:Key="Md3.Secondary" Color="#625B71" />
+      <SolidColorBrush x:Key="Md3.OnSecondary" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.SecondaryContainer" Color="#E8DEF8" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryContainer" Color="#1D192B" />
+
+      <!-- Tertiary：三级强调，用于对比性点缀 -->
+      <SolidColorBrush x:Key="Md3.Tertiary" Color="#7D5260" />
+      <SolidColorBrush x:Key="Md3.OnTertiary" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.TertiaryContainer" Color="#FFD8E4" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryContainer" Color="#31111D" />
+
+      <!-- Error：错误与危险操作 -->
+      <SolidColorBrush x:Key="Md3.Error" Color="#B3261E" />
+      <SolidColorBrush x:Key="Md3.OnError" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.ErrorContainer" Color="#F9DEDC" />
+      <SolidColorBrush x:Key="Md3.OnErrorContainer" Color="#410E0B" />
+
+      <!-- Surface：页面与卡片底色 -->
+      <SolidColorBrush x:Key="Md3.Surface" Color="#FEF7FF" />
+      <SolidColorBrush x:Key="Md3.OnSurface" Color="#1D1B20" />
+      <SolidColorBrush x:Key="Md3.SurfaceVariant" Color="#E7E0EC" />
+      <SolidColorBrush x:Key="Md3.OnSurfaceVariant" Color="#49454F" />
+      <SolidColorBrush x:Key="Md3.Background" Color="#FEF7FF" />
+      <SolidColorBrush x:Key="Md3.OnBackground" Color="#1D1B20" />
+
+      <!-- Surface 容器层级：数值越高越"抬高" -->
+      <SolidColorBrush x:Key="Md3.SurfaceDim" Color="#DED8E1" />
+      <SolidColorBrush x:Key="Md3.SurfaceBright" Color="#FEF7FF" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerLowest" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerLow" Color="#F7F2FA" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainer" Color="#F3EDF7" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerHigh" Color="#ECE6F0" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerHighest" Color="#E6E0E9" />
+
+      <!-- 描边 -->
+      <SolidColorBrush x:Key="Md3.Outline" Color="#79747E" />
+      <SolidColorBrush x:Key="Md3.OutlineVariant" Color="#CAC4D0" />
+
+      <!-- 反色层（Snackbar、Tooltip 等） -->
+      <SolidColorBrush x:Key="Md3.InverseSurface" Color="#322F35" />
+      <SolidColorBrush x:Key="Md3.InverseOnSurface" Color="#F5EFF7" />
+      <SolidColorBrush x:Key="Md3.InversePrimary" Color="#D0BCFF" />
+
+      <!-- 固定色：不随亮暗主题反转，用于需要恒定对比的场景 -->
+      <SolidColorBrush x:Key="Md3.PrimaryFixed" Color="#EADDFF" />
+      <SolidColorBrush x:Key="Md3.PrimaryFixedDim" Color="#D0BCFF" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryFixed" Color="#21005D" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryFixedVariant" Color="#4F378B" />
+      <SolidColorBrush x:Key="Md3.SecondaryFixed" Color="#E8DEF8" />
+      <SolidColorBrush x:Key="Md3.SecondaryFixedDim" Color="#CCC2DC" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryFixed" Color="#1D192B" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryFixedVariant" Color="#4A4458" />
+      <SolidColorBrush x:Key="Md3.TertiaryFixed" Color="#FFD8E4" />
+      <SolidColorBrush x:Key="Md3.TertiaryFixedDim" Color="#EFB8C8" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryFixed" Color="#31111D" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryFixedVariant" Color="#633B48" />
+
+      <!-- 遮罩与投影 -->
+      <SolidColorBrush x:Key="Md3.Scrim" Color="#000000" Opacity="0.32" />
+      <SolidColorBrush x:Key="Md3.Shadow" Color="#000000" />
+
+      <!--
+        把 Avalonia/Fluent 的强调色对齐到 MD3 主色。
+        这样那些我们没有重做模板的控件（滑块、开关、下拉框、滚动条等）
+        也会自动呈现 MD3 配色，而不是系统默认的蓝色。
+      -->
+      <Color x:Key="SystemAccentColor">#6750A4</Color>
+      <Color x:Key="SystemAccentColorLight1">#7965AE</Color>
+      <Color x:Key="SystemAccentColorLight2">#8B79B8</Color>
+      <Color x:Key="SystemAccentColorLight3">#9D8EC2</Color>
+      <Color x:Key="SystemAccentColorDark1">#5A468F</Color>
+      <Color x:Key="SystemAccentColorDark2">#4D3B7A</Color>
+      <Color x:Key="SystemAccentColorDark3">#403065</Color>
+
+    </ResourceDictionary>
+
+    <!-- ============================ 暗色主题 ============================ -->
+    <ResourceDictionary x:Key="Dark">
+
+      <SolidColorBrush x:Key="Md3.Primary" Color="#D0BCFF" />
+      <SolidColorBrush x:Key="Md3.OnPrimary" Color="#381E72" />
+      <SolidColorBrush x:Key="Md3.PrimaryContainer" Color="#4F378B" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryContainer" Color="#EADDFF" />
+
+      <SolidColorBrush x:Key="Md3.Secondary" Color="#CCC2DC" />
+      <SolidColorBrush x:Key="Md3.OnSecondary" Color="#332D41" />
+      <SolidColorBrush x:Key="Md3.SecondaryContainer" Color="#4A4458" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryContainer" Color="#E8DEF8" />
+
+      <SolidColorBrush x:Key="Md3.Tertiary" Color="#EFB8C8" />
+      <SolidColorBrush x:Key="Md3.OnTertiary" Color="#492532" />
+      <SolidColorBrush x:Key="Md3.TertiaryContainer" Color="#633B48" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryContainer" Color="#FFD8E4" />
+
+      <SolidColorBrush x:Key="Md3.Error" Color="#F2B8B5" />
+      <SolidColorBrush x:Key="Md3.OnError" Color="#601410" />
+      <SolidColorBrush x:Key="Md3.ErrorContainer" Color="#8C1D18" />
+      <SolidColorBrush x:Key="Md3.OnErrorContainer" Color="#F9DEDC" />
+
+      <SolidColorBrush x:Key="Md3.Surface" Color="#141218" />
+      <SolidColorBrush x:Key="Md3.OnSurface" Color="#E6E0E9" />
+      <SolidColorBrush x:Key="Md3.SurfaceVariant" Color="#49454F" />
+      <SolidColorBrush x:Key="Md3.OnSurfaceVariant" Color="#CAC4D0" />
+      <SolidColorBrush x:Key="Md3.Background" Color="#141218" />
+      <SolidColorBrush x:Key="Md3.OnBackground" Color="#E6E0E9" />
+
+      <SolidColorBrush x:Key="Md3.SurfaceDim" Color="#141218" />
+      <SolidColorBrush x:Key="Md3.SurfaceBright" Color="#3B383E" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerLowest" Color="#0F0D13" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerLow" Color="#1D1B20" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainer" Color="#211F26" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerHigh" Color="#2B2930" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerHighest" Color="#36343B" />
+
+      <SolidColorBrush x:Key="Md3.Outline" Color="#938F99" />
+      <SolidColorBrush x:Key="Md3.OutlineVariant" Color="#49454F" />
+
+      <SolidColorBrush x:Key="Md3.InverseSurface" Color="#E6E0E9" />
+      <SolidColorBrush x:Key="Md3.InverseOnSurface" Color="#322F35" />
+      <SolidColorBrush x:Key="Md3.InversePrimary" Color="#6750A4" />
+
+      <!-- Fixed 色在暗色下保持不变，这是 MD3 规范要求 -->
+      <SolidColorBrush x:Key="Md3.PrimaryFixed" Color="#EADDFF" />
+      <SolidColorBrush x:Key="Md3.PrimaryFixedDim" Color="#D0BCFF" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryFixed" Color="#21005D" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryFixedVariant" Color="#4F378B" />
+      <SolidColorBrush x:Key="Md3.SecondaryFixed" Color="#E8DEF8" />
+      <SolidColorBrush x:Key="Md3.SecondaryFixedDim" Color="#CCC2DC" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryFixed" Color="#1D192B" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryFixedVariant" Color="#4A4458" />
+      <SolidColorBrush x:Key="Md3.TertiaryFixed" Color="#FFD8E4" />
+      <SolidColorBrush x:Key="Md3.TertiaryFixedDim" Color="#EFB8C8" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryFixed" Color="#31111D" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryFixedVariant" Color="#633B48" />
+
+      <SolidColorBrush x:Key="Md3.Scrim" Color="#000000" Opacity="0.48" />
+      <SolidColorBrush x:Key="Md3.Shadow" Color="#000000" />
+
+      <!-- 暗色下强调色也用 MD3 的暗色主色 -->
+      <Color x:Key="SystemAccentColor">#D0BCFF</Color>
+      <Color x:Key="SystemAccentColorLight1">#DACBFF</Color>
+      <Color x:Key="SystemAccentColorLight2">#E4DAFF</Color>
+      <Color x:Key="SystemAccentColorLight3">#EEE9FF</Color>
+      <Color x:Key="SystemAccentColorDark1">#B9A2F0</Color>
+      <Color x:Key="SystemAccentColorDark2">#A288E0</Color>
+      <Color x:Key="SystemAccentColorDark3">#8B6ED0</Color>
+
+    </ResourceDictionary>
+
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

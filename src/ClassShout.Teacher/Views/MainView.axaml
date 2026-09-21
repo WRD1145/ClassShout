@@ -1,0 +1,594 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:md3="using:ClassShout.Design.Controls"
+             xmlns:vm="using:ClassShout.Teacher.ViewModels"
+             xmlns:remote="using:ClassShout.Core.Remote"
+             x:Class="ClassShout.Teacher.Views.MainView"
+             x:DataType="vm:TeacherShellViewModel"
+             Background="{DynamicResource Md3.Surface}">
+
+  <!--
+    带 x:Key 的 ControlTheme 是"资源"，必须放在 Resources 里；
+    Styles 集合只接受不带 key 的 Style。放错位置编译器会直接报错。
+  -->
+  <UserControl.Resources>
+    <ResourceDictionary>
+
+      <!-- ==================== 底部导航项 ==================== -->
+      <!--
+        MD3 导航栏的选中态是"图标背后一个胶囊 + 图标文字变色"。
+        这里用 RadioButton 实现：天然互斥，且 IsChecked 可以单向绑定到视图模型，
+        点击后由命令改状态、状态再回流，方向和 MVVM 一致。
+        文字标签走 Tag 传递，这样 Content 槽位留给图标。
+      -->
+      <ControlTheme x:Key="Md3NavItem" TargetType="RadioButton">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurfaceVariant}" />
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="Transparent" Padding="0,6">
+              <StackPanel HorizontalAlignment="Center" Spacing="4">
+                <Border Name="PART_Indicator"
+                        CornerRadius="16" Padding="22,4"
+                        HorizontalAlignment="Center"
+                        Background="Transparent">
+                  <ContentPresenter Name="PART_ContentPresenter"
+                                    Content="{TemplateBinding Content}"
+                                    ContentTemplate="{TemplateBinding ContentTemplate}" />
+                </Border>
+                <TextBlock Name="PART_Label"
+                           FontSize="12" FontWeight="{DynamicResource Md3.Weight.Emphasis}"
+                           HorizontalAlignment="Center"
+                           Text="{TemplateBinding Tag}" />
+              </StackPanel>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+
+        <Style Selector="^:checked">
+          <Setter Property="Foreground" Value="{DynamicResource Md3.OnSecondaryContainer}" />
+        </Style>
+        <Style Selector="^:checked /template/ Border#PART_Indicator">
+          <Setter Property="Background" Value="{DynamicResource Md3.SecondaryContainer}" />
+        </Style>
+      </ControlTheme>
+
+    </ResourceDictionary>
+  </UserControl.Resources>
+
+  <UserControl.Styles>
+    <!-- 小块标题：MD3 的 Label Medium，用弱化色 -->
+    <Style Selector="TextBlock.cardTitle">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="FontWeight" Value="{DynamicResource Md3.Weight.Emphasis}" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurfaceVariant}" />
+    </Style>
+  </UserControl.Styles>
+
+  <Panel>
+    <Grid RowDefinitions="Auto,Auto,*,Auto">
+
+      <!-- ==================== 顶栏 ==================== -->
+      <Border Grid.Row="0" Background="{DynamicResource Md3.SurfaceContainer}" Padding="20,14">
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <Border Width="42" Height="42" CornerRadius="13" Background="{DynamicResource Md3.Primary}">
+            <md3:Md3Icon Kind="Bullhorn" Size="24" IconBrush="{DynamicResource Md3.OnPrimary}" />
+          </Border>
+
+          <StackPanel Grid.Column="1" Margin="12,0,12,0" VerticalAlignment="Center">
+            <TextBlock Classes="titleMedium" Text="ClassShout 教师端" />
+            <TextBlock Classes="bodySmall"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       TextTrimming="CharacterEllipsis"
+                       Text="{Binding ConnectionStatusText}" />
+          </StackPanel>
+
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+
+            <!-- 当前链路：局域网优先，只有直连不可用时才走公网中继 -->
+            <Border IsVisible="{Binding IsConnected}"
+                    CornerRadius="9999" Padding="10,5"
+                    Background="{DynamicResource Md3.SecondaryContainer}">
+              <TextBlock Classes="labelSmall"
+                         Foreground="{DynamicResource Md3.OnSecondaryContainer}"
+                         Text="{Binding ActiveLinkText}" />
+            </Border>
+
+            <Border IsVisible="{Binding IsClassroomMuted}"
+                    CornerRadius="9999" Padding="10,5"
+                    Background="{DynamicResource Md3.ErrorContainer}">
+              <TextBlock Classes="labelSmall"
+                         Foreground="{DynamicResource Md3.OnErrorContainer}"
+                         Text="教室端已静音" />
+            </Border>
+
+            <Button Classes="icon" IsVisible="{Binding IsConnected}"
+                    Command="{Binding DisconnectCommand}" ToolTip.Tip="断开连接">
+              <md3:Md3Icon Kind="LinkOff" Size="22" />
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- ==================== 错误提示条 ==================== -->
+      <Border Grid.Row="1" IsVisible="{Binding HasError}"
+              Background="{DynamicResource Md3.ErrorContainer}" Padding="20,12">
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <md3:Md3Icon Kind="AlertCircle" Size="20" IconBrush="{DynamicResource Md3.OnErrorContainer}" />
+          <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                     Foreground="{DynamicResource Md3.OnErrorContainer}"
+                     Text="{Binding ErrorMessage}" />
+        </StackPanel>
+      </Border>
+
+      <!-- ==================== 内容区 ==================== -->
+      <Panel Grid.Row="2">
+
+        <!-- ······ 文字喊话 ······ -->
+        <ScrollViewer IsVisible="{Binding IsTextPage}">
+          <StackPanel Margin="20,18" Spacing="18">
+
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="cardTitle" Text="要对教室说的话" />
+                <TextBox Classes="outlined"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         MinHeight="120"
+                         MaxHeight="220"
+                         Watermark="例如：同学们请安静，现在讲第三题"
+                         Text="{Binding Text.Text}" />
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="bodySmall"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding Text.CharacterCountText}" />
+                  <Button Grid.Column="1" Classes="text small" Content="清空"
+                          Command="{Binding Text.ClearCommand}" />
+                </Grid>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+                <TextBlock Classes="cardTitle" Text="朗读参数（教室端生效）" />
+
+                <StackPanel Spacing="4">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Classes="bodyMedium" Text="语速" />
+                    <TextBlock Grid.Column="1" Classes="bodyMedium"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="{Binding Text.RateText}" />
+                  </Grid>
+                  <Slider Minimum="-6" Maximum="6" TickFrequency="1" IsSnapToTickEnabled="True"
+                          Value="{Binding Text.Rate}" />
+                </StackPanel>
+
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="bodyMedium" Text="打断当前朗读" />
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="关闭后，新内容会等前一条读完" />
+                  </StackPanel>
+                  <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                                IsChecked="{Binding Text.Interrupt}" />
+                </Grid>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <StackPanel Spacing="10">
+              <TextBlock Classes="cardTitle" Text="常用语" />
+              <ItemsControl ItemsSource="{Binding Text.Presets}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:TextPreset">
+                    <Button Classes="tonal small" Margin="0,0,8,8"
+                            Content="{Binding Text}"
+                            Command="{Binding ApplyCommand}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="文字会发送到教室端，由教室电脑的系统语音朗读 —— 声音从教室音响出来，手机本身不发声。" />
+
+          </StackPanel>
+        </ScrollViewer>
+
+        <!-- ······ 语音喊话 ······ -->
+        <Grid IsVisible="{Binding IsVoicePage}" RowDefinitions="Auto,*,Auto" Margin="20,18">
+
+          <StackPanel Grid.Row="0" Spacing="6" HorizontalAlignment="Center">
+            <TextBlock Classes="titleMedium" HorizontalAlignment="Center"
+                       Text="{Binding Voice.TitleText}" />
+            <TextBlock Classes="bodySmall" HorizontalAlignment="Center"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="{Binding Voice.FormatText}" />
+
+            <!-- 录音失败时必须让用户看见原因（缺权限、麦克风被占用等） -->
+            <Border IsVisible="{Binding Voice.HasError}"
+                    Background="{DynamicResource Md3.ErrorContainer}"
+                    CornerRadius="10" Padding="12,8"
+                    MaxWidth="340" Margin="0,8,0,0">
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnErrorContainer}"
+                         Text="{Binding Voice.ErrorMessage}" />
+            </Border>
+          </StackPanel>
+
+          <!-- 波形 -->
+          <Border Grid.Row="1" VerticalAlignment="Center" Height="120"
+                  Background="{DynamicResource Md3.SurfaceContainerHigh}"
+                  CornerRadius="20" Padding="18">
+            <md3:Md3AudioWave Height="84"
+                              BarBrush="{DynamicResource Md3.Primary}"
+                              Level="{Binding Voice.Level}" />
+          </Border>
+
+          <!-- 录音按钮 -->
+          <StackPanel Grid.Row="2" Spacing="16" HorizontalAlignment="Center">
+            <TextBlock Classes="headlineSmall" HorizontalAlignment="Center"
+                       Text="{Binding Voice.ElapsedText}" />
+
+            <Button Width="132" Height="132" Padding="0"
+                    HorizontalAlignment="Center"
+                    Classes.recording="{Binding Voice.IsRecording}"
+                    Command="{Binding Voice.ToggleCommand}">
+              <Panel>
+                <md3:Md3Icon Kind="Microphone" Size="52"
+                             IsVisible="{Binding !Voice.IsRecording}"
+                             IconBrush="{DynamicResource Md3.OnPrimary}" />
+                <md3:Md3Icon Kind="Send" Size="52"
+                             IsVisible="{Binding Voice.IsRecording}"
+                             IconBrush="{DynamicResource Md3.OnError}" />
+              </Panel>
+            </Button>
+
+            <TextBlock Classes="bodySmall" HorizontalAlignment="Center" TextAlignment="Center"
+                       MaxWidth="260" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="点一下开始，再点一下结束并发送" />
+
+            <Button Classes="text" HorizontalAlignment="Center" Content="放弃本次录音"
+                    IsVisible="{Binding Voice.IsRecording}"
+                    Command="{Binding Voice.CancelCommand}" />
+          </StackPanel>
+        </Grid>
+
+        <!-- ······ 设备与连接 ······ -->
+        <ScrollViewer IsVisible="{Binding IsDevicesPage}">
+          <StackPanel Margin="20,18" Spacing="18">
+
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="cardTitle" Text="自动发现" />
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="同一 Wi-Fi 下会列出所有教室端" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Classes="tonal small"
+                          Command="{Binding ScanCommand}"
+                          IsEnabled="{Binding !IsScanning}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <md3:Md3Icon Kind="Radar" Size="16" />
+                      <TextBlock Text="扫描" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+
+                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsScanning}" />
+
+                <TextBlock Classes="bodyMedium" IsVisible="{Binding !HasClassrooms}"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="尚未发现教室端，点上面的「扫描」试试。" />
+
+                <ItemsControl ItemsSource="{Binding Classrooms}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ClassroomListItem">
+                      <Button Classes="outlined block" Margin="0,0,0,8"
+                              HorizontalContentAlignment="Left"
+                              Command="{Binding ConnectCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                          <md3:Md3Icon Kind="School" Size="22" />
+                          <StackPanel>
+                            <TextBlock Classes="bodyLarge" Text="{Binding Name}" />
+                            <TextBlock Classes="bodySmall"
+                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                       Text="{Binding Subtitle}" />
+                          </StackPanel>
+                        </StackPanel>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <!-- ==================== 账号 ==================== -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+
+                <!-- 已登录 -->
+                <Grid ColumnDefinitions="Auto,*,Auto" IsVisible="{Binding IsSignedIn}">
+                  <Border Width="44" Height="44" CornerRadius="22"
+                          Background="{DynamicResource Md3.PrimaryContainer}">
+                    <md3:Md3Icon Kind="Account" Size="24"
+                                 IconBrush="{DynamicResource Md3.OnPrimaryContainer}" />
+                  </Border>
+                  <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Classes="titleMedium" Text="{Binding SignedInName}" />
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="{Binding AccountLabel}" />
+                  </StackPanel>
+                  <Button Grid.Column="2" Classes="outlined small" Content="退出"
+                          VerticalAlignment="Center"
+                          Command="{Binding LogoutCommand}" />
+                </Grid>
+
+                <!-- 未登录 -->
+                <StackPanel Spacing="12" IsVisible="{Binding !IsSignedIn}">
+                  <TextBlock Classes="cardTitle" Text="登录后喊话会带上你的姓名" />
+
+                  <StackPanel Spacing="10" IsVisible="{Binding !IsRegisterMode}">
+                    <TextBox Classes="outlined dense"
+                             Watermark="用户名或邮箱"
+                             Text="{Binding LoginAccount}" />
+                    <TextBox Classes="outlined dense"
+                             Watermark="口令"
+                             PasswordChar="●"
+                             Text="{Binding LoginPassword}" />
+                    <Button Classes="block" Content="登录"
+                            Command="{Binding LoginCommand}" />
+                  </StackPanel>
+
+                  <StackPanel Spacing="10" IsVisible="{Binding IsRegisterMode}">
+                    <TextBox Classes="outlined dense"
+                             Watermark="用户名（3~20 位，字母开头）"
+                             Text="{Binding RegisterUsername}" />
+                    <TextBox Classes="outlined dense"
+                             Watermark="邮箱"
+                             Text="{Binding RegisterEmail}" />
+                    <TextBox Classes="outlined dense"
+                             Watermark="姓名（学生看到的就是它）"
+                             Text="{Binding RegisterDisplayName}" />
+                    <TextBox Classes="outlined dense"
+                             Watermark="口令（至少 6 位）"
+                             PasswordChar="●"
+                             Text="{Binding RegisterPassword}" />
+                    <Button Classes="block" Content="注册并登录"
+                            Command="{Binding RegisterCommand}" />
+                  </StackPanel>
+
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding AccountModeHint}" />
+
+                  <Button Classes="text small" HorizontalAlignment="Left"
+                          Command="{Binding ToggleAccountModeCommand}">
+                    <TextBlock Text="{Binding AccountToggleText}" />
+                  </Button>
+
+                  <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsAccountBusy}" />
+
+                  <Border IsVisible="{Binding HasAccountError}"
+                          Background="{DynamicResource Md3.ErrorContainer}"
+                          CornerRadius="10" Padding="10,8">
+                    <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Md3.OnErrorContainer}"
+                               Text="{Binding AccountError}" />
+                  </Border>
+
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="登录只在使用「跨局域网」时需要；只连同一局域网内的教室不必登录。" />
+                </StackPanel>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <!-- ==================== 管理员已授权的教室 ==================== -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding HasAuthorizedClassrooms}">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="cardTitle" Text="管理员分配的班级" Margin="0" />
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="这些班级已由管理员授权给你，点一下即可绑定，无需填写口令" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Classes="text small" Content="刷新"
+                          Command="{Binding RefreshAuthorizedCommand}" />
+                </Grid>
+
+                <ItemsControl ItemsSource="{Binding AuthorizedClassrooms}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ClassroomGrantItem">
+                      <Button Classes="tonal block" Margin="0,0,0,8"
+                              HorizontalContentAlignment="Left"
+                              IsEnabled="{Binding !$parent[ItemsControl].((vm:TeacherShellViewModel)DataContext).IsServerBusy}"
+                              Command="{Binding BindCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                          <md3:Md3Icon Kind="School" Size="22" />
+                          <StackPanel Spacing="1">
+                            <TextBlock Classes="bodyLarge" Text="{Binding Name}" />
+                            <TextBlock Classes="bodySmall"
+                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                       Text="{Binding StatusText}" />
+                          </StackPanel>
+                        </StackPanel>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsServerBusy}" />
+              </StackPanel>
+            </md3:Md3Card>
+
+            <!-- ==================== 跨局域网绑定 ==================== -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="跨局域网（服务器）" Margin="0" />
+                  <Border Grid.Column="1" CornerRadius="9999" Padding="9,3"
+                          Background="{DynamicResource Md3.SecondaryContainer}">
+                    <TextBlock Classes="labelSmall"
+                               Foreground="{DynamicResource Md3.OnSecondaryContainer}"
+                               Text="{Binding ServerStatusText}" />
+                  </Border>
+                </Grid>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="与教室不在同一网络时用这个。向教室管理员索取 UUID 与口令，两端接同一台中继服务器即可。" />
+
+                <TextBox Classes="outlined dense"
+                         Watermark="https://relay.example.com 或 http://192.168.1.10:8080"
+                         Text="{Binding ServerUrl}" />
+
+                <TextBox Classes="outlined dense"
+                         Watermark="教室 UUID"
+                         FontFamily="Consolas, monospace"
+                         Text="{Binding BindUuid}" />
+
+                <TextBox Classes="outlined dense"
+                         Watermark="教室口令（Secret）"
+                         PasswordChar="●"
+                         Text="{Binding BindSecret}" />
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                  <Button Grid.Column="0" Classes="block" Content="绑定教室"
+                          IsEnabled="{Binding !IsServerBound}"
+                          Command="{Binding BindServerCommand}" />
+                  <Button Grid.Column="1" Classes="outlined block" Content="解除绑定"
+                          IsEnabled="{Binding IsServerBound}"
+                          Command="{Binding UnbindServerCommand}" />
+                </Grid>
+
+                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsServerBusy}" />
+
+                <Border IsVisible="{Binding HasServerError}"
+                        Background="{DynamicResource Md3.ErrorContainer}"
+                        CornerRadius="10" Padding="10,8">
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnErrorContainer}"
+                             Text="{Binding ServerError}" />
+                </Border>
+
+                <!-- 绑定过的教室：点一下填 UUID，口令仍要手输（刻意不落盘） -->
+                <StackPanel Spacing="6" IsVisible="{Binding HasRecentClassrooms}">
+                  <TextBlock Classes="bodySmall"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="最近绑定过（点击填入 UUID，口令仍需输入）" />
+                  <ItemsControl ItemsSource="{Binding RecentClassrooms}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="remote:BoundClassroom">
+                        <Button Classes="tonal small block" Margin="0,0,0,6"
+                                HorizontalContentAlignment="Left"
+                                Command="{Binding $parent[ItemsControl].((vm:TeacherShellViewModel)DataContext).UseRecentClassroomCommand}"
+                                CommandParameter="{Binding}">
+                          <StackPanel Spacing="1">
+                            <TextBlock Classes="bodyMedium" Text="{Binding Name}" />
+                            <TextBlock Classes="bodySmall"
+                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                       FontFamily="Consolas, monospace"
+                                       Text="{Binding Uuid}" />
+                          </StackPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+                <TextBlock Classes="cardTitle" Text="手动连接" />
+                <TextBox Classes="outlined"
+                         Watermark="192.168.1.5:45900"
+                         Text="{Binding ManualAddress}" />
+                <Button Classes="block" Content="连接"
+                        Command="{Binding ConnectManualCommand}" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="教室端启动后，顶栏会显示它自己的地址，按那个填即可。" />
+              </StackPanel>
+            </md3:Md3Card>
+
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="运行日志" />
+                  <Button Grid.Column="1" Classes="text small" Content="断开"
+                          IsVisible="{Binding IsConnected}"
+                          Command="{Binding DisconnectCommand}" />
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Logs}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TeacherLogEntry">
+                      <Grid ColumnDefinitions="Auto,*" Margin="0,1">
+                        <TextBlock Classes="bodySmall" Width="64"
+                                   Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                   Text="{Binding TimeText}" />
+                        <TextBlock Grid.Column="1" Classes="bodySmall" TextWrapping="Wrap"
+                                   Text="{Binding Message}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </md3:Md3Card>
+
+          </StackPanel>
+        </ScrollViewer>
+
+      </Panel>
+
+      <!-- ==================== 底部导航 ==================== -->
+      <Border Grid.Row="3" Background="{DynamicResource Md3.SurfaceContainer}" Padding="10,4">
+        <Grid ColumnDefinitions="*,*,*">
+          <RadioButton Grid.Column="0" Theme="{StaticResource Md3NavItem}"
+                       GroupName="Md3Nav" Tag="文字"
+                       IsChecked="{Binding IsTextPage, Mode=OneWay}"
+                       Command="{Binding NavigateTextCommand}">
+            <md3:Md3Icon Kind="MessageText" Size="24" />
+          </RadioButton>
+          <RadioButton Grid.Column="1" Theme="{StaticResource Md3NavItem}"
+                       GroupName="Md3Nav" Tag="语音"
+                       IsChecked="{Binding IsVoicePage, Mode=OneWay}"
+                       Command="{Binding NavigateVoiceCommand}">
+            <md3:Md3Icon Kind="Microphone" Size="24" />
+          </RadioButton>
+          <RadioButton Grid.Column="2" Theme="{StaticResource Md3NavItem}"
+                       GroupName="Md3Nav" Tag="设备"
+                       IsChecked="{Binding IsDevicesPage, Mode=OneWay}"
+                       Command="{Binding NavigateDevicesCommand}">
+            <md3:Md3Icon Kind="CastConnected" Size="24" />
+          </RadioButton>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- ==================== 浮动提示 ==================== -->
+    <Border IsVisible="{Binding IsSnackbarVisible}"
+            VerticalAlignment="Bottom" HorizontalAlignment="Center"
+            Margin="20,0,20,96"
+            Background="{DynamicResource Md3.InverseSurface}"
+            CornerRadius="8" Padding="16,10"
+            BoxShadow="{DynamicResource Md3.Elevation.Level3}">
+      <TextBlock Classes="bodyMedium"
+                 Foreground="{DynamicResource Md3.InverseOnSurface}"
+                 Text="{Binding SnackbarMessage}" />
+    </Border>
+  </Panel>
+</UserControl>

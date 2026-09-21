@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    端到端联调工具：用真实的协议实现跑一遍完整链路，自检并返回退出码。
+
+    为什么不用单元测试框架：这个项目要验证的是"两台机器之间的实际行为"——
+    UDP 发现能不能扫到、TCP 握手对不对、音频字节有没有错位、系统 TTS 能不能出声。
+    这些都是集成行为，用 xUnit 反而要额外搭一套宿主环境。做成会自检的控制台程序，
+    既能进 CI（退出码判定），也能在真机上直接跑一遍确认。
+
+    运行：dotnet run 指定本项目。加 tts 开关参数会真的用喇叭读一句中文。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>ClassShout.EndToEnd</RootNamespace>
+    <AssemblyName>ClassShout.EndToEnd</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ClassShout.Core\ClassShout.Core.csproj" />
+    <ProjectReference Include="..\..\src\ClassShout.Classroom\ClassShout.Classroom.csproj" />
+  </ItemGroup>
+
+</Project>

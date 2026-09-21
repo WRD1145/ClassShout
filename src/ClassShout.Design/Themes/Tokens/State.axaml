@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 状态层令牌（State Layers）
+
+  状态层是覆盖在控件表面的一层半透明色，用来表达交互状态。
+  颜色统一取控件的 Foreground（即 MD3 的 "on" 色），只改不透明度。
+
+  用法：<Border Background="{TemplateBinding Foreground}" Opacity="{DynamicResource Md3.State.Hover}" />
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <x:Double x:Key="Md3.State.Hover">0.08</x:Double>
+  <x:Double x:Key="Md3.State.Focus">0.10</x:Double>
+  <x:Double x:Key="Md3.State.Pressed">0.10</x:Double>
+  <x:Double x:Key="Md3.State.Dragged">0.16</x:Double>
+  <x:Double x:Key="Md3.State.None">0</x:Double>
+
+  <!-- 禁用态：MD3 规定内容 38% 不透明，容器 12% -->
+  <x:Double x:Key="Md3.State.DisabledContent">0.38</x:Double>
+  <x:Double x:Key="Md3.State.DisabledContainer">0.12</x:Double>
+
+</ResourceDictionary>

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    应用图标生成器。
+
+    为什么程序化生成而不是塞两个二进制文件进仓库：
+      图标要同时供给 Windows（.ico，含 16/32/48/64/128/256 六个尺寸）
+      和 Android（mipmap 五档密度 PNG），手工会产生十几个二进制文件且难以调整。
+      用代码生成后，改配色或换图形只需改一行参数，所有尺寸自动保持一致。
+
+    图形取自 Material.Icons 的路径数据，因此图标本身也是 MD3 语言的一部分。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ClassShout.IconGen</RootNamespace>
+    <AssemblyName>ClassShout.IconGen</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="2.88.9" />
+    <PackageReference Include="Material.Icons" Version="$(MaterialIconsVersion)" />
+  </ItemGroup>
+
+</Project>

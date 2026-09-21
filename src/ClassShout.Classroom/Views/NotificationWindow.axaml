@@ -1,0 +1,70 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:md3="using:ClassShout.Design.Controls"
+        xmlns:svc="using:ClassShout.Classroom.Services"
+        x:Class="ClassShout.Classroom.Views.NotificationWindow"
+        x:DataType="svc:NotificationContent"
+        SystemDecorations="None"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        CanResize="False"
+        SizeToContent="Height"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        Topmost="True"
+        WindowStartupLocation="Manual">
+
+  <!-- 淡入淡出：通知突然出现会很突兀，短促的渐变能显著降低"被吓一跳"的感觉 -->
+  <Window.Transitions>
+    <Transitions>
+      <DoubleTransition Property="Opacity" Duration="0:0:0.18" />
+    </Transitions>
+  </Window.Transitions>
+
+  <!--
+    外层留出 Margin 是为了让阴影有地方画：窗口背景透明，
+    阴影画在 Border 上就能溢出到窗口边缘之外。
+  -->
+  <Border Margin="14"
+          Background="{DynamicResource Md3.SurfaceContainerHigh}"
+          BorderBrush="{DynamicResource Md3.OutlineVariant}"
+          BorderThickness="1"
+          CornerRadius="{DynamicResource Md3.Shape.Large}"
+          BoxShadow="{DynamicResource Md3.Elevation.Level3}"
+          Padding="16,14">
+    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+
+      <Border Width="44" Height="44" CornerRadius="22"
+              VerticalAlignment="Top"
+              Background="{DynamicResource Md3.PrimaryContainer}">
+        <Panel>
+          <md3:Md3Icon Kind="Bullhorn" Size="24"
+                       IconBrush="{DynamicResource Md3.OnPrimaryContainer}"
+                       IsVisible="{Binding !IsVoice}" />
+          <md3:Md3Icon Kind="Microphone" Size="24"
+                       IconBrush="{DynamicResource Md3.OnPrimaryContainer}"
+                       IsVisible="{Binding IsVoice}" />
+        </Panel>
+      </Border>
+
+      <StackPanel Grid.Column="1" Spacing="6">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Classes="titleSmall" TextTrimming="CharacterEllipsis"
+                     Text="{Binding SourceName}" />
+          <TextBlock Grid.Column="1" Classes="labelSmall"
+                     VerticalAlignment="Center"
+                     Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                     Text="{Binding TimeText}" />
+        </Grid>
+
+        <TextBlock Classes="bodyLarge" TextWrapping="Wrap"
+                   MaxLines="4" TextTrimming="CharacterEllipsis"
+                   Text="{Binding Text}" />
+
+        <TextBlock Classes="bodySmall"
+                   Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                   Text="{Binding Hint}" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</Window>

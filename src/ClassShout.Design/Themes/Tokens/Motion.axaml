@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 动效令牌（Motion）
+
+  MD3 的时长分两大类：
+    - Emphasized：大范围、有存在感的转场（页面切换、展开）
+    - Standard：小范围状态变化（悬停、按下）
+  这里直接给出可用的 TimeSpan 资源与缓动实例。
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="using:System">
+
+  <!-- 短时长：图标、状态层等微交互 -->
+  <sys:TimeSpan x:Key="Md3.Motion.Short1">0:0:0.05</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Short2">0:0:0.1</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Short3">0:0:0.15</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Short4">0:0:0.2</sys:TimeSpan>
+
+  <!-- 中时长：控件展开、颜色过渡 -->
+  <sys:TimeSpan x:Key="Md3.Motion.Medium1">0:0:0.25</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Medium2">0:0:0.3</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Medium3">0:0:0.35</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Medium4">0:0:0.4</sys:TimeSpan>
+
+  <!-- 长时长：页面转场 -->
+  <sys:TimeSpan x:Key="Md3.Motion.Long1">0:0:0.45</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Long2">0:0:0.5</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Long3">0:0:0.55</sys:TimeSpan>
+  <sys:TimeSpan x:Key="Md3.Motion.Long4">0:0:0.6</sys:TimeSpan>
+
+  <!--
+    缓动：MD3 的 standard / emphasized 都是三次贝塞尔。
+    Avalonia 提供的是命名缓动类，这里选最接近的实现：
+      Standard   ≈ 0.2, 0, 0, 1      → CubicEaseInOut
+      Emphasized ≈ 0.2, 0, 0, 1（更长）→ QuinticEaseInOut（收尾更明显）
+      Decelerate ≈ 0, 0, 0, 1        → CubicEaseOut
+      Accelerate ≈ 0.3, 0, 1, 1      → CubicEaseIn
+  -->
+  <CubicEaseInOut x:Key="Md3.Easing.Standard" />
+  <QuinticEaseInOut x:Key="Md3.Easing.Emphasized" />
+  <CubicEaseOut x:Key="Md3.Easing.Decelerate" />
+  <CubicEaseIn x:Key="Md3.Easing.Accelerate" />
+
+</ResourceDictionary>

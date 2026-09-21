@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- Avalonia 需要一个无 ActionBar 的主题，否则标题栏会盖住自绘界面 -->
+  <style name="MyTheme.NoActionBar" parent="Theme.AppCompat.NoActionBar">
+  </style>
+</resources>

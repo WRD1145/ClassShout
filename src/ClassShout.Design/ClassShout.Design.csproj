@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Material Design 3 设计系统：颜色/字体/形状/高度/动效令牌 + 控件主题。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ClassShout.Design</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="FluentAvaloniaUI" Version="$(FluentAvaloniaVersion)" />
+    <PackageReference Include="Material.Icons" Version="$(MaterialIconsVersion)" />
+  </ItemGroup>
+
+</Project>

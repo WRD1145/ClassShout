@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 教室端：Windows 桌面应用。接收教师端喊话，文字走系统 TTS 朗读，语音直接播放。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>ClassShout.Classroom</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 图标由 tools\ClassShout.IconGen 生成，改配色或换图形后重跑该工具即可 -->
+    <ApplicationIcon>..\..\assets\classroom.ico</ApplicationIcon>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <UseWindowsForms>false</UseWindowsForms>
+    <UseWPF>false</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="FluentAvaloniaUI" Version="$(FluentAvaloniaVersion)" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
+    <!-- 系统 TTS：Windows SAPI（Microsoft Huihui / Yaoyao 等中文语音） -->
+    <PackageReference Include="System.Speech" Version="$(SystemSpeechVersion)" />
+    <!-- 网络音频流播放 -->
+    <PackageReference Include="NAudio" Version="$(NaudioVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClassShout.Core\ClassShout.Core.csproj" />
+    <ProjectReference Include="..\ClassShout.Design\ClassShout.Design.csproj" />
+  </ItemGroup>
+
+</Project>

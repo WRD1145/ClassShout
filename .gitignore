@@ -1,0 +1,18 @@
+# 构建产物
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+
+# 生成物：设计预览与打包输出，不进版本控制
+artifacts/
+dist/
+.packages/
+
+# 服务器运行时状态 —— 含管理员明文口令与用户口令哈希，绝不能提交
+relay-config.json
+relay-users.json
+relay-state.json
+relay-bindings.json

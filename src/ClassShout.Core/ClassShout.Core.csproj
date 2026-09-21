@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 纯 .NET 库：协议、网络传输、音频抽象。不依赖 Avalonia，便于单测与复用。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ClassShout.Core</RootNamespace>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,14 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ClassShout.Teacher.Diagnostics.FontDiagnostics"
+             Background="{DynamicResource Md3.Surface}">
+  <ScrollViewer>
+    <StackPanel Margin="16" Spacing="12">
+      <TextBlock FontSize="18" FontWeight="Bold" Text="字体回退诊断" />
+      <TextBlock FontSize="11" TextWrapping="Wrap"
+                 Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                 Text="每一行是一种字体链（FontFamily 的候选顺序），每一列是一种字重。出现方块即表示该组合下中文字形缺失 —— 说明字体链在这一档字重上回退失败。" />
+      <ContentControl Name="MatrixHost" />
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

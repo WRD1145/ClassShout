@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    跨局域网中继服务器。
+
+    部署在任意一台两端都能访问到的机器上（公网 VPS、学校内网服务器均可）。
+    它只做转发和鉴权，不理解喊话内容 —— 音频对它是不可见的字节。
+
+    运行：dotnet run 指定本项目，并用 urls 参数指定监听地址（如 http://0.0.0.0:8080）。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ClassShout.RelayServer</RootNamespace>
+    <AssemblyName>ClassShout.RelayServer</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClassShout.Core\ClassShout.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      管理界面作为嵌入资源打进程序集，而不是放 wwwroot 走静态文件中间件：
+      这样发布产物与运行目录无关，换工作目录、单文件发布都不会出现"页面 404"。
+    -->
+    <EmbeddedResource Include="wwwroot\index.html" />
+    <Content Remove="wwwroot\index.html" />
+    <None Remove="wwwroot\index.html" />
+  </ItemGroup>
+
+</Project>

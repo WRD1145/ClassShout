@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 文本输入框
+
+  变体：
+    <TextBox Watermark="输入内容" />                填充式（默认）—— 底部一条指示线
+    <TextBox Classes="outlined" Watermark="..." />  描边式 —— 四周描边
+
+  前置/后置内容用 Avalonia 内建的属性，放图标很方便：
+    <TextBox>
+      <TextBox.InnerLeftContent><controls:Md3Icon Kind="MessageText"/></TextBox.InnerLeftContent>
+    </TextBox>
+
+  模板部件名沿用 Avalonia 官方 Fluent 主题的约定（PART_BorderElement / PART_TextPresenter
+  / PART_Watermark / PART_FloatingWatermark），保证 TextBox 的全部内建行为
+  （光标、选区、右键菜单、密码框、清除按钮）都能正常工作。
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <ControlTheme x:Key="{x:Type TextBox}" TargetType="TextBox">
+
+    <!-- ·········· 默认：填充式 ·········· -->
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurface}" />
+    <Setter Property="Background" Value="{DynamicResource Md3.SurfaceContainerHighest}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Md3.OnSurfaceVariant}" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Md3.Shape.TextField}" />
+    <Setter Property="CaretBrush" Value="{DynamicResource Md3.Primary}" />
+    <Setter Property="SelectionBrush" Value="{DynamicResource Md3.Primary}" />
+    <Setter Property="SelectionForegroundBrush" Value="{DynamicResource Md3.OnPrimary}" />
+    <Setter Property="MinHeight" Value="56" />
+    <Setter Property="MinWidth" Value="64" />
+    <Setter Property="Padding" Value="16,8" />
+    <Setter Property="FontSize" Value="16" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="FocusAdorner" Value="{x:Null}" />
+    <Setter Property="UseFloatingWatermark" Value="True" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <DataValidationErrors>
+          <Panel>
+            <Border Name="PART_BorderElement"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="{TemplateBinding CornerRadius}"
+                    MinWidth="{TemplateBinding MinWidth}"
+                    MinHeight="{TemplateBinding MinHeight}" />
+
+            <Border Margin="{TemplateBinding BorderThickness}">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+
+                <!-- 前置图标 -->
+                <ContentPresenter Grid.Column="0"
+                                  Margin="12,0,0,0"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                  Content="{TemplateBinding InnerLeftContent}" />
+
+                <DockPanel Name="PART_InnerDockPanel"
+                           Grid.Column="1"
+                           Margin="{TemplateBinding Padding}">
+
+                  <!-- 浮动标签：输入框有内容或获得焦点时显示在顶部 -->
+                  <TextBlock Name="PART_FloatingWatermark"
+                             DockPanel.Dock="Top"
+                             IsVisible="False"
+                             FontSize="12"
+                             FontWeight="{DynamicResource Md3.Weight.Emphasis}"
+                             Foreground="{DynamicResource Md3.Primary}"
+                             Text="{TemplateBinding Watermark}" />
+
+                  <ScrollViewer Name="PART_ScrollViewer"
+                                HorizontalScrollBarVisibility="{TemplateBinding (ScrollViewer.HorizontalScrollBarVisibility)}"
+                                VerticalScrollBarVisibility="{TemplateBinding (ScrollViewer.VerticalScrollBarVisibility)}"
+                                AllowAutoHide="{TemplateBinding (ScrollViewer.AllowAutoHide)}"
+                                BringIntoViewOnFocusChange="{TemplateBinding (ScrollViewer.BringIntoViewOnFocusChange)}">
+                    <Panel>
+                      <TextBlock Name="PART_Watermark"
+                                 FontSize="{TemplateBinding FontSize}"
+                                 Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                 Text="{TemplateBinding Watermark}"
+                                 TextAlignment="{TemplateBinding TextAlignment}"
+                                 TextWrapping="{TemplateBinding TextWrapping}"
+                                 HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}">
+                        <TextBlock.IsVisible>
+                          <MultiBinding Converter="{x:Static BoolConverters.And}">
+                            <Binding ElementName="PART_TextPresenter" Path="PreeditText" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                            <Binding RelativeSource="{RelativeSource TemplatedParent}" Path="Text" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                          </MultiBinding>
+                        </TextBlock.IsVisible>
+                      </TextBlock>
+
+                      <TextPresenter Name="PART_TextPresenter"
+                                     Text="{TemplateBinding Text, Mode=TwoWay}"
+                                     CaretBlinkInterval="{TemplateBinding CaretBlinkInterval}"
+                                     CaretIndex="{TemplateBinding CaretIndex}"
+                                     SelectionStart="{TemplateBinding SelectionStart}"
+                                     SelectionEnd="{TemplateBinding SelectionEnd}"
+                                     TextAlignment="{TemplateBinding TextAlignment}"
+                                     TextWrapping="{TemplateBinding TextWrapping}"
+                                     LineHeight="{TemplateBinding LineHeight}"
+                                     PasswordChar="{TemplateBinding PasswordChar}"
+                                     RevealPassword="{TemplateBinding RevealPassword}"
+                                     SelectionBrush="{TemplateBinding SelectionBrush}"
+                                     SelectionForegroundBrush="{TemplateBinding SelectionForegroundBrush}"
+                                     CaretBrush="{TemplateBinding CaretBrush}"
+                                     HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                     VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Panel>
+                    <ScrollViewer.Styles>
+                      <Style Selector="ScrollContentPresenter#PART_ContentPresenter">
+                        <Setter Property="Cursor" Value="IBeam" />
+                      </Style>
+                    </ScrollViewer.Styles>
+                  </ScrollViewer>
+                </DockPanel>
+
+                <!-- 后置内容：清除按钮、单位标签等 -->
+                <ContentPresenter Grid.Column="2"
+                                  Margin="0,0,12,0"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                  Content="{TemplateBinding InnerRightContent}" />
+              </Grid>
+            </Border>
+          </Panel>
+        </DataValidationErrors>
+      </ControlTemplate>
+    </Setter>
+
+    <!-- ·········· 交互状态 ·········· -->
+
+    <!-- 悬停：指示线加深 -->
+    <Style Selector="^:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.OnSurface}" />
+      <Setter Property="Background" Value="{DynamicResource Md3.SurfaceContainerHigh}" />
+    </Style>
+
+    <!-- 聚焦：指示线变成主色，浮动标签变主色 -->
+    <Style Selector="^:focus /template/ Border#PART_BorderElement">
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.Primary}" />
+      <Setter Property="BorderThickness" Value="0,0,0,2" />
+      <Setter Property="Background" Value="{DynamicResource Md3.SurfaceContainerHigh}" />
+    </Style>
+
+    <!-- 有内容时把浮动标签显示出来（MD3 填充式输入框的标志性行为） -->
+    <Style Selector="^:not(:empty) /template/ TextBlock#PART_FloatingWatermark">
+      <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <Style Selector="^:not(:empty) /template/ TextBlock#PART_Watermark">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+
+    <!-- 校验失败 -->
+    <Style Selector="^:error /template/ Border#PART_BorderElement">
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.Error}" />
+    </Style>
+    <Style Selector="^:error /template/ TextBlock#PART_FloatingWatermark">
+      <Setter Property="Foreground" Value="{DynamicResource Md3.Error}" />
+    </Style>
+
+    <!-- 禁用 -->
+    <Style Selector="^:disabled">
+      <Setter Property="Opacity" Value="{DynamicResource Md3.State.DisabledContent}" />
+    </Style>
+
+    <!-- ·········· 变体：描边式 ·········· -->
+    <Style Selector="^.outlined">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.Outline}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Md3.Shape.ExtraSmall}" />
+    </Style>
+    <Style Selector="^.outlined:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.OnSurface}" />
+    </Style>
+    <Style Selector="^.outlined:focus /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.Primary}" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+
+    <!-- ·········· 尺寸 ·········· -->
+    <Style Selector="^.dense">
+      <Setter Property="MinHeight" Value="44" />
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Padding" Value="12,4" />
+    </Style>
+
+  </ControlTheme>
+
+</ResourceDictionary>

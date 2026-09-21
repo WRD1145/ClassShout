@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ClassShout Material Design 3 主题入口
+
+  ============================ 用法 ============================
+  在 App.axaml 中按这个顺序引入（Md3 必须在后，才能覆盖 Fluent 的默认控件样式）：
+
+      Application.Styles:
+        FluentAvaloniaTheme                        先铺 Fluent 底座
+        StyleInclude  avares://ClassShout.Design/Md3Theme.axaml
+
+  Fluent 底座负责 MD3 没有重做的控件（下拉框、滚动条、弹窗等），
+  避免出现"没被样式覆盖的控件长得格格不入"。
+
+  ========================= 换主题色 =========================
+  不必修改本文件。在 App.axaml 的 Application.Resources 里用同名 key 覆盖即可。
+  例如把主色改成青绿色，只需提供 Light / Dark 两套字典：
+
+      Application.Resources / ResourceDictionary / ThemeDictionaries:
+        x:Key="Light"  ->  Md3.Primary #00696D, Md3.OnPrimary #FFFFFF,
+                           Md3.PrimaryContainer #6FF6FC, Md3.OnPrimaryContainer #002021
+        x:Key="Dark"   ->  同理给一套暗色值
+
+  应用层的资源查找优先级更高，所以会自动生效。
+  完整色角色清单见 Themes/Tokens/Color.axaml。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <!-- 设计令牌 -->
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Tokens/Color.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Tokens/Shape.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Tokens/Elevation.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Tokens/Motion.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Tokens/State.axaml" />
+
+        <!-- 控件主题（ResourceDictionary：只放 ControlTheme） -->
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Controls/Button.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Controls/TextField.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Controls/Surfaces.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <!-- 字体排印（含各号 Style 类） -->
+  <StyleInclude Source="avares://ClassShout.Design/Themes/Tokens/Typography.axaml" />
+
+  <!-- 作用于控件实例的全局样式（分割线、列表、进度条、滚动条…） -->
+  <StyleInclude Source="avares://ClassShout.Design/Themes/Md3Styles.axaml" />
+
+  <!--
+    全局默认：字体、页面底色、正文颜色。
+
+    选择器必须是 TopLevel 而不是 Window：
+      Android 上没有 Window（用的是 ISingleViewApplicationLifetime，根节点是普通视图），
+      写 Window 会导致字体链在 Android 上完全不生效 —— 界面退回平台默认字体，
+      中文能否显示就全看运气。TopLevel 是 Window 与 Android 宿主视图的共同基类，两边都覆盖。
+  -->
+  <Style Selector="TopLevel">
+    <Setter Property="FontFamily" Value="{DynamicResource Md3.FontFamily}" />
+    <Setter Property="Background" Value="{DynamicResource Md3.Surface}" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurface}" />
+  </Style>
+
+  <Style Selector="TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurface}" />
+  </Style>
+
+</Styles>

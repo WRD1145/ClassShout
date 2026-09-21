@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 全局样式（Style）
+
+  这里放直接作用于控件实例的样式。
+  之所以与 Themes/Controls/*.axaml 分开：那些是 ResourceDictionary，
+  按 XAML 规则只能容纳 ControlTheme 和资源，不能放独立的 Style。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ============================ 分割线 ============================ -->
+  <Style Selector="Separator">
+    <Setter Property="Background" Value="{DynamicResource Md3.OutlineVariant}" />
+    <Setter Property="Height" Value="1" />
+    <Setter Property="MinHeight" Value="1" />
+    <Setter Property="Margin" Value="0" />
+  </Style>
+
+  <!-- ============================ 列表容器 ============================ -->
+  <Style Selector="ListBox">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="0" />
+  </Style>
+
+  <!-- ============================ 线性进度指示 ============================ -->
+  <!-- 同时用于朗读进度和实时音量，所以做得很细（4dp，符合 MD3 规范） -->
+  <Style Selector="ProgressBar">
+    <Setter Property="Background" Value="{DynamicResource Md3.SurfaceContainerHighest}" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.Primary}" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Md3.Shape.Full}" />
+    <Setter Property="MinHeight" Value="4" />
+    <Setter Property="Height" Value="4" />
+  </Style>
+
+  <Style Selector="ProgressBar.thick">
+    <Setter Property="MinHeight" Value="8" />
+    <Setter Property="Height" Value="8" />
+  </Style>
+
+  <Style Selector="ProgressBar.error">
+    <Setter Property="Foreground" Value="{DynamicResource Md3.Error}" />
+  </Style>
+
+  <!-- ============================ 提示气泡 ============================ -->
+  <Style Selector="ToolTip">
+    <Setter Property="Background" Value="{DynamicResource Md3.InverseSurface}" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.InverseOnSurface}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Md3.Shape.ExtraSmall}" />
+    <Setter Property="Padding" Value="8,4" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+
+  <!-- ============================ 滚动条 ============================ -->
+  <Style Selector="ScrollBar">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+
+  <!-- ============================ 滚动容器 ============================ -->
+  <Style Selector="ScrollViewer">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+
+</Styles>

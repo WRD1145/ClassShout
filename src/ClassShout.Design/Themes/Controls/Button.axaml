@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Design 3 按钮
+
+  变体（通过 Classes 指定，默认是 filled）：
+    <Button Content="发送" />                      填充按钮 —— 页面最高优先级操作
+    <Button Classes="tonal" Content="预览" />      柔和按钮 —— 次高优先级
+    <Button Classes="elevated" Content="详情" />   抬升按钮
+    <Button Classes="outlined" Content="取消" />   描边按钮 —— 中优先级
+    <Button Classes="text" Content="跳过" />       文字按钮 —— 最低优先级
+    <Button Classes="danger" Content="停止" />     危险操作
+
+  尺寸：Classes="small" (32) / 默认 (40) / "large" (48)
+
+  实现要点：状态层（State Layer）直接取 Foreground 作为叠加色。
+  MD3 中所有按钮变体的"状态层颜色 = 内容颜色"，所以一套模板就能覆盖全部变体。
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <ControlTheme x:Key="{x:Type Button}" TargetType="Button">
+
+    <!-- ·········· 默认：filled 填充按钮 ·········· -->
+    <Setter Property="Background" Value="{DynamicResource Md3.Primary}" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnPrimary}" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{DynamicResource Md3.Shape.Full}" />
+    <Setter Property="Padding" Value="24,10" />
+    <Setter Property="MinHeight" Value="40" />
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="FontWeight" Value="{DynamicResource Md3.Weight.Emphasis}" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Cursor" Value="Hand" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Panel Name="PART_Root">
+          <Border Name="PART_Background"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}" />
+
+          <!-- 状态层：颜色跟随 Foreground，只改不透明度 -->
+          <Border Name="PART_StateLayer"
+                  Background="{TemplateBinding Foreground}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Opacity="0"
+                  IsHitTestVisible="False" />
+
+          <ContentPresenter Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            Padding="{TemplateBinding Padding}"
+                            HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                            Foreground="{TemplateBinding Foreground}"
+                            TextElement.FontSize="{TemplateBinding FontSize}"
+                            TextElement.FontWeight="{TemplateBinding FontWeight}" />
+        </Panel>
+      </ControlTemplate>
+    </Setter>
+
+    <!-- ·········· 过渡动画 ·········· -->
+    <Style Selector="^ /template/ Border#PART_Background">
+      <Setter Property="BoxShadow" Value="{DynamicResource Md3.Elevation.Level0}" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Background" Duration="0:0:0.2" />
+          <BrushTransition Property="BorderBrush" Duration="0:0:0.2" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="^ /template/ Border#PART_StateLayer">
+      <Setter Property="Transitions">
+        <Transitions>
+          <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
+        </Transitions>
+      </Setter>
+    </Style>
+
+    <!-- ·········· 交互状态 ·········· -->
+    <Style Selector="^:pointerover /template/ Border#PART_StateLayer">
+      <Setter Property="Opacity" Value="{DynamicResource Md3.State.Hover}" />
+    </Style>
+    <Style Selector="^:pressed /template/ Border#PART_StateLayer">
+      <Setter Property="Opacity" Value="{DynamicResource Md3.State.Pressed}" />
+    </Style>
+
+    <!-- ·········· 禁用态 ·········· -->
+    <Style Selector="^:disabled">
+      <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+    <Style Selector="^:disabled /template/ Border#PART_Background">
+      <Setter Property="Opacity" Value="{DynamicResource Md3.State.DisabledContainer}" />
+    </Style>
+    <Style Selector="^:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Opacity" Value="{DynamicResource Md3.State.DisabledContent}" />
+    </Style>
+    <Style Selector="^:disabled /template/ Border#PART_Background">
+      <Setter Property="Background" Value="{DynamicResource Md3.OnSurface}" />
+    </Style>
+
+    <!-- ================= 变体 ================= -->
+
+    <!-- tonal：柔和按钮，用次级容器色 -->
+    <Style Selector="^.tonal">
+      <Setter Property="Background" Value="{DynamicResource Md3.SecondaryContainer}" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.OnSecondaryContainer}" />
+    </Style>
+
+    <!-- elevated：抬升按钮 -->
+    <Style Selector="^.elevated">
+      <Setter Property="Background" Value="{DynamicResource Md3.SurfaceContainerLow}" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.Primary}" />
+    </Style>
+    <Style Selector="^.elevated /template/ Border#PART_Background">
+      <Setter Property="BoxShadow" Value="{DynamicResource Md3.Elevation.Level1}" />
+    </Style>
+
+    <!-- outlined：描边按钮 -->
+    <Style Selector="^.outlined">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.Primary}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.Outline}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="^.outlined:disabled /template/ Border#PART_Background">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Md3.OnSurface}" />
+    </Style>
+
+    <!-- text：文字按钮 -->
+    <Style Selector="^.text">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.Primary}" />
+      <Setter Property="Padding" Value="12,10" />
+    </Style>
+
+    <!-- danger：危险操作 -->
+    <Style Selector="^.danger">
+      <Setter Property="Background" Value="{DynamicResource Md3.Error}" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.OnError}" />
+    </Style>
+
+    <!-- ================= 尺寸 ================= -->
+
+    <Style Selector="^.small">
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="Padding" Value="16,6" />
+      <Setter Property="FontSize" Value="13" />
+    </Style>
+
+    <Style Selector="^.large">
+      <Setter Property="MinHeight" Value="48" />
+      <Setter Property="Padding" Value="28,12" />
+      <Setter Property="FontSize" Value="15" />
+    </Style>
+
+    <!-- 图标按钮形态：正方形、无内边距 -->
+    <Style Selector="^.icon">
+      <Setter Property="Padding" Value="8" />
+      <Setter Property="Width" Value="40" />
+      <Setter Property="Height" Value="40" />
+      <Setter Property="MinHeight" Value="40" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurfaceVariant}" />
+    </Style>
+
+    <!-- 全宽按钮：手机上很常用 -->
+    <Style Selector="^.block">
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
+
+  </ControlTheme>
+
+</ResourceDictionary>

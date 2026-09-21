@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    教师端 Android 头。
+    编译前提：已安装 Android SDK（platforms;android-36 + build-tools;36.0.0）与 JDK 17+。
+    详见 docs\开发环境配置.md。若本机尚未安装，可在解决方案中仅编译其他项目：
+        dotnet build ClassShout.DesktopOnly.slnf
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-android$(AndroidApiLevel).0</TargetFramework>
+    <SupportedOSPlatformVersion>24.0</SupportedOSPlatformVersion>
+    <RootNamespace>ClassShout.Teacher.Android</RootNamespace>
+    <AssemblyName>ClassShout.Teacher.Android</AssemblyName>
+
+    <ApplicationId>com.classshout.teacher</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+
+    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+
+    <!--
+      Avalonia 通过反射解析 XAML，裁剪容易在运行时丢掉用到的类型，
+      因此这里明确关闭裁剪并把 AOT 一起关掉（AOT 要求先启用裁剪，否则报 XA1030）。
+      代价是 APK 体积偏大（约 18 MB，主要是 Skia 原生库），换来的是稳定性。
+      若日后要压体积，可以在确保所有 XAML 都走编译绑定的前提下改为
+      PublishTrimmed=true + TrimMode=partial，并配合 TrimmerRootDescriptor。
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+    <AndroidLinkMode>None</AndroidLinkMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Android" Version="$(AvaloniaVersion)" />
+  </ItemGroup>
+
+  <!--
+    目标 ABI 的选择。
+
+    为什么用自定义属性 AndroidAbi 做开关，而不是直接在命令行传 RuntimeIdentifiers：
+      - 传单数 RuntimeIdentifier 无效 —— 会被这里复数形式的 RuntimeIdentifiers 覆盖；
+      - 传复数 RuntimeIdentifiers 会作为全局属性传播到被引用的 Core / Design / Teacher，
+        它们会被要求按 android-arm64 这个 RID 构建，直接编译失败。
+    所以这里让全局属性只带一个无害的自定义开关，ABI 列表在本项目内部按条件决定。
+
+      打包脚本用法：-p:AndroidAbi=android-arm64
+
+    关于体积（实测）：
+      arm64 + x64 两个 ABI → APK 约 63 MB
+      只保留 android-arm64  → APK 约 32 MB
+    体积大头不是 Skia，而是 libassembly-store.so（约 29 MB，托管程序集被打包成原生库），
+    根源是关闭了裁剪。想进一步压体积应在真机验证通过后改用 AndroidLinkMode=SdkOnly
+    （只裁剪 BCL，保留 Avalonia 与业务程序集），而不是简单删 ABI。
+  -->
+  <PropertyGroup Condition="'$(AndroidAbi)' != ''">
+    <RuntimeIdentifiers>$(AndroidAbi)</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(AndroidAbi)' == ''">
+    <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClassShout.Teacher\ClassShout.Teacher.csproj" />
+  </ItemGroup>
+
+</Project>
