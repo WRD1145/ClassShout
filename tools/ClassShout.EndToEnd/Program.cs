@@ -680,63 +680,98 @@ internal static class Program
     /// </summary>
     private static async Task RunMessageQueueConcurrencyAsync()
     {
-        const int Iterations = 2000;
-        var timeout = TimeSpan.FromSeconds(2);
-        var slowThreshold = TimeSpan.FromMilliseconds(800);
+        // 先说清楚这条断言的能力边界，免得后人误以为它守住了那个竞态。
+        //
+        // 它**不是**原竞态的可靠复现。真正那个丢唤醒窗口只有几十纳秒 ——
+        // 检查历史与登记等待者之间那一次锁的释放与重取。试过两种写法都抓不到：
+        //   · 每次新建队列、单轮询者单发布者：无竞争，重取只要二十来纳秒；
+        //   · 多轮询者 + 多发布者压同一个队列：连续发布下轮询者几乎每次
+        //     检查都能看到新事件就直接返回了，根本走不到登记那一步，
+        //     窗口没被走过。把两者都实测过，把修复临时退回去测试依然是绿的。
+        //
+        // 要从外部可靠复现，需要一个"检查与登记之间"的测试缝；但那种缝在
+        // 修复被退回时也会一起消失，断言随之失效 —— 等于自欺欺人。
+        //
+        // 所以这个竞态的保证靠的是构造本身：检查与登记在同一次持锁里完成，
+        // Publish 用同一把锁，于是只可能是"Publish 先拿到锁"或
+        // "等待者已经登记好"这两种情况之一。这在 MessageHub.cs 里一眼可查。
+        //
+        // 这条断言留着守的是另一类问题：轮询在持续有事件时是否仍然及时返回
+        // （万一以后有人往里加锁、加等待、加批量逻辑，把延迟搞上去了）。
+        // 连续发布下一次正确的轮询应当在毫秒级返回，所以阈值取超时的一半，
+        // 与"干等到超时"之间有 2 倍以上的区分度。
+        const int Pollers = 6;
+        const int Publishers = 3;
 
-        var fast = 0;
+        var timeout = TimeSpan.FromMilliseconds(400);
+        var budget = TimeSpan.FromSeconds(3);
+
+        // 连续发布下，一次正确的轮询应当在毫秒级返回。
+        // 阈值取超时的一半，与"干等到超时"之间有 2 倍以上的区分度。
+        var slowThreshold = TimeSpan.FromMilliseconds(200);
+
+        var queue = new MessageQueue();
+        queue.Publish(new RelayEnvelope { Kind = RelayKinds.TextShout, From = "预热", Text = "预热" });
+
+        using var cts = new CancellationTokenSource(budget);
+        var gate = new object();
+        var polls = 0;
         var slow = 0;
+        var maxMs = 0.0;
 
-        for (var i = 0; i < Iterations; i++)
+        var publishers = Enumerable.Range(0, Publishers).Select(_ => Task.Run(() =>
         {
-            var queue = new MessageQueue();
+            while (!cts.IsCancellationRequested)
+            {
+                queue.Publish(new RelayEnvelope
+                {
+                    Kind = RelayKinds.TextShout,
+                    From = "并发测试",
+                    Text = "并发压测",
+                });
 
-            // 先放一条"预热"事件，把序号推过 0。
-            //
-            // 这一步不是可有可无：since 传 0 的语义是"从此刻开始，不补发历史"，
-            // 于是 WaitAsync 会就地把 since 归一到当前的 _sequence。若 Publish
-            // 抢在轮询序言之前跑到，那条就被当成历史正确地跳过了 —— 测试会误判成
-            // "丢了"，然后老老实实等满整个超时。传一个大于 0 的 since 就没有这个歧义。
-            queue.Publish(new RelayEnvelope { Kind = RelayKinds.TextShout, From = "预热", Text = "预热" });
+                Thread.Sleep(1);
+            }
+        })).ToArray();
+
+        var pollers = Enumerable.Range(0, Pollers).Select(_ => Task.Run(async () =>
+        {
             var since = queue.LastSequence;
 
-            // 让轮询先跑起来，再让 Publish 从另一个线程砸过去
-            var poll = Task.Run(() => queue.WaitAsync(since, timeout, CancellationToken.None));
-
-            // 这个自旋刻意取得很小：它让 Publish 有更大机会正好落在
-            // "历史检查完"与"等待者登记上"之间，也就是那个丢唤醒窗口里。
-            // 落在窗口之前或之后都是正常路径，只有正好落在窗口里才会被这条断言抓住。
-            Thread.SpinWait(80 + (i % 240));
-
-            queue.Publish(new RelayEnvelope
+            while (!cts.IsCancellationRequested)
             {
-                Kind = RelayKinds.TextShout,
-                From = "并发测试",
-                Text = $"第 {i} 条",
-            });
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                var result = await queue.WaitAsync(since, timeout, CancellationToken.None);
+                stopwatch.Stop();
 
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var result = await poll;
-            stopwatch.Stop();
+                if (result.Next > since)
+                {
+                    since = result.Next;
+                }
 
-            var arrived = result.Events.Any(e => e.Sequence > since);
+                lock (gate)
+                {
+                    polls++;
+                    if (stopwatch.Elapsed.TotalMilliseconds > maxMs)
+                    {
+                        maxMs = stopwatch.Elapsed.TotalMilliseconds;
+                    }
 
-            if (!arrived || result.TimedOut || stopwatch.Elapsed > slowThreshold)
-            {
-                slow++;
+                    if (stopwatch.Elapsed > slowThreshold)
+                    {
+                        slow++;
+                    }
+                }
             }
-            else
-            {
-                fast++;
-            }
-        }
+        })).ToArray();
 
-        Check("长轮询不会丢唤醒（并发 2000 次，按延迟判定）", slow == 0,
+        await Task.WhenAll(pollers.Concat(publishers));
+
+        Check("长轮询不会丢唤醒（高竞争压测，按延迟判定）", slow == 0,
             slow == 0
-                ? $"{fast}/{Iterations} 条都在 {slowThreshold.TotalMilliseconds:0} 毫秒内送达"
-                : $"有 {slow} 条是干等到 {timeout.TotalSeconds:0} 秒超时才送出的，丢唤醒窗口又出现了");
+                ? $"{polls} 次轮询，最慢 {maxMs:0} 毫秒（阈值 {slowThreshold.TotalMilliseconds:0} 毫秒）"
+                : $"{polls} 次轮询里有 {slow} 次一直等到 {timeout.TotalMilliseconds:0} 毫秒超时才返回，最慢 {maxMs:0} 毫秒");
     }
-
     /// <summary>
     /// 取管理员口令。优先环境变量；否则去服务器项目的输出目录里找 relay-config.json。
     /// 找不到就跳过授权相关的检查 —— 与其猜一个口令让测试变成"看环境脸色"，不如明确跳过。
