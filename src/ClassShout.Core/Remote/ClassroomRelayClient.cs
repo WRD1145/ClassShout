@@ -28,6 +28,9 @@ public sealed class ClassroomRelayClient : IAsyncDisposable
     private string? _token;
     private long _since;
 
+    /// <summary>当前是否正处于一路语音之中（见过 audioStart、还没见到 audioEnd / stop）。</summary>
+    private bool _audioOpen;
+
     public ClassroomRelayClient(HttpClient http, ClassroomRelaySettings settings)
     {
         _http = http;
@@ -160,13 +163,21 @@ public sealed class ClassroomRelayClient : IAsyncDisposable
         }
 
         _cts = new CancellationTokenSource();
+
+        // since 归零对服务器意味着"从此刻开始，不补发历史"。
+        // 语音状态也要一并归零：新会话里不该继承上一次那个"正在播放"的判断，
+        // 否则重连后第一段没有 audioStart 的分片会被误当成接着在播。
         _since = 0;
+        _audioOpen = false;
         _pollLoop = Task.Run(() => PollLoopAsync(_cts.Token));
     }
 
     private async Task PollLoopAsync(CancellationToken cancellationToken)
     {
         var backoff = TimeSpan.FromSeconds(1);
+
+        // 下一条应当收到的序号。用它和实际到达的序号对比，就能发现断线期间漏掉了多少。
+        var expected = _since > 0 ? _since + 1 : 0;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -192,9 +203,56 @@ public sealed class ClassroomRelayClient : IAsyncDisposable
                 backoff = TimeSpan.FromSeconds(1);
                 SetConnected(true);
 
+                // 序号缺口检测。
+                //
+                // 服务器只保留最近 2048 条历史，长时间离线再回来时，中间那段已经被挤出去了。
+                // 序号是连续的，所以"缺了多少条"是能算出来的 —— 以前没人算，
+                // 于是重连之后会把历史整段回放，其中包括一段没有 audioStart 打头的
+                // 半截音频，教室端拿着没有格式说明的数据就去播。
+                if (_since > 0 && batch.Events.Count > 0 && batch.Events[0].Sequence > expected + 1)
+                {
+                    var missed = batch.Events[0].Sequence - expected - 1;
+
+                    if (_audioOpen)
+                    {
+                        // 正在播的那一路，结尾多半就在丢掉的那段里。
+                        // 继续把后面的分片当成同一次喊话播放，只会播出一段没头没尾的声音。
+                        _audioOpen = false;
+                        Log?.Invoke("断线期间丢失了部分喊话，已结束当前语音。");
+                    }
+
+                    Log?.Invoke($"断线期间错过 {missed} 条事件。服务器只保留最近一段历史，长时间离线后会丢内容。");
+                }
+
+                expected = _since + 1;
+                var droppedAudio = 0;
+
                 foreach (var envelope in batch.Events)
                 {
+                    switch (envelope.Kind)
+                    {
+                        case RelayKinds.AudioStart:
+                            _audioOpen = true;
+                            break;
+
+                        case RelayKinds.AudioEnd:
+                        case RelayKinds.Stop:
+                            _audioOpen = false;
+                            break;
+
+                        case RelayKinds.Audio when !_audioOpen:
+                            // 没有 audioStart 打头的分片 —— 丢掉。
+                            // 播放器连采样率和声道数都不知道，播出去是噪声或者直接抛异常。
+                            droppedAudio++;
+                            continue;
+                    }
+
                     ShoutReceived?.Invoke(envelope);
+                }
+
+                if (droppedAudio > 0)
+                {
+                    Log?.Invoke($"丢弃了 {droppedAudio} 段没有起始标记的音频分片。");
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

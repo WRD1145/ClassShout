@@ -49,6 +49,9 @@ public sealed class TeacherSession
     /// <summary>连接断开（无论正常或异常）。</summary>
     public event EventHandler<string>? Closed;
 
+    /// <summary>会话级的诊断消息（例如协议版本不符）。由服务器转发到它的 Log。</summary>
+    public event Action<string>? Log;
+
     /// <summary>
     /// 握手完成。
     /// 单独暴露这个事件，是为了让「收到 hello 之后要回一条状态」成为协议行为，
@@ -107,11 +110,35 @@ public sealed class TeacherSession
     private void HandleControl(byte[] payload)
     {
         var message = ShoutCodec.Decode(payload);
+        if (message is null)
+        {
+            return;
+        }
+
+        // 除握手之外的任何消息，都必须在协议版本对得上的握手之后才处理。
+        //
+        // IsHandshaken 以前只是被赋值、从来没人读，于是版本不匹配的教师端
+        // 照样能发文字和音频 —— 而版本号存在的意义恰恰是"线路格式可能变了"。
+        // 真到了版本不兼容那天，教室端会照着一个它读不懂的格式去播放，
+        // 症状是乱码音频或直接崩，而不是一句明确的"版本不符"。
+        if (message is not HelloMessage && !IsHandshaken)
+        {
+            Log?.Invoke($"{ClientName} 的协议版本与教室端不一致，已忽略它发来的 {message.GetType().Name}。");
+            return;
+        }
+
         switch (message)
         {
             case HelloMessage hello:
                 ClientName = string.IsNullOrWhiteSpace(hello.ClientName) ? "未命名教师端" : hello.ClientName;
                 IsHandshaken = hello.ProtocolVersion == ShoutProtocol.Version;
+
+                if (!IsHandshaken)
+                {
+                    Log?.Invoke($"{ClientName} 的协议版本为 {hello.ProtocolVersion}，本教室端为 {ShoutProtocol.Version}，" +
+                                "已拒绝接收它的喊话。请把两端升级到同一版本。");
+                }
+
                 Handshaken?.Invoke(this, EventArgs.Empty);
                 break;
 
@@ -265,6 +292,11 @@ public sealed class ClassroomServer : IAsyncDisposable
         session.Attach(client.GetStream());
 
         _sessions.Add(session);
+
+        // 会话里的诊断（协议版本不符之类）要能被界面看到，
+        // 否则教室端只会表现为"老师喊了没反应"，而日志里什么都没有。
+        session.Log += message => Log?.Invoke(message);
+
         Log?.Invoke($"教师端接入：{remote}");
         SessionOpened?.Invoke(this, session);
 

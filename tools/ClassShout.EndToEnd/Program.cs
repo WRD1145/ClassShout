@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClassShout.Classroom.Services;
@@ -150,6 +151,13 @@ internal static class Program
             Check("文字内容完全一致", receivedTexts.Count > 0 && receivedTexts[0] == shoutText,
                 receivedTexts.Count > 0 ? $"内容={receivedTexts[0]}" : "无内容");
         }
+
+        // ---------- 3b. 协议版本不符时必须拒收 ----------
+        //
+        // 版本号存在的意义就是"线路格式可能变了"。以前 IsHandshaken 只被赋值、
+        // 从来没人读，于是版本不匹配的教师端照样能喊话 ——
+        // 真到不兼容那天，教室端会照着一个读不懂的格式去播放。
+        await AssertVersionMismatchRejectedAsync(receivedTexts, shoutText);
 
         // ---------- 4. 语音流 ----------
         var format = AudioFormat.Default;
@@ -318,6 +326,10 @@ internal static class Program
         var audioReceived = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         var audioStartReceived = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
         var audioEndReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // 收到的音频信封总数。TrySetResult 只保留第一条，数不出"多收了一条"，
+        // 而下面那条"没有 audioStart 的分片必须被丢弃"的断言正需要计数。
+        var audioEnvelopeCount = 0;
         var stopReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var classroom = new ClassroomRelayClient(http, settings);
@@ -332,6 +344,7 @@ internal static class Program
                     audioStartReceived.TrySetResult(envelope);
                     break;
                 case RelayKinds.Audio when envelope.AudioBase64 is not null:
+                    Interlocked.Increment(ref audioEnvelopeCount);
                     audioReceived.TrySetResult(Convert.FromBase64String(envelope.AudioBase64));
                     break;
                 case RelayKinds.AudioEnd:
@@ -632,6 +645,30 @@ internal static class Program
             Check("超限音频分片被拒（413）",
                 audioResponse.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge,
                 $"HTTP {(int)audioResponse.StatusCode}");
+
+            // 没有 audioStart 打头的分片必须被教室端丢弃。
+            //
+            // 断线重连时服务器会把缓冲区里的历史整段回放，而长时间离线之后，
+            // 回放的第一条很可能是一段"半截音频"—— 它的 audioStart 已经被挤出窗口了。
+            // 教室里那段数据没有采样率和声道数，播出去是噪声，或者直接让播放器抛异常。
+            // 序号是连续的，本来就能识别出这个缺口。
+            var before = Volatile.Read(ref audioEnvelopeCount);
+
+            using var strayRequest = new HttpRequestMessage(
+                HttpMethod.Post, $"{root}{string.Format(RelayPaths.TeacherAudio, rawBind.Token)}")
+            {
+                Content = new ByteArrayContent(new byte[3200]),
+            };
+
+            var strayResponse = await http.SendAsync(strayRequest);
+            await Task.Delay(1200);
+
+            var after = Volatile.Read(ref audioEnvelopeCount);
+            Check("没有 audioStart 打头的音频分片被丢弃",
+                strayResponse.IsSuccessStatusCode && after == before,
+                after == before
+                    ? $"服务器转发了（HTTP {(int)strayResponse.StatusCode}），教室端丢弃，音频信封数仍为 {before}"
+                    : $"教室端多收了 {after - before} 条裸音频分片");
         }
         else
         {
@@ -772,6 +809,55 @@ internal static class Program
                 ? $"{polls} 次轮询，最慢 {maxMs:0} 毫秒（阈值 {slowThreshold.TotalMilliseconds:0} 毫秒）"
                 : $"{polls} 次轮询里有 {slow} 次一直等到 {timeout.TotalMilliseconds:0} 毫秒超时才返回，最慢 {maxMs:0} 毫秒");
     }
+    /// <summary>
+    /// 用一个"版本号对不上"的裸连接去喊话，断言教室端一个字都不收。
+    ///
+    /// 不用 TeacherClient：它把协议版本写死在 ConnectAsync 里，这里要的正是错版本。
+    /// </summary>
+    private static async Task AssertVersionMismatchRejectedAsync(List<string> receivedTexts, string baseline)
+    {
+        int before;
+        lock (receivedTexts)
+        {
+            before = receivedTexts.Count;
+        }
+
+        using var raw = new TcpClient();
+        await raw.ConnectAsync(IPAddress.Loopback, TcpPort);
+
+        var stream = raw.GetStream();
+
+        await FrameProtocol.WriteAsync(stream, FrameKind.Control, ShoutCodec.Encode(new HelloMessage
+        {
+            ClientId = Guid.NewGuid().ToString("N"),
+            ClientName = "版本不符的教师端",
+            ProtocolVersion = ShoutProtocol.Version + 1,
+        }), CancellationToken.None);
+
+        await FrameProtocol.WriteAsync(stream, FrameKind.Control, ShoutCodec.Encode(new TextShoutMessage
+        {
+            Text = "这条不该被任何教室收到",
+            Rate = 1,
+            Volume = 80,
+        }), CancellationToken.None);
+
+        await Task.Delay(800);
+
+        int after;
+        lock (receivedTexts)
+        {
+            after = receivedTexts.Count;
+        }
+
+        Check("协议版本不符的教师端被拒收（不会喊进教室）", after == before,
+            after == before
+                ? $"版本 {ShoutProtocol.Version + 1} 的喊话被丢弃，教室端仍只有 {before} 条"
+                : $"教室端多收了 {after - before} 条，版本校验没生效");
+
+        // 顺带确认基线没被这条测试本身搞乱
+        Check("版本不符的连接没有污染已有喊话", baseline == receivedTexts[0], "首条内容未变");
+    }
+
     /// <summary>
     /// 取管理员口令。优先环境变量；否则去服务器项目的输出目录里找 relay-config.json。
     /// 找不到就跳过授权相关的检查 —— 与其猜一个口令让测试变成"看环境脸色"，不如明确跳过。
