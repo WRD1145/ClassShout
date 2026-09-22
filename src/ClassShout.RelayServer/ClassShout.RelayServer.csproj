@@ -24,10 +24,17 @@
     <!--
       管理界面作为嵌入资源打进程序集，而不是放 wwwroot 走静态文件中间件：
       这样发布产物与运行目录无关，换工作目录、单文件发布都不会出现"页面 404"。
+
+      HTML / CSS / JS 分成三个文件是安全要求，不是洁癖：
+      控制台要下发 Content-Security-Policy，而 CSP 一旦收紧到 script-src 'self'，
+      内联的 <script> 和内联事件处理器（onclick 之类）都会被浏览器拒绝执行。
+      把脚本挪成独立文件，是这条策略能落地的前提。
     -->
     <EmbeddedResource Include="wwwroot\index.html" />
-    <Content Remove="wwwroot\index.html" />
-    <None Remove="wwwroot\index.html" />
+    <EmbeddedResource Include="wwwroot\app.css" />
+    <EmbeddedResource Include="wwwroot\app.js" />
+    <Content Remove="wwwroot\index.html;wwwroot\app.css;wwwroot\app.js" />
+    <None Remove="wwwroot\index.html;wwwroot\app.css;wwwroot\app.js" />
   </ItemGroup>
 
 </Project>

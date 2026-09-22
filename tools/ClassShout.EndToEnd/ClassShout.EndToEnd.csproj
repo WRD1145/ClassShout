@@ -22,4 +22,19 @@
     <ProjectReference Include="..\..\src\ClassShout.Classroom\ClassShout.Classroom.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      显式提升 Tmds.DBus.Protocol（Avalonia.Desktop → Avalonia.X11 的传递依赖）。
+
+      NuGet 默认解析到 0.21.2，而该版本命中 GHSA-xrw6-gwf8-vvr9 / CVE-2026-39959
+      （High）：恶意 D-Bus 对端可以伪造信号、耗尽文件描述符并造成拒绝服务。
+      Linux 桌面下这是真实可达的攻击面 —— 客户端的 Linux 支持正是靠这个后端。
+
+      选 0.21.3 而不是最新的 0.9x：它是同一小版本线上的补丁，
+      Avalonia 11.3 的 X11 后端就是对着 0.21 的 API 写的，
+      跨大版本强升会带来运行时不兼容，而我们恰恰要用这条路径。
+    -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="$(TmdsDBusProtocolVersion)" />
+  </ItemGroup>
+
 </Project>

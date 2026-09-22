@@ -19,6 +19,8 @@
     <NaudioVersion>2.2.1</NaudioVersion>
     <SystemSpeechVersion>8.0.0</SystemSpeechVersion>
     <AndroidApiLevel>36</AndroidApiLevel>
+    <!-- 见各项目里对 Tmds.DBus.Protocol 的显式引用说明 -->
+    <TmdsDBusProtocolVersion>0.21.3</TmdsDBusProtocolVersion>
   </PropertyGroup>
 
   <PropertyGroup>

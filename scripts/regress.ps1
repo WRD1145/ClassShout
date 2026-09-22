@@ -100,9 +100,23 @@ Write-Host '================ 教室端托盘驻留 ================' -Foreground
 $trayExit = $LASTEXITCODE
 
 Write-Host ''
-Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit    托盘退出码：$trayExit" -ForegroundColor Cyan
+Write-Host '================ 控制台前端转义 ================' -ForegroundColor Yellow
 
-if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0) {
+# 用 Node 把真正的 app.js 跑起来断言转义行为，所以它守的是浏览器会执行的那份代码，
+# 而不是一份照抄过来的副本。没有 Node 就跳过 —— 这是唯一一个非 .NET 的测试。
+$webuiExit = 0
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    & node (Join-Path $PSScriptRoot 'smoke-webui.mjs')
+    $webuiExit = $LASTEXITCODE
+}
+else {
+    Write-Host '  跳过 —— 未找到 node' -ForegroundColor Yellow
+}
+
+Write-Host ''
+Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit    托盘退出码：$trayExit    前端退出码：$webuiExit" -ForegroundColor Cyan
+
+if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $webuiExit -ne 0) {
     Write-Host '存在失败项。' -ForegroundColor Red
     exit 1
 }

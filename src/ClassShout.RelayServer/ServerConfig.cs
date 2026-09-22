@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -204,11 +205,25 @@ public sealed class ServerConfig
         => string.Equals(username, AdminUsername, StringComparison.OrdinalIgnoreCase)
            && FixedTimeEquals(AdminPassword, password);
 
+    /// <summary>
+    /// 固定时间比较两个字符串。
+    ///
+    /// 先把两边各自哈希再比。直接拿原始字节调 CryptographicOperations.FixedTimeEquals
+    /// 是个常见的误用：那个方法在长度不同时会立刻返回，于是"口令长度对不对"
+    /// 就从响应耗时里泄漏出去了 —— 攻击者能先把长度试出来再逐字节爆破，
+    /// 搜索空间小一大截。
+    ///
+    /// 先做一次 SHA-256 就没有这个问题：无论输入多长，参与比较的都是固定 32 字节。
+    /// </summary>
     private static bool FixedTimeEquals(string expected, string actual)
     {
-        var a = System.Text.Encoding.UTF8.GetBytes(expected);
-        var b = System.Text.Encoding.UTF8.GetBytes(actual);
-        return CryptographicOperations.FixedTimeEquals(a, b);
+        Span<byte> hashA = stackalloc byte[32];
+        Span<byte> hashB = stackalloc byte[32];
+
+        SHA256.HashData(Encoding.UTF8.GetBytes(expected), hashA);
+        SHA256.HashData(Encoding.UTF8.GetBytes(actual), hashB);
+
+        return CryptographicOperations.FixedTimeEquals(hashA, hashB);
     }
 
     /// <summary>

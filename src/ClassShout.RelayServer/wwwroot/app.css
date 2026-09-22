@@ -1,0 +1,225 @@
+/* ==========================================================================
+   Material Design 3 的配色令牌，与客户端设计系统同源。
+   刻意不引任何 CDN：服务器可能部署在没有外网的内网里，
+   页面一旦依赖外部资源就会整个白屏。
+   ========================================================================== */
+:root {
+  --primary: #6750a4;
+  --on-primary: #ffffff;
+  --primary-container: #eaddff;
+  --on-primary-container: #21005d;
+  --secondary-container: #e8def8;
+  --on-secondary-container: #1d192b;
+  --tertiary-container: #ffd8e4;
+  --error: #b3261e;
+  --on-error: #ffffff;
+  --error-container: #f9dedc;
+  --on-error-container: #410e0b;
+  --surface: #fef7ff;
+  --on-surface: #1d1b20;
+  --surface-variant: #e7e0ec;
+  --on-surface-variant: #49454f;
+  --surface-container-low: #f7f2fa;
+  --surface-container: #f3edf7;
+  --surface-container-high: #ece6f0;
+  --surface-container-highest: #e6e0e9;
+  --outline: #79747e;
+  --outline-variant: #cac4d0;
+  --shape-sm: 8px;
+  --shape-md: 12px;
+  --shape-lg: 16px;
+  --shape-full: 999px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #d0bcff;
+    --on-primary: #381e72;
+    --primary-container: #4f378b;
+    --on-primary-container: #eaddff;
+    --secondary-container: #4a4458;
+    --on-secondary-container: #e8def8;
+    --tertiary-container: #633b48;
+    --error: #f2b8b5;
+    --on-error: #601410;
+    --error-container: #8c1d18;
+    --on-error-container: #f9dedc;
+    --surface: #141218;
+    --on-surface: #e6e0e9;
+    --surface-variant: #49454f;
+    --on-surface-variant: #cac4d0;
+    --surface-container-low: #1d1b20;
+    --surface-container: #211f26;
+    --surface-container-high: #2b2930;
+    --surface-container-highest: #36343b;
+    --outline: #938f99;
+    --outline-variant: #49454f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--on-surface);
+  font-family: "Noto Sans CJK SC", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.hidden { display: none !important; }
+
+/* ---------- 顶栏 ---------- */
+.appbar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 24px;
+  background: var(--surface-container);
+}
+.appbar .logo {
+  width: 42px; height: 42px; border-radius: 13px;
+  background: var(--primary); color: var(--on-primary);
+  display: grid; place-items: center; font-size: 20px; font-weight: 700;
+}
+.appbar h1 { font-size: 18px; margin: 0; font-weight: 500; }
+.appbar .sub { font-size: 12px; color: var(--on-surface-variant); }
+.spacer { flex: 1; }
+
+/* ---------- 标签页 ---------- */
+.tabs {
+  display: flex; gap: 6px; padding: 10px 24px;
+  background: var(--surface-container-low);
+  border-bottom: 1px solid var(--outline-variant);
+  flex-wrap: wrap;
+}
+.tab {
+  border: none; background: transparent; color: var(--on-surface-variant);
+  padding: 8px 18px; border-radius: var(--shape-full); cursor: pointer;
+  font-size: 14px; font-family: inherit;
+}
+.tab:hover { background: color-mix(in srgb, var(--on-surface) 8%, transparent); }
+.tab.active { background: var(--secondary-container); color: var(--on-secondary-container); }
+
+main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+
+/* ---------- 卡片 ---------- */
+.card {
+  background: var(--surface-container-low);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--shape-md);
+  padding: 18px;
+  margin-bottom: 18px;
+}
+.card h2 { font-size: 13px; margin: 0 0 12px; color: var(--on-surface-variant); font-weight: 500; }
+.card h3 { font-size: 15px; margin: 18px 0 8px; font-weight: 500; }
+.card p { margin: 8px 0; color: var(--on-surface-variant); font-size: 13px; }
+
+/* ---------- 统计卡 ---------- */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+.stat {
+  background: var(--surface-container-high);
+  border-radius: var(--shape-md); padding: 18px;
+}
+.stat .num { font-size: 32px; font-weight: 500; line-height: 1.2; }
+.stat .label { font-size: 12px; color: var(--on-surface-variant); margin-top: 4px; }
+
+/* ---------- 表单 ---------- */
+label { display: block; font-size: 12px; color: var(--on-surface-variant); margin: 12px 0 6px; }
+input[type=text], input[type=password] {
+  width: 100%; padding: 12px 14px;
+  background: transparent; color: var(--on-surface);
+  border: 1px solid var(--outline); border-radius: var(--shape-sm);
+  font-size: 14px; font-family: inherit;
+}
+input:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
+
+button.primary, button.tonal, button.outlined, button.danger {
+  border: none; border-radius: var(--shape-full);
+  padding: 10px 22px; font-size: 14px; font-family: inherit;
+  cursor: pointer; font-weight: 500;
+}
+button.primary { background: var(--primary); color: var(--on-primary); }
+button.tonal { background: var(--secondary-container); color: var(--on-secondary-container); }
+button.outlined { background: transparent; color: var(--primary); border: 1px solid var(--outline); }
+button.danger { background: var(--error); color: var(--on-error); }
+button:disabled { opacity: .38; cursor: not-allowed; }
+button.small { padding: 6px 14px; font-size: 13px; }
+button + button { margin-left: 8px; }
+
+/* ---------- 表格 ---------- */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; padding: 10px 10px; font-size: 12px; font-weight: 500;
+  color: var(--on-surface-variant); border-bottom: 1px solid var(--outline-variant);
+  white-space: nowrap;
+}
+td { padding: 12px 10px; border-bottom: 1px solid var(--outline-variant); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: color-mix(in srgb, var(--on-surface) 4%, transparent); }
+.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+
+.empty { padding: 32px; text-align: center; color: var(--on-surface-variant); }
+
+/* ---------- 徽标 ---------- */
+.chip {
+  display: inline-block; padding: 3px 10px; border-radius: var(--shape-full);
+  font-size: 11px; background: var(--surface-container-highest); color: var(--on-surface-variant);
+}
+.chip.ok { background: var(--primary-container); color: var(--on-primary-container); }
+.chip.warn { background: var(--tertiary-container); color: var(--on-surface); }
+.chip.bad { background: var(--error-container); color: var(--on-error-container); }
+.chip.info { background: var(--secondary-container); color: var(--on-secondary-container); }
+
+/* ---------- 提示条 ---------- */
+.banner {
+  padding: 12px 16px; border-radius: var(--shape-sm); margin-bottom: 16px; font-size: 13px;
+}
+.banner.error { background: var(--error-container); color: var(--on-error-container); }
+.banner.warn { background: var(--tertiary-container); color: var(--on-surface); }
+.banner.info { background: var(--secondary-container); color: var(--on-secondary-container); }
+
+/* ---------- 登录页 ---------- */
+.login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.login-card { width: 100%; max-width: 380px; }
+.login-card .logo-lg {
+  width: 56px; height: 56px; border-radius: 18px; background: var(--primary);
+  color: var(--on-primary); display: grid; place-items: center;
+  font-size: 26px; font-weight: 700; margin-bottom: 16px;
+}
+.login-card h1 { font-size: 22px; margin: 0 0 4px; font-weight: 400; }
+.login-card .hint { font-size: 13px; color: var(--on-surface-variant); margin-bottom: 20px; }
+
+/* ---------- 对话框 ---------- */
+.overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.4);
+  display: grid; place-items: center; padding: 24px; z-index: 50;
+}
+.dialog {
+  background: var(--surface-container-high); border-radius: 28px;
+  padding: 24px; width: 100%; max-width: 420px;
+}
+.dialog h2 { font-size: 20px; margin: 0 0 8px; font-weight: 400; color: var(--on-surface); }
+.dialog p { font-size: 13px; color: var(--on-surface-variant); margin: 0 0 8px; }
+.dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
+  background: var(--on-surface); color: var(--surface);
+  padding: 12px 20px; border-radius: var(--shape-sm); font-size: 13px; z-index: 60;
+}
+
+/* ---------- 工具类 ----------
+   原先这些是行内 style 属性。CSP 收紧到 style-src 'self' 之后，
+   行内 style 属性会被浏览器当作内联样式拒绝执行，所以统一搬到这里。
+   顺带也让 HTML 干净一些。                                     */
+.w-full { width: 100%; }
+.mt-18 { margin-top: 18px; }
+.mt-20 { margin-top: 20px; }
+.cell-actions { text-align: right; white-space: nowrap; }
+.cell-actions-plain { text-align: right; }
+select {
+  width: 100%; padding: 12px 14px;
+  background: transparent; color: var(--on-surface);
+  border: 1px solid var(--outline); border-radius: var(--shape-sm);
+  font-size: 14px; font-family: inherit;
+}

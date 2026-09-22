@@ -1,3 +1,4 @@
+using System.Threading.RateLimiting;
 using ClassShout.Core.Remote;
 using ClassShout.RelayServer;
 using Microsoft.AspNetCore.Mvc;
@@ -41,6 +42,53 @@ builder.Services.AddSingleton(sp => new BindingStore(bindingStatePath, sp.GetReq
 builder.Services.AddSingleton<UserSessions>();
 builder.Services.AddSingleton<RelaySessions>();
 builder.Services.AddSingleton<MessageHub>();
+
+// ======================== 限速 ========================
+//
+// 注册与登录是匿名开放的，而每个请求都要跑 10 万次 PBKDF2 —— 一次请求几十毫秒
+// 纯 CPU。不限速的话，一台机器每秒发几百个请求就能把服务器算力吃干净，
+// 而攻击者不需要任何凭据，成本几乎为零。
+//
+// 刻意不设全局限速器：音频上传是约 10 次/秒的高频路径，长轮询又要挂住 25 秒，
+// 一个全局桶会把它们一起误伤。只给这几个昂贵的匿名端点挂策略。
+//
+// 分两层：
+//   · 按来源 IP 的令牌桶（下面这里）—— 挡单机洪水和口令爆破；
+//   · 全局并发闸门（见 PBKDF2 闸门那段中间件）—— 挡住"换一批 IP 绕开"的情况，
+//     保证同时进行的 PBKDF2 计算有上限。
+// 只有前者的话，攻击者用一批代理就能把 CPU 占满；只有后者的话，
+// 单个 IP 仍可以刷满队列。两层都要。
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // 登录 / 注册账号：人工操作的频率，桶给得不大
+    options.AddPolicy("auth", context =>
+        RateLimitPartition.GetTokenBucketLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = 30,
+                TokensPerPeriod = 30,
+                ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true,
+            }));
+
+    // 教室端注册：同样是 10 万次 PBKDF2，但这是"开学那天几十台机器同时上线"
+    // 的正当突发，桶要明显放大，否则会把正常流量挡在门外。
+    options.AddPolicy("classroom-register", context =>
+        RateLimitPartition.GetTokenBucketLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = 120,
+                TokensPerPeriod = 60,
+                ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true,
+            }));
+});
 
 var app = builder.Build();
 
@@ -94,6 +142,12 @@ catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
 /// <summary>长轮询单次等待上限。太短会空转费流量，太长则断线发现变慢。</summary>
 var pollTimeout = TimeSpan.FromSeconds(25);
 
+/// <summary>
+/// 单个音频分片的体积上限。正常一批是 100 毫秒，约 3200 字节；
+/// 给到 16 KB 已是很宽的余量，同时把"持令牌者用大包撑爆内存"这条路口封死。
+/// </summary>
+const int MaxAudioChunkBytes = 16 * 1024;
+
 logger.LogInformation("注册表：{Path}（已有 {Count} 条记录）", statePath, store.Count);
 logger.LogInformation("用户表：{Path}（已有 {Count} 个账号）", userStatePath, users.Count);
 
@@ -113,6 +167,16 @@ app.MapGet(RelayPaths.Health, () => Results.Ok(new
 
 app.MapPost(RelayPaths.AuthRegister, (RegisterRequest request) =>
 {
+    // 管理员账号名要保留。UserStore 只知道自己那张表，看不见配置文件里的管理员，
+    // 所以这一条得在这里拦：否则老师注册一个同名的普通账号，
+    // 控制台的用户列表里就会出现两个「admin」，而登录接口先试管理员再试用户库 ——
+    // 两个同名账号会让人完全分不清自己正在用哪一个。
+    if (IsAdminIdentity(request.Username) || IsAdminIdentity(request.Email))
+    {
+        return Results.Ok(new AuthResponse(false, null, null,
+            "该账号名由服务器管理员保留，请换一个。"));
+    }
+
     var (profile, error) = users.Register(request.Username, request.Email, request.DisplayName, request.Password);
     if (profile is null)
     {
@@ -121,7 +185,8 @@ app.MapPost(RelayPaths.AuthRegister, (RegisterRequest request) =>
 
     var token = userSessions.Issue(profile.Id);
     return Results.Ok(new AuthResponse(true, token, ToDto(profile), null));
-});
+})
+.RequireRateLimiting("auth");
 
 app.MapPost(RelayPaths.AuthLogin, (LoginRequest request) =>
 {
@@ -153,7 +218,8 @@ app.MapPost(RelayPaths.AuthLogin, (LoginRequest request) =>
     var token = userSessions.Issue(profile.Id);
     logger.LogInformation("用户登录：{Display}", profile.DisplayName);
     return Results.Ok(new AuthResponse(true, token, ToDto(profile), null));
-});
+})
+.RequireRateLimiting("auth");
 
 app.MapGet(RelayPaths.AuthMe, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
 {
@@ -214,7 +280,11 @@ app.MapPost(RelayPaths.RegisterClassroom, (ClassroomRegisterRequest request) =>
     });
 
     return Results.Ok(new ClassroomRegisterResponse(true, isNew, record.Uuid, record.Name, plainSecret, token, null));
-});
+})
+// 这里只挂并发闸门，不挂按 IP 的令牌桶：教室端注册同样是 10 万次 PBKDF2，
+// 但它是"开学那天几十台机器同时上线"这种正当突发，按 IP 限流会把它们挡在门外。
+// 并发闸门已经足够 —— CPU 被算力活占满是真正的风险，而它同时最多只放行几个。
+.RequireRateLimiting("classroom-register");
 
 // ======================== 教师端：已授权教室 ========================
 
@@ -369,8 +439,39 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherAudio, "token"), async (string to
 
     TouchTeacher(binding);
 
+    // 分片体积上限。
+    //
+    // 正常的分片是 100 毫秒一批：16 kHz × 2 字节 × 0.1 秒 = 3200 字节。
+    // 这里给到 16 KB（约 500 毫秒音频）已经是很宽的余量。
+    //
+    // 不设上限的后果不是"多收点数据"这么轻：pcm 会先整段进内存，
+    // 再被 Convert.ToBase64String 放大 33%，然后作为一条历史消息留在
+    // 广播历史里。持令牌者只要持续发大包，就能把服务器撑爆。
+    if (request.ContentLength is > MaxAudioChunkBytes)
+    {
+        return Results.Json(
+            new { error = $"音频分片超过上限 {MaxAudioChunkBytes} 字节。" },
+            statusCode: StatusCodes.Status413PayloadTooLarge);
+    }
+
     using var buffer = new MemoryStream();
-    await request.Body.CopyToAsync(buffer);
+
+    // Content-Length 可能缺失（chunked）也可能是假的，所以读取本身也要设闸，
+    // 不能只信上面那个头部。
+    var chunk = new byte[8 * 1024];
+    int read;
+    while ((read = await request.Body.ReadAsync(chunk)) > 0)
+    {
+        if (buffer.Length + read > MaxAudioChunkBytes)
+        {
+            return Results.Json(
+                new { error = $"音频分片超过上限 {MaxAudioChunkBytes} 字节。" },
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
+
+        buffer.Write(chunk, 0, read);
+    }
+
     var pcm = buffer.ToArray();
 
     if (pcm.Length == 0)
@@ -492,11 +593,77 @@ app.MapPost(RelayPaths.Route(RelayPaths.ClassroomStatus), (
     return Results.Ok(new { ok = true });
 });
 
-// ======================== 管理控制台 WebUI ========================
+// ======================== 安全响应头 ========================
+
+// 放在所有端点之前，覆盖包括 API 在内的每一个响应。
+//
+// 这里最要紧的是 CSP：控制台页面会渲染由匿名接口写入的教室名和老师显示名，
+// 转义只要有一处写坏就是存储型 XSS，而管理员的令牌就在 sessionStorage 里。
+// script-src 'self' 让"转义写坏"不再是"代码被执行" —— 页面里已经没有任何
+// 内联脚本和内联事件处理器，注入的 <script> 或 onclick 都会被浏览器拒绝。
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers["Content-Security-Policy"] = WebUi.ContentSecurityPolicy;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["Referrer-Policy"] = "no-referrer";
+    headers["X-Frame-Options"] = "DENY";
+
+    await next();
+});
+
+// ======================== PBKDF2 并发闸门 ========================
+
+// 按来源 IP 的令牌桶挡不住"换一批代理再来"的情况，而 CPU 才是真正的瓶颈。
+// 这里给会跑 PBKDF2 的三个端点统一套一个全局信号量：同时进行的慢哈希有上限，
+// 超出的排队，排不下就直接拒绝。
+//
+// 宁可拒绝一部分注册请求，也不能让线程池被算力活占满 ——
+// 那会把转发音频、长轮询这些正常请求一起拖死，故障面反而更大。
+var pbkdf2Gate = new SemaphoreSlim(Math.Max(4, Environment.ProcessorCount * 2));
+var pbkdf2Paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    RelayPaths.AuthLogin,
+    RelayPaths.AuthRegister,
+    RelayPaths.RegisterClassroom,
+};
+
+app.Use(async (context, next) =>
+{
+    if (!pbkdf2Paths.Contains(context.Request.Path.Value ?? string.Empty))
+    {
+        await next();
+        return;
+    }
+
+    // 最多排 3 秒。客户端是等着结果的，排太久不如直接让它稍后重试。
+    if (!await pbkdf2Gate.WaitAsync(TimeSpan.FromSeconds(3)))
+    {
+        context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        return;
+    }
+
+    try
+    {
+        await next();
+    }
+    finally
+    {
+        pbkdf2Gate.Release();
+    }
+});
+
+app.UseRateLimiter();
 
 // 界面用嵌入资源而不是 wwwroot 静态目录：
 // 发布产物就是一个单文件服务器，不必关心工作目录与静态文件中间件的配置。
+// ======================== 管理控制台 WebUI ========================
+
 app.MapGet("/", () => Results.Content(WebUi.Page, "text/html; charset=utf-8"));
+
+// 样式与脚本拆成独立文件，是上面那条 CSP 能成立的前提。
+app.MapGet("/app.css", () => Results.Content(WebUi.Css, "text/css; charset=utf-8"));
+app.MapGet("/app.js", () => Results.Content(WebUi.Js, "text/javascript; charset=utf-8"));
 
 app.MapGet("/favicon.ico", () => Results.StatusCode(204));
 
@@ -777,6 +944,28 @@ UserProfile? ResolveUser(string? authToken)
     return userId == AdminUserId
         ? new UserProfile(AdminUserId, config.AdminUsername, null, "管理员", config.AdminPasswordGeneratedAt, null, false)
         : users.FindById(userId);
+}
+
+/// <summary>该用户名或邮箱是否指向内置管理员。大小写不敏感，邮箱还要比本地部分。</summary>
+bool IsAdminIdentity(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return false;
+    }
+
+    var candidate = value.Trim();
+
+    if (string.Equals(candidate, config.AdminUsername, StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    // 邮箱的本地部分才是登录名：admin@x 这种显然要挡，
+    // 而 someone@admin 只是域名里恰好有这个词，不该被误伤。
+    var at = candidate.IndexOf('@');
+    return at > 0
+           && string.Equals(candidate[..at], config.AdminUsername, StringComparison.OrdinalIgnoreCase);
 }
 
 UserProfileDto ToDto(UserProfile profile)

@@ -590,6 +590,65 @@ internal static class Program
 
         Check("另一间教室未收到不属于它的喊话", !otherGotShout, "多班级互相隔离");
 
+        // ---------- 9. 服务端安全加固 ----------
+        //
+        // 这一节的检查刻意放在最后：限速那一条会把当前 IP 的令牌桶用光，
+        // 放在中间会让后面所有需要登录的步骤莫名其妙地拿 429。
+
+        // 管理员账号名必须被保留。UserStore 只看得见自己那张表，
+        // 拦不住老师注册一个同名普通账号 —— 那会让控制台出现两个 admin。
+        // 这里用 "admin"：与 TryAdminLoginAsync 里登录管理员时用的是同一个假设。
+        var squat = await http.PostAsJsonAsync($"{root}{RelayPaths.AuthRegister}",
+            new RegisterRequest("admin", null, "冒名管理员", "Squat12345"),
+            JsonOptions);
+        var squatBody = await squat.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions);
+        Check("管理员账号名被保留（不能注册同名普通账号）",
+            squatBody is { Ok: false },
+            squatBody?.Error ?? "居然注册成功了");
+
+        // 音频分片体积上限：不给上限时，持令牌者可以用大包把服务器内存撑爆。
+        var oversized = new byte[32 * 1024];
+        var bindResponse = await http.PostAsJsonAsync($"{root}{RelayPaths.BindTeacher}",
+            new TeacherBindRequest(uuid, secret, "周老师"), JsonOptions);
+        var rawBind = await bindResponse.Content.ReadFromJsonAsync<TeacherBindResponse>(JsonOptions);
+
+        if (rawBind is { Ok: true, Token: not null })
+        {
+            // 用 string.Format 而不是 RelayPaths.Route：后者是给服务端声明路由模板用的
+            // （它把 {0} 替换成 {token} 这样的占位符），拿来拼客户端地址会多出一对花括号。
+            using var audioRequest = new HttpRequestMessage(
+                HttpMethod.Post, $"{root}{string.Format(RelayPaths.TeacherAudio, rawBind.Token)}")
+            {
+                Content = new ByteArrayContent(oversized),
+            };
+
+            var audioResponse = await http.SendAsync(audioRequest);
+            Check("超限音频分片被拒（413）",
+                audioResponse.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge,
+                $"HTTP {(int)audioResponse.StatusCode}");
+        }
+        else
+        {
+            Check("超限音频分片被拒（413）", false, "无法取得教师令牌，前置步骤失败");
+        }
+
+        // 匿名端点限速：注册与登录每个请求都要跑 10 万次 PBKDF2，
+        // 不限速的话单机就能把 CPU 吃干净。
+        var throttled = 0;
+        for (var i = 0; i < 45; i++)
+        {
+            var burst = await http.PostAsJsonAsync($"{root}{RelayPaths.AuthLogin}",
+                new LoginRequest("nosuchuser", "wrongpassword"), JsonOptions);
+
+            if (burst.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                throttled++;
+            }
+        }
+
+        Check("匿名登录端点有限速（连续请求会被 429）", throttled > 0,
+            throttled > 0 ? $"45 次连发中有 {throttled} 次被限流" : "45 次连发全部放行，没有限速");
+
         Console.WriteLine();
         Console.WriteLine($"结果：通过 {_passed} 项，失败 {_failed} 项。");
         return _failed == 0 ? 0 : 1;
