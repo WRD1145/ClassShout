@@ -55,6 +55,17 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// <summary>当前这一路语音的格式。按它算时长，而不是用默认格式 —— 采样率可能不同。</summary>
     private AudioFormat _currentAudioFormat = AudioFormat.Default;
 
+    /// <summary>
+    /// 当前这一路语音的归属与格式。
+    ///
+    /// 单独加一把锁：写入发生在 UI 线程（收到 audioStart 之后），
+    /// 读取发生在接收线程（每个音频分片都要按格式算时长）。
+    /// 原来直接裸读写一个结构体字段，既可能读到撕裂的值，
+    /// 也拦不住"甲老师刚开始、乙老师在路上的分片混进来"。
+    /// </summary>
+    private readonly Lock _audioStateLock = new();
+    private string? _audioOwner;
+
     // —— 跨局域网中继 ——
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
     private readonly ClassroomRelaySettings _relaySettings;
@@ -354,7 +365,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         session.TextShoutReceived += (_, message) => OnTextShout(session, message);
         session.AudioStarted += (_, message) => OnAudioStarted(session, message);
-        session.AudioChunkReceived += (_, payload) => OnAudioChunk(payload);
+        session.AudioChunkReceived += (_, payload) => OnAudioChunk(LanOwnerKey(session), payload);
         session.AudioEnded += (_, message) => _ = OnAudioEndedAsync(message);
         session.StopRequested += (_, message) => Post(() => StopEverything($"教师端请求停止：{message.Reason}"));
         session.Closed += (_, reason) => OnSessionClosed(session, reason);
@@ -371,6 +382,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         lock (_sessions)
         {
             _sessions.Remove(session.Id);
+
+            // 计数表与 _sessions 同生共死。以前只清 _sessions，
+            // 而每次重连都是一个新的 session.Id —— 计数表只增不减，
+            // 一台整天有人连来连去的教室端，这个字典会一直长。
+            _textCounts.Remove(session.Id);
+            _audioCounts.Remove(session.Id);
         }
 
         Post(() =>
@@ -452,7 +469,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     private void OnAudioStarted(TeacherSession session, AudioStartMessage message)
     {
-        lock (_audioCounts)
+        // 用 _sessions 这一把锁：_sessions / _textCounts / _audioCounts 总是被一起访问，
+        // 各用各的锁等于没有同步 —— 刷新教师列表那一侧读的就是未同步的数据。
+        lock (_sessions)
         {
             _audioCounts[session.Id] = _audioCounts.GetValueOrDefault(session.Id) + 1;
         }
@@ -460,13 +479,31 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         Post(() =>
         {
             RefreshTeachers();
-            PresentAudioStart(session.ClientName, new AudioFormat(message.SampleRate, message.Channels, message.BitsPerSample));
+            PresentAudioStart(
+                LanOwnerKey(session),
+                session.ClientName,
+                new AudioFormat(message.SampleRate, message.Channels, message.BitsPerSample));
         });
     }
 
+    /// <summary>局域网来源的归属键。用会话 Id 而不是姓名：同名老师会互相串台。</summary>
+    private static string LanOwnerKey(TeacherSession session) => "lan:" + session.Id;
+
+    /// <summary>中继来源的归属键。中继侧拿不到会话 Id，只能用服务器确认过的姓名。</summary>
+    private static string RelayOwnerKey(RelayEnvelope envelope) => "relay:" + (envelope.From ?? "教师端");
+
     /// <summary>开始播放一路语音。局域网与中继两条路径共用。</summary>
-    private void PresentAudioStart(string sourceName, AudioFormat format)
+    private void PresentAudioStart(string ownerKey, string sourceName, AudioFormat format)
     {
+        // 格式来自网络对端，先确认它合法再往下走。
+        // NAudio 的 WaveFormat 构造函数会校验参数并抛异常，而这里是 UI 线程 ——
+        // 对端发一个 Channels = 0 就能把整个教室端进程打掉。
+        if (!format.IsSupported)
+        {
+            AddLog("语音", $"「{sourceName}」的音频格式不受支持（{format}），本次语音已忽略");
+            return;
+        }
+
         if (IsMuted)
         {
             AddLog("语音", "已静音，本条不播放");
@@ -477,8 +514,27 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         _speech.Stop();
         _player.Stop();
 
-        _currentAudioFormat = format;
-        _player.Start(format);
+        lock (_audioStateLock)
+        {
+            _audioOwner = ownerKey;
+            _currentAudioFormat = format;
+        }
+
+        try
+        {
+            _player.Start(format);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or NAudio.MmException or InvalidOperationException)
+        {
+            // 声卡被占用、格式被驱动拒绝之类：记一笔就好，不该让教室端退出
+            lock (_audioStateLock)
+            {
+                _audioOwner = null;
+            }
+
+            AddLog("语音", $"无法开始播放：{ex.Message}");
+            return;
+        }
 
         CurrentSpeaker = sourceName;
         CurrentText = "语音喊话中…";
@@ -490,17 +546,30 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         NotifyOnScreen(sourceName, "（语音喊话，正在教室播放）", isVoice: true);
     }
 
-    private void OnAudioChunk(ReadOnlyMemory<byte> payload)
+    private void OnAudioChunk(string ownerKey, ReadOnlyMemory<byte> payload)
     {
         if (IsMuted || payload.IsEmpty)
         {
             return;
         }
 
+        AudioFormat format;
+        lock (_audioStateLock)
+        {
+            // 分片必须属于当前正在播的那一路。
+            // 否则甲老师刚开始的语音里会混进乙老师还在路上的分片 ——
+            // 教室里听起来是两个人叠着说，时长也会按错误的格式算出来。
+            if (!string.Equals(_audioOwner, ownerKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            format = _currentAudioFormat;
+        }
+
         _player.Write(payload.Span);
 
         var level = PcmLevel.Compute(payload.Span);
-        var format = _currentAudioFormat;
         Post(() =>
         {
             AudioLevel = level;
@@ -516,6 +585,11 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     private async Task EndAudioAsync()
     {
         await _player.CompleteAsync().ConfigureAwait(false);
+
+        lock (_audioStateLock)
+        {
+            _audioOwner = null;
+        }
 
         await PostAsync(() =>
         {
@@ -542,6 +616,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     {
         _speech.Stop();
         _player.Stop();
+
+        lock (_audioStateLock)
+        {
+            _audioOwner = null;
+        }
+
         Stage = ClassroomStage.Idle;
         AudioLevel = 0;
         CurrentText = string.Empty;
@@ -855,6 +935,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
                 case RelayKinds.AudioStart:
                     PresentAudioStart(
+                        RelayOwnerKey(envelope),
                         envelope.From ?? "教师端",
                         new AudioFormat(envelope.SampleRate, envelope.Channels, envelope.BitsPerSample));
                     break;
@@ -862,7 +943,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                 case RelayKinds.Audio:
                     if (!string.IsNullOrEmpty(envelope.AudioBase64))
                     {
-                        OnAudioChunk(Convert.FromBase64String(envelope.AudioBase64));
+                        OnAudioChunk(RelayOwnerKey(envelope), Convert.FromBase64String(envelope.AudioBase64));
                     }
 
                     break;

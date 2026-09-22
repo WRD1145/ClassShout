@@ -48,6 +48,34 @@ public partial class NotificationWindow : Window
         base.OnClosed(e);
     }
 
+    /// <summary>
+    /// 窗口一藏起来就停掉置顶看门狗。
+    ///
+    /// 弹窗是复用的：显示时 Show()、消失时 Hide()，从不 Close()。
+    /// 所以 OnClosed 那条停止路径根本不会走到，看门狗会一直跑下去 ——
+    /// 而它每一秒都在重申置顶。以前那句 SetWindowPos 里带着 SWP_SHOWWINDOW，
+    /// 于是隐藏之后一到两秒，弹窗就被重新显示成一个"看不见、但在最上层、
+    /// 仍然接收鼠标点击"的窗口，正好压住那一片屏幕。
+    /// （BringToFront 现在也会自己跳过隐藏窗口，这里是第二道。）
+    /// </summary>
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+
+        if (change.Property == IsVisibleProperty)
+        {
+            if (IsVisible)
+            {
+                StartTopmostWatchdog();
+            }
+            else
+            {
+                _topmostTimer?.Stop();
+                _topmostTimer = null;
+            }
+        }
+    }
+
     protected override void OnPointerPressed(Avalonia.Input.PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);

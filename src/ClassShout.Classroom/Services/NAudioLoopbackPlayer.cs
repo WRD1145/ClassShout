@@ -24,6 +24,14 @@ public sealed class NAudioLoopbackPlayer : IAudioPlayer
     {
         Stop();
 
+        // 格式来自网络对端，必须先确认它合法。
+        // WaveFormat 的构造函数会校验并在不合法时抛异常，而这里跑在 UI 线程上，
+        // 抛出去就是整个教室端进程退出 —— 一个畸形包换一次服务中断。
+        if (!format.IsSupported)
+        {
+            throw new NotSupportedException($"不支持的音频格式：{format}。");
+        }
+
         _buffer = new BufferedWaveProvider(new WaveFormat(format.SampleRate, format.BitsPerSample, format.Channels))
         {
             BufferDuration = BufferDuration,
@@ -39,14 +47,28 @@ public sealed class NAudioLoopbackPlayer : IAudioPlayer
 
     public void Write(ReadOnlySpan<byte> pcm)
     {
-        if (_buffer is null || pcm.IsEmpty)
+        // 先把字段抓进局部变量再判断。
+        //
+        // 原来的写法是"检查 _buffer 非空，然后使用 _buffer"，
+        // 而 Stop() 会在另一条线程（收到 audioEnd / 停止指令）上把它置空 ——
+        // 中间那一下正好撞上就是 NullReferenceException，
+        // 而且会直接抛进 TCP 读循环里，把整条连接带走。
+        var buffer = _buffer;
+        if (buffer is null || pcm.IsEmpty)
         {
             return;
         }
 
-        // BufferedWaveProvider 只接受数组，这里必须复制一份
-        var copy = pcm.ToArray();
-        _buffer.AddSamples(copy, 0, copy.Length);
+        try
+        {
+            // BufferedWaveProvider 只接受数组，这里必须复制一份
+            var copy = pcm.ToArray();
+            buffer.AddSamples(copy, 0, copy.Length);
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+        {
+            // 同一时刻 Stop() 把底层设备释放掉了：这一片丢掉即可，不该影响接收
+        }
     }
 
     public async Task CompleteAsync()

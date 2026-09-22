@@ -159,6 +159,9 @@ internal static class Program
         // 真到不兼容那天，教室端会照着一个读不懂的格式去播放。
         await AssertVersionMismatchRejectedAsync(receivedTexts, shoutText);
 
+        // ---------- 3c. 畸形音频格式不能把教室端带走 ----------
+        AssertMalformedAudioFormatRejected();
+
         // ---------- 4. 语音流 ----------
         var format = AudioFormat.Default;
         const int chunkCount = 40;
@@ -809,6 +812,57 @@ internal static class Program
                 ? $"{polls} 次轮询，最慢 {maxMs:0} 毫秒（阈值 {slowThreshold.TotalMilliseconds:0} 毫秒）"
                 : $"{polls} 次轮询里有 {slow} 次一直等到 {timeout.TotalMilliseconds:0} 毫秒超时才返回，最慢 {maxMs:0} 毫秒");
     }
+    /// <summary>
+    /// 畸形的 audioStart 不能打崩教室端。
+    ///
+    /// 采样率、声道数、位深都来自网络对端。NAudio 的 WaveFormat 构造函数会校验
+    /// 并在不合法时抛异常，而构造点跑在 UI 线程上（收到 audioStart 后要立刻建播放器）——
+    /// 对端只要发一个 Channels = 0，整个教室端进程就没了。
+    /// 一个畸形包换一次服务中断，代价完全不对等。
+    ///
+    /// 这里直接压两层防线：格式自身要能识别出不合法，播放器要抛可捕获的
+    /// NotSupportedException 而不是让 NAudio 的 ArgumentException 逃出去。
+    /// </summary>
+    private static void AssertMalformedAudioFormatRejected()
+    {
+        var malformed = new[]
+        {
+            new AudioFormat(16000, 0, 16),      // 声道数为 0
+            new AudioFormat(16000, -1, 16),     // 声道数为负
+            new AudioFormat(0, 1, 16),          // 采样率为 0
+            new AudioFormat(16000, 1, 0),       // 位深为 0
+            new AudioFormat(1_000_000, 1, 16),  // 采样率离谱
+        };
+
+        Check("合法格式被接受", AudioFormat.Default.IsSupported, AudioFormat.Default.ToString());
+        Check("畸形格式一律识别为不支持",
+            malformed.All(f => !f.IsSupported),
+            string.Join("，", malformed.Select(f => f.ToString())));
+
+        using var player = new NAudioLoopbackPlayer();
+        var rejected = true;
+
+        foreach (var format in malformed)
+        {
+            try
+            {
+                player.Start(format);
+                rejected = false;
+            }
+            catch (NotSupportedException)
+            {
+                // 期望路径
+            }
+            catch (Exception ex)
+            {
+                rejected = false;
+                Console.WriteLine($"       · 意外异常类型：{ex.GetType().Name}");
+            }
+        }
+
+        Check("播放器拒绝畸形格式而不是崩溃", rejected, "抛的是可捕获的 NotSupportedException");
+    }
+
     /// <summary>
     /// 用一个"版本号对不上"的裸连接去喊话，断言教室端一个字都不收。
     ///

@@ -209,6 +209,16 @@ public sealed class ClassroomServer : IAsyncDisposable
 {
     private readonly CancellationTokenSource _cts = new();
     private readonly List<TeacherSession> _sessions = [];
+
+    /// <summary>
+    /// 保护 _sessions。
+    ///
+    /// 它被多个 accept 任务并发增删：每条连接在自己的任务里跑，
+    /// 断开时各自把自己摘掉。裸 List 在这种并发下会损坏内部数组 ——
+    /// 症状是偶发的"教师端列表少一个 / 多一个"，或者遍历时抛异常，
+    /// 而且只在人多的时候才出现，最难查。
+    /// </summary>
+    private readonly Lock _sessionsLock = new();
     private readonly int _port;
 
     private TcpListener? _listener;
@@ -240,7 +250,17 @@ public sealed class ClassroomServer : IAsyncDisposable
 
     public int Port => _port;
 
-    public IReadOnlyList<TeacherSession> Sessions => _sessions;
+    /// <summary>当前连接的快照。返回副本，调用方遍历时不会被并发的增删打断。</summary>
+    public IReadOnlyList<TeacherSession> Sessions
+    {
+        get
+        {
+            lock (_sessionsLock)
+            {
+                return _sessions.ToArray();
+            }
+        }
+    }
 
     /// <summary>开始监听。端口被占用会抛出 <see cref="SocketException"/>。</summary>
     public void Start()
@@ -291,7 +311,10 @@ public sealed class ClassroomServer : IAsyncDisposable
         var session = new TeacherSession(Guid.NewGuid().ToString("N")[..8], remote);
         session.Attach(client.GetStream());
 
-        _sessions.Add(session);
+        lock (_sessionsLock)
+        {
+            _sessions.Add(session);
+        }
 
         // 会话里的诊断（协议版本不符之类）要能被界面看到，
         // 否则教室端只会表现为"老师喊了没反应"，而日志里什么都没有。
@@ -317,7 +340,10 @@ public sealed class ClassroomServer : IAsyncDisposable
         }
         finally
         {
-            _sessions.Remove(session);
+            lock (_sessionsLock)
+            {
+                _sessions.Remove(session);
+            }
             session.Close();
             client.Dispose();
             Log?.Invoke($"教师端断开：{session.ClientName}（{remote}）");
@@ -331,12 +357,15 @@ public sealed class ClassroomServer : IAsyncDisposable
         _listener?.Stop();
         _listener = null;
 
-        foreach (var session in _sessions.ToArray())
+        foreach (var session in Sessions)
         {
             session.Close();
         }
 
-        _sessions.Clear();
+        lock (_sessionsLock)
+        {
+            _sessions.Clear();
+        }
 
         if (_acceptLoop is not null)
         {

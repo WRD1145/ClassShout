@@ -22,5 +22,21 @@ public readonly record struct AudioFormat(int SampleRate, int Channels, int Bits
 
     public int BytesForDuration(int milliseconds) => BytesPerSecond * milliseconds / 1000;
 
+    /// <summary>
+    /// 这个格式能不能拿去做播放。
+    ///
+    /// 采样率、声道数、位深都来自网络对端，教室端不能假定它们是合理的。
+    /// NAudio 的 WaveFormat 构造函数会校验参数并在不合法时抛异常，
+    /// 而构造点跑在 UI 线程上（收到 audioStart 后要立刻建播放器），
+    /// 于是对端只要发一个 Channels = 0 就能把整个教室端进程打掉 ——
+    /// 一个畸形包换一次服务中断，代价完全不对等。
+    ///
+    /// 所以先在这里挡一道，把"能不能播"的判断收在协议边界上。
+    /// </summary>
+    public bool IsSupported =>
+        SampleRate is >= 8000 and <= 192_000
+        && Channels is >= 1 and <= 2
+        && BitsPerSample is 8 or 16 or 24 or 32;
+
     public override string ToString() => $"{SampleRate} Hz / {Channels} 声道 / {BitsPerSample} bit";
 }

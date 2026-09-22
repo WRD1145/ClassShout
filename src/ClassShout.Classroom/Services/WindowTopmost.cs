@@ -51,7 +51,20 @@ internal static class WindowTopmost
             return;
         }
 
-        SetWindowPos(handle, HwndTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate | SwpShowWindow);
+        // 已经藏起来的窗口一概不碰。
+        //
+        // 原来这里的标志位里带着 SWP_SHOWWINDOW，而置顶看门狗是每秒重来一次的：
+        // 弹窗 Hide() 之后，下一秒就被这个调用重新显示出来 ——
+        // 于是屏幕上留下一个"看不见但仍在最上层、仍然接收鼠标点击"的窗口，
+        // 正好压在那一片区域上，谁也点不动。
+        if (!window.IsVisible)
+        {
+            return;
+        }
+
+        // 同理不再需要 SWP_SHOWWINDOW：窗口是 Show() 出来的，
+        // 这里只负责把它提到最前，不该负责显示。
+        SetWindowPos(handle, HwndTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
     }
 
     /// <summary>取消置顶。</summary>
