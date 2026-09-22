@@ -130,14 +130,61 @@ public sealed class WindowsSpeechSynthesizer : ISpeechSynthesizer
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_stateLock)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+        }
+
+        // 先请求取消：对还在排队的朗读有效。
+        Stop();
+
+        // 再等在跑的那一次读完。
+        //
+        // Speak 是同步阻塞的，Stop() 里的 SpeakAsyncCancelAll 取消不了它。
+        // 原来的 Dispose 直接在它还没返回时就 _synthesizer.Dispose() ——
+        // 另一条线程仍在 COM 对象里朗读，我们把对象释放掉了，
+        // 轻则 ObjectDisposedException，重则进程退出时崩在 COM 里。
+        //
+        // 拿一次闸门就等于"当前那次 Speak 已经走到 finally"。等待有界且刻意取小：
+        // 退出路径宁可留个正在收尾的后台线程，也不能把窗口挂住。
+        var acquired = false;
+        try
+        {
+            acquired = _gate.Wait(TimeSpan.FromMilliseconds(1500));
+        }
+        catch (ObjectDisposedException)
+        {
+            // 已经有别人释放过闸门，交给 GC
+        }
+
+        if (!acquired)
+        {
+            // 没等到（SAPI 偶尔会卡住）。这时释放合成器同样不安全，
+            // 干脆不释放 —— 进程马上就退出了，让操作系统收尾。
             return;
         }
 
-        _disposed = true;
-        Stop();
-        _synthesizer.Dispose();
-        _gate.Dispose();
+        _gate.Release();
+
+        try
+        {
+            _synthesizer.Dispose();
+        }
+        catch (InvalidOperationException)
+        {
+            // 已经处于不可用状态
+        }
+
+        // 刻意不 Dispose 这个闸门。
+        //
+        // 释放它是有害的：可能还有朗读在 WaitAsync 上排队，闸门一释放，
+        // 那些等待者要么抛 ObjectDisposedException，要么永远挂住 ——
+        // 而调用方是在 await 它们的。SemaphoreSlim 不持有非托管资源
+        // （除非用 AvailableWaitHandle），不释放没有任何代价。
     }
 }

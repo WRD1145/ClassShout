@@ -66,6 +66,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     private readonly Lock _audioStateLock = new();
     private string? _audioOwner;
 
+    /// <summary>
+    /// 每开始呈现一条新内容就自增。
+    ///
+    /// 朗读与语音播放在这里都会排队、都是异步收尾，所以"读完了"这件事必须能认出
+    /// 自己是不是最新那一条。否则前一条读完时会抢着把界面打回待机 ——
+    /// 而队列里其实还有一条正在读，界面上就成了"假 Idle"：
+    /// 大字区显示待机，喇叭却还在响。
+    /// </summary>
+    private long _presentationTicket;
+
     // —— 跨局域网中继 ——
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
     private readonly ClassroomRelaySettings _relaySettings;
@@ -84,7 +94,23 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 读出本机身份：UUID 首次启动生成一次后永久保留，是这台教室在服务器上的身份
         _relaySettings = LocalSettings.LoadClassroom();
         _relaySettings.EnsureUuid();
-        _relaySettings.ClassroomName = ClassroomName;
+
+        // 注意方向：是把已保存的名字读进字段，不是把字段写进已存配置。
+        //
+        // 原来是 _relaySettings.ClassroomName = ClassroomName，方向反了：
+        // 字段的初始值是"三年二班"，于是每次启动都把用户改过的教室名
+        // 覆盖回这个默认值，然后立刻保存。改名的入口还没做，
+        // 就算做了也一样会被下一次启动抹掉。
+        if (!string.IsNullOrWhiteSpace(_relaySettings.ClassroomName))
+        {
+            _classroomName = _relaySettings.ClassroomName;
+        }
+        else
+        {
+            // 首次启动：把默认名落盘，让"这台教室叫什么"从第一刻起就有据可查
+            _relaySettings.ClassroomName = _classroomName;
+        }
+
         LocalSettings.SaveClassroom(_relaySettings);
 
         RelayServerUrl = _relaySettings.ServerUrl ?? string.Empty;
@@ -399,15 +425,13 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     private void OnTextShout(TeacherSession session, TextShoutMessage message)
     {
-        lock (_textCounts)
-        {
-            _textCounts[session.Id] = _textCounts.GetValueOrDefault(session.Id) + 1;
-        }
-
+        // 计数不在这里做。原来是在这里先加一，然后才在 UI 线程上判断是否静音 ——
+        // 于是静音期间教师列表会显示"喊过 3 条"，而那 3 条一条都没播出去，
+        // 老师看到的是"我喊了、教室有反应"，实际教室里什么都没有。
         Post(() =>
         {
+            PresentTextShout(session.ClientName, message, session.Id);
             RefreshTeachers();
-            PresentTextShout(session.ClientName, message);
         });
     }
 
@@ -417,7 +441,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// 局域网直连与公网中继两条路径共用这里 —— 它们只是"消息怎么来"不同，
     /// "收到之后做什么"必须完全一致，否则两条链路的行为会慢慢分叉。
     /// </summary>
-    private void PresentTextShout(string sourceName, TextShoutMessage message)
+    private void PresentTextShout(string sourceName, TextShoutMessage message, string? countKey = null)
     {
         AddLog("文字", $"「{sourceName}」说：{message.Text}");
 
@@ -427,16 +451,43 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        if (countKey is not null)
+        {
+            lock (_sessions)
+            {
+                _textCounts[countKey] = _textCounts.GetValueOrDefault(countKey) + 1;
+            }
+        }
+
+        var ticket = ++_presentationTicket;
+
+        // 一次只出一路声音：文字喊话要把正在播的语音停掉。
+        // 原来这里不停播放器，而语音那条路径会停朗读 —— 方向是单边的，
+        // 于是语音播放期间来的文字喊话会和音响里的声音叠在一起响，
+        // 教室里听着就是两个人在同时说话。
+        _speech.Stop();
+        StopAudioPlayback();
+
         CurrentSpeaker = sourceName;
         CurrentText = message.Text;
         Stage = ClassroomStage.SpeakingText;
 
         NotifyOnScreen(sourceName, message.Text, isVoice: false);
 
-        _ = SpeakAsync(message);
+        _ = SpeakAsync(message, ticket);
     }
 
-    private async Task SpeakAsync(TextShoutMessage message)
+    /// <summary>停掉播放器并清掉语音归属。之所以连归属一起清，是因为清完才代表"这一路结束了"。</summary>
+    private void StopAudioPlayback()
+    {
+        lock (_audioStateLock)
+        {
+            _audioOwner = null;
+            _player.Stop();
+        }
+    }
+
+    private async Task SpeakAsync(TextShoutMessage message, long ticket)
     {
         try
         {
@@ -455,10 +506,18 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
             await PostAsync(() =>
             {
-                if (Stage == ClassroomStage.SpeakingText)
+                // 只有"最新那一条"读完才有资格把界面打回待机。
+                // 队列里前一条读完时 Stage 同样是 SpeakingText，
+                // 只看 Stage 的话它会抢着回落，而后一条其实还在读。
+                if (ticket != _presentationTicket)
                 {
-                    Stage = ClassroomStage.Idle;
+                    return;
                 }
+
+                Stage = ClassroomStage.Idle;
+                CurrentText = string.Empty;
+                CurrentSpeaker = string.Empty;
+                AudioLevel = 0;
             });
         }
         catch (Exception ex)
@@ -469,20 +528,17 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     private void OnAudioStarted(TeacherSession session, AudioStartMessage message)
     {
-        // 用 _sessions 这一把锁：_sessions / _textCounts / _audioCounts 总是被一起访问，
-        // 各用各的锁等于没有同步 —— 刷新教师列表那一侧读的就是未同步的数据。
-        lock (_sessions)
-        {
-            _audioCounts[session.Id] = _audioCounts.GetValueOrDefault(session.Id) + 1;
-        }
-
+        // 计数不在这里做：必须在"确认要播"之后（见 PresentAudioStart）。
+        // 静音期间先加一，教师列表就会显示"喊过 N 次"，而教室里一次都没响过。
         Post(() =>
         {
-            RefreshTeachers();
             PresentAudioStart(
                 LanOwnerKey(session),
                 session.ClientName,
-                new AudioFormat(message.SampleRate, message.Channels, message.BitsPerSample));
+                new AudioFormat(message.SampleRate, message.Channels, message.BitsPerSample),
+                session.Id);
+
+            RefreshTeachers();
         });
     }
 
@@ -493,7 +549,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     private static string RelayOwnerKey(RelayEnvelope envelope) => "relay:" + (envelope.From ?? "教师端");
 
     /// <summary>开始播放一路语音。局域网与中继两条路径共用。</summary>
-    private void PresentAudioStart(string ownerKey, string sourceName, AudioFormat format)
+    private void PresentAudioStart(string ownerKey, string sourceName, AudioFormat format, string? countKey = null)
     {
         // 格式来自网络对端，先确认它合法再往下走。
         // NAudio 的 WaveFormat 构造函数会校验参数并抛异常，而这里是 UI 线程 ——
@@ -510,7 +566,17 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        // 语音优先：打断正在进行的朗读
+        if (countKey is not null)
+        {
+            // 用 _sessions 这一把锁：_sessions / _textCounts / _audioCounts 总是一起被访问，
+            // 各用各的锁等于没有同步 —— 刷新教师列表那一侧读的就是未同步的数据。
+            lock (_sessions)
+            {
+                _audioCounts[countKey] = _audioCounts.GetValueOrDefault(countKey) + 1;
+            }
+        }
+
+        // 一次只出一路声音：语音优先，打断正在进行的朗读
         _speech.Stop();
         _player.Stop();
 
@@ -519,6 +585,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             _audioOwner = ownerKey;
             _currentAudioFormat = format;
         }
+
+        // 也算一次"开始呈现"：上一条朗读迟到的收尾不该把语音界面打回待机
+        _presentationTicket++;
 
         try
         {
@@ -642,10 +711,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
 
         var text = $"我是{ClassroomName}，系统语音测试正常。";
+        var ticket = ++_presentationTicket;
+
+        // 试听也要参与"最新那一条"的判定，否则它读完会把正在读的喊话界面打回待机
+        _speech.Stop();
+        StopAudioPlayback();
+
         CurrentSpeaker = "本机测试";
         CurrentText = text;
         Stage = ClassroomStage.SpeakingText;
-        _ = SpeakAsync(new TextShoutMessage { Text = text, Rate = Rate, Volume = Volume });
+        _ = SpeakAsync(new TextShoutMessage { Text = text, Rate = Rate, Volume = Volume }, ticket);
     }
 
     /// <summary>组装当前运行态，既用于握手回包，也用于主动推送。</summary>
@@ -1121,20 +1196,29 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // 这几样刻意放在任何 await 之前。
+        //
+        // 退出路径上的调用方是有界等待的（见 App 的 ShutdownRequested），
+        // 一旦等待超时，这个方法的后续部分就不会再执行了 ——
+        // 而语音合成器和播放器原来排在最后，正好是最容易被跳过的那两个。
+        // 播放设备不释放会一直占着声卡，教室端下次启动就可能没声音；
+        // 这种"退出之后才发作"的故障最难查。
+        //
+        // 它们本身也不需要等待：Dispose 是同步的，而且各自内部已经把
+        // 与在跑任务的竞态处理掉了（例如合成器会先等在读的那一条读完）。
         _notificationPresenter.Dispose();
+        _speech.Dispose();
+        _player.Dispose();
+        _http.Dispose();
 
+        // 下面这些要等，属于"尽力而为"的部分
         if (_relay is not null)
         {
             await _relay.DisposeAsync().ConfigureAwait(false);
             _relay = null;
         }
 
-        _http.Dispose();
-
         await _announcer.DisposeAsync().ConfigureAwait(false);
         await _server.DisposeAsync().ConfigureAwait(false);
-
-        _speech.Dispose();
-        _player.Dispose();
     }
 }

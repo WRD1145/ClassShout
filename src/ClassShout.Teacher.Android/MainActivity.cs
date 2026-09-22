@@ -40,6 +40,16 @@ public class MainActivity : AvaloniaMainActivity<App>
         EnsureRecordAudioPermission();
     }
 
+    protected override void OnStop()
+    {
+        // 切后台 / 锁屏 / 被系统回收都会走到这里。
+        // 必须在这里结束进行中的录音：否则麦克风一直被占着，
+        // 而且这段时间采集到的声音会继续当成一次正常喊话发到教室里。
+        TeacherPlatform.NotifyBackgrounded();
+
+        base.OnStop();
+    }
+
     private void EnsureRecordAudioPermission()
     {
         if (OperatingSystem.IsAndroidVersionAtLeast(23))

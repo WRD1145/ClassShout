@@ -740,15 +740,21 @@ internal static class Program
         // （万一以后有人往里加锁、加等待、加批量逻辑，把延迟搞上去了）。
         // 连续发布下一次正确的轮询应当在毫秒级返回，所以阈值取超时的一半，
         // 与"干等到超时"之间有 2 倍以上的区分度。
-        const int Pollers = 6;
-        const int Publishers = 3;
+        const int Pollers = 4;
+        const int Publishers = 2;
 
-        var timeout = TimeSpan.FromMilliseconds(400);
-        var budget = TimeSpan.FromSeconds(3);
+        // 超时与阈值都取得比较宽松，是为了避开环境抖动而不是迁就实现。
+        // 一开始用 400 毫秒超时、200 毫秒阈值，结果在开发机上偶发误报 ——
+        // 1251 次里有 6 次真的等满了：Thread.Sleep(1) 在 Windows 上经常睡 15 毫秒，
+        // 加上每次轮询要扫最多 2048 条历史带来的 GC 压力，几百毫秒的抖动是真实的。
+        // 丢唤醒的特征是"正好等满一个超时周期"，所以只要把阈值放在超时的一半，
+        // 而超时本身远大于环境抖动，两者就分得开。
+        var timeout = TimeSpan.FromSeconds(2);
+        var budget = TimeSpan.FromSeconds(4);
 
         // 连续发布下，一次正确的轮询应当在毫秒级返回。
         // 阈值取超时的一半，与"干等到超时"之间有 2 倍以上的区分度。
-        var slowThreshold = TimeSpan.FromMilliseconds(200);
+        var slowThreshold = TimeSpan.FromMilliseconds(1000);
 
         var queue = new MessageQueue();
         queue.Publish(new RelayEnvelope { Kind = RelayKinds.TextShout, From = "预热", Text = "预热" });
@@ -759,20 +765,37 @@ internal static class Program
         var slow = 0;
         var maxMs = 0.0;
 
-        var publishers = Enumerable.Range(0, Publishers).Select(_ => Task.Run(() =>
+        // 发布者用专属线程，不占线程池。
+        //
+        // 这一点很关键：Thread.Sleep 会阻塞住承载它的池线程，而轮询者的续体
+        // （RunContinuationsAsynchronously 会把它排到线程池上）就得排队。
+        // 池子被阻塞线程占满时，续体会一直等到超时定时器先触发 ——
+        // 表现出来的"正好等满一个超时周期"和真正的丢唤醒一模一样，
+        // 让人分不清是实现的 bug 还是测试自己把池子堵死了。
+        var publishers = Enumerable.Range(0, Publishers).Select(_ =>
         {
-            while (!cts.IsCancellationRequested)
+            var thread = new Thread(() =>
             {
-                queue.Publish(new RelayEnvelope
+                while (!cts.IsCancellationRequested)
                 {
-                    Kind = RelayKinds.TextShout,
-                    From = "并发测试",
-                    Text = "并发压测",
-                });
+                    queue.Publish(new RelayEnvelope
+                    {
+                        Kind = RelayKinds.TextShout,
+                        From = "并发测试",
+                        Text = "并发压测",
+                    });
 
-                Thread.Sleep(1);
-            }
-        })).ToArray();
+                    Thread.Sleep(1);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "e2e-publisher",
+            };
+
+            thread.Start();
+            return thread;
+        }).ToArray();
 
         var pollers = Enumerable.Range(0, Pollers).Select(_ => Task.Run(async () =>
         {
@@ -805,7 +828,12 @@ internal static class Program
             }
         })).ToArray();
 
-        await Task.WhenAll(pollers.Concat(publishers));
+        await Task.WhenAll(pollers);
+
+        foreach (var publisher in publishers)
+        {
+            publisher.Join(TimeSpan.FromSeconds(2));
+        }
 
         Check("长轮询不会丢唤醒（高竞争压测，按延迟判定）", slow == 0,
             slow == 0

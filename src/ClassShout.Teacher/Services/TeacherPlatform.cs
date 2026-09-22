@@ -22,6 +22,19 @@ public static class TeacherPlatform
     /// <summary>由平台头调用，注册麦克风采集实现。</summary>
     public static void RegisterAudioRecorder(Func<IAudioRecorder> factory) => _recorderFactory = factory;
 
+    /// <summary>
+    /// 应用进入后台。
+    ///
+    /// Android 上切到后台、锁屏、被系统回收时都不会通知 UI 层，
+    /// 于是录音会一直跑着占住麦克风 —— 用户回到前台看到的还是"正在录"，
+    /// 而这段时间里采集到的音频早就被当成一次正常喊话发出去了。
+    /// 平台头在 OnStop 里调到，共享 UI 层自己决定怎么收尾。
+    /// </summary>
+    public static event Action? Backgrounded;
+
+    /// <summary>由平台头调用，通知"应用进入后台"。</summary>
+    public static void NotifyBackgrounded() => Backgrounded?.Invoke();
+
     /// <summary>创建一个录音器实例。</summary>
     public static IAudioRecorder CreateAudioRecorder()
         => _recorderFactory?.Invoke()

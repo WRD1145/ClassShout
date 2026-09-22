@@ -161,6 +161,24 @@
       <StackPanel Spacing="16">
 
         <md3:Md3Card Classes="outlined">
+          <StackPanel Spacing="10">
+            <TextBlock Classes="cardTitle" Text="教室信息" />
+
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="这个名字会出现在教师端的扫描列表、喊话弹窗和服务器控制台上。改完会自动同步到服务器。" />
+
+            <TextBox Classes="outlined dense"
+                     Watermark="例如：三年二班"
+                     Text="{Binding ClassroomName}" />
+
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="{Binding LocalAddressDisplay, StringFormat='本机地址：{0}'}" />
+          </StackPanel>
+        </md3:Md3Card>
+
+        <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="18">
             <TextBlock Classes="cardTitle" Text="朗读设置" />
 
