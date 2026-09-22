@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -6,6 +7,7 @@ using ClassShout.Core.Audio;
 using ClassShout.Core.Net;
 using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
+using ClassShout.RelayServer;
 
 namespace ClassShout.EndToEnd;
 
@@ -28,6 +30,7 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+
         // 中继链路测试需要先自行启动中继服务器；不在这里拉进程，
         // 否则端口、启动时序、清理这些噪音会淹没"协议是否跑通"这个真正的问题。
         var relayIndex = Array.FindIndex(args, a => a.Equals("--relay", StringComparison.OrdinalIgnoreCase));
@@ -49,6 +52,9 @@ internal static class Program
             return await RunRelayAsync(url, adminPassword);
         }
 
+        // 纯进程内的并发不变量：不依赖网络，也不依赖中继服务器，
+        // 所以只在局域网这条路径上跑一次，不必两个套件各跑一遍。
+        await RunMessageQueueConcurrencyAsync();
         var runTts = args.Contains("--tts", StringComparer.OrdinalIgnoreCase);
 
         Console.WriteLine("ClassShout 端到端联调");
@@ -652,6 +658,83 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine($"结果：通过 {_passed} 项，失败 {_failed} 项。");
         return _failed == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 长轮询的丢唤醒竞态。
+    ///
+    /// 原来的 WaitAsync 先把历史读一遍（取一次锁），确认没有新事件之后，
+    /// 再单独取一次锁把自己的等待者登记进去。这两步之间有一个几百纳秒的窗口：
+    /// 如果 Publish 恰好落在这个窗口里，它既没有被那次历史检查看见，
+    /// 也没有任何等待者可以唤醒 —— 于是这条消息要一直等到 25 秒超时才送出。
+    /// 单条文字喊话最容易被它打中，因为一次投递就只有那一条。
+    ///
+    /// 走 HTTP 根本撞不上这个窗口（窗口太窄），所以直接把 MessageQueue
+    /// 拿到进程内来，用多线程把 Publish 往那个窗口上砸。
+    ///
+    /// 注意这里断言的是**延迟**而不是"有没有送到"。
+    ///
+    /// 丢唤醒的症状不是消息丢了 —— 超时之后那次兜底的 ReadSince 仍会把事件读出来，
+    /// 所以消息最终一定会到达，只是晚了整整一个超时周期（生产环境是 25 秒）。
+    /// 只检查"收到了"的话，这个 bug 会大摇大摆地溜过去。
+    /// </summary>
+    private static async Task RunMessageQueueConcurrencyAsync()
+    {
+        const int Iterations = 2000;
+        var timeout = TimeSpan.FromSeconds(2);
+        var slowThreshold = TimeSpan.FromMilliseconds(800);
+
+        var fast = 0;
+        var slow = 0;
+
+        for (var i = 0; i < Iterations; i++)
+        {
+            var queue = new MessageQueue();
+
+            // 先放一条"预热"事件，把序号推过 0。
+            //
+            // 这一步不是可有可无：since 传 0 的语义是"从此刻开始，不补发历史"，
+            // 于是 WaitAsync 会就地把 since 归一到当前的 _sequence。若 Publish
+            // 抢在轮询序言之前跑到，那条就被当成历史正确地跳过了 —— 测试会误判成
+            // "丢了"，然后老老实实等满整个超时。传一个大于 0 的 since 就没有这个歧义。
+            queue.Publish(new RelayEnvelope { Kind = RelayKinds.TextShout, From = "预热", Text = "预热" });
+            var since = queue.LastSequence;
+
+            // 让轮询先跑起来，再让 Publish 从另一个线程砸过去
+            var poll = Task.Run(() => queue.WaitAsync(since, timeout, CancellationToken.None));
+
+            // 这个自旋刻意取得很小：它让 Publish 有更大机会正好落在
+            // "历史检查完"与"等待者登记上"之间，也就是那个丢唤醒窗口里。
+            // 落在窗口之前或之后都是正常路径，只有正好落在窗口里才会被这条断言抓住。
+            Thread.SpinWait(80 + (i % 240));
+
+            queue.Publish(new RelayEnvelope
+            {
+                Kind = RelayKinds.TextShout,
+                From = "并发测试",
+                Text = $"第 {i} 条",
+            });
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var result = await poll;
+            stopwatch.Stop();
+
+            var arrived = result.Events.Any(e => e.Sequence > since);
+
+            if (!arrived || result.TimedOut || stopwatch.Elapsed > slowThreshold)
+            {
+                slow++;
+            }
+            else
+            {
+                fast++;
+            }
+        }
+
+        Check("长轮询不会丢唤醒（并发 2000 次，按延迟判定）", slow == 0,
+            slow == 0
+                ? $"{fast}/{Iterations} 条都在 {slowThreshold.TotalMilliseconds:0} 毫秒内送达"
+                : $"有 {slow} 条是干等到 {timeout.TotalSeconds:0} 秒超时才送出的，丢唤醒窗口又出现了");
     }
 
     /// <summary>

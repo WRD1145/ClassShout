@@ -73,29 +73,40 @@ public sealed class MessageQueue
     /// </summary>
     public async Task<PollResult> WaitAsync(long since, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        if (since <= 0)
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // 检查历史与登记等待者必须在同一次持锁里完成，否则中间会有一个丢唤醒的窗口：
+        //   Publish 恰好发生在"历史检查完"与"等待者登记上"之间时，
+        //   它既没被这次检查看见（检查已经过去了），也没能唤醒任何人（等待者还没登记），
+        //   于是这一条消息要一直等到超时 —— 最长 25 秒才送到教室。
+        //   单条文字喊话最容易被这个窗口打中，因为它的"一次投递"就只有这一条。
+        //
+        // 放在同一个锁里之后，只可能是两种结果：
+        //   · Publish 先拿到锁 —— 那么 _sequence > since，这里立刻返回，不用等；
+        //   · 这个锁先被拿到 —— 那么等待者已经登记好，Publish 一定会唤醒它。
+        // 没有第三种可能。
+        long pending;
+        lock (_lock)
         {
-            lock (_lock)
+            if (since <= 0)
             {
                 since = _sequence;
             }
-        }
 
-        var immediate = ReadSince(since);
-        if (immediate.Count > 0)
-        {
-            return new PollResult(immediate, immediate[^1].Sequence, false);
-        }
+            if (_sequence > since)
+            {
+                var ready = ReadSinceLocked(since);
+                return new PollResult(ready, _sequence, false);
+            }
 
-        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (_lock)
-        {
             _waiters.Add(signal);
+            pending = since;
         }
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
-        using var registration = timeoutSource.Token.Register(static state => ((TaskCompletionSource)state!).TrySetCanceled(), signal);
+        using var registration = timeoutSource.Token.Register(
+            static state => ((TaskCompletionSource)state!).TrySetCanceled(), signal);
 
         try
         {
@@ -113,7 +124,9 @@ public sealed class MessageQueue
             }
         }
 
-        var events = ReadSince(since);
+        // since 已经是登记那一刻的序号（传 0 时就地取过 _sequence），
+        // 所以这里读到的正好是"登记之后新产生的那批"，不多不少。
+        var events = ReadSince(pending);
         return new PollResult(events, LastSequence, events.Count == 0);
     }
 
@@ -121,17 +134,23 @@ public sealed class MessageQueue
     {
         lock (_lock)
         {
-            var result = new List<RelayEnvelope>();
-            foreach (var envelope in _history)
-            {
-                if (envelope.Sequence > since)
-                {
-                    result.Add(envelope);
-                }
-            }
-
-            return result;
+            return ReadSinceLocked(since);
         }
+    }
+
+    /// <summary>与 <see cref="ReadSince"/> 相同，但要求调用方已经持有 <see cref="_lock"/>。</summary>
+    private List<RelayEnvelope> ReadSinceLocked(long since)
+    {
+        var result = new List<RelayEnvelope>();
+        foreach (var envelope in _history)
+        {
+            if (envelope.Sequence > since)
+            {
+                result.Add(envelope);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>唤醒所有等待者（会话结束时用），让长轮询立刻返回而不是干等到超时。</summary>

@@ -99,27 +99,40 @@ public sealed class BindingStore
         }
     }
 
-    /// <summary>授权。已存在则直接返回 false，让调用方能区分"新建"与"本来就有"。</summary>
-    public bool Grant(string userId, string classroomUuid, string grantedBy)
+    /// <summary>
+    /// 授权。已存在则返回 false，让调用方能区分"新建"与"本来就有"。
+    /// 返回 <paramref name="Ok"/> 为 false 且 <paramref name="AlreadyExists"/> 为 false
+    /// 时表示写盘失败 —— 调用方必须如实报告，否则管理员会以为授权成功了。
+    /// </summary>
+    public (bool Ok, bool AlreadyExists) Grant(string userId, string classroomUuid, string grantedBy)
     {
         lock (_lock)
         {
             if (IsAuthorizedLocked(userId, classroomUuid))
             {
-                return false;
+                return (false, true);
             }
 
-            _bindings.Add(new ClassroomBinding
+            var binding = new ClassroomBinding
             {
                 UserId = userId,
                 ClassroomUuid = classroomUuid,
                 GrantedBy = grantedBy,
                 GrantedAt = DateTimeOffset.UtcNow,
-            });
+            };
 
-            SaveLocked();
+            _bindings.Add(binding);
+
+            if (!SaveLocked())
+            {
+                // 授权没落盘就撤掉，否则管理员今天点完、明天重启后授权凭空消失，
+                // 老师那边则表现为"昨天还能一键绑定，今天又要口令"。
+                _bindings.Remove(binding);
+                return (false, false);
+            }
+
             _logger.LogInformation("管理员 {Admin} 把教室 {Uuid} 授权给用户 {UserId}", grantedBy, classroomUuid, userId);
-            return true;
+            return (true, false);
         }
     }
 
@@ -127,16 +140,24 @@ public sealed class BindingStore
     {
         lock (_lock)
         {
-            var removed = _bindings.RemoveAll(b =>
+            var removed = _bindings.Where(b =>
                 b.UserId == userId &&
-                string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase)) > 0;
+                string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            if (removed)
+            if (removed.Count == 0)
             {
-                SaveLocked();
+                return false;
             }
 
-            return removed;
+            _bindings.RemoveAll(b => removed.Contains(b));
+
+            if (!SaveLocked())
+            {
+                _bindings.AddRange(removed);
+                return false;
+            }
+
+            return true;
         }
     }
 
@@ -145,15 +166,23 @@ public sealed class BindingStore
     {
         lock (_lock)
         {
-            var removed = _bindings.RemoveAll(b =>
-                string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase));
+            var removed = _bindings.Where(b =>
+                string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            if (removed > 0)
+            if (removed.Count == 0)
             {
-                SaveLocked();
+                return 0;
             }
 
-            return removed;
+            _bindings.RemoveAll(b => removed.Contains(b));
+
+            if (!SaveLocked())
+            {
+                _bindings.AddRange(removed);
+                return 0;
+            }
+
+            return removed.Count;
         }
     }
 
@@ -161,13 +190,21 @@ public sealed class BindingStore
     {
         lock (_lock)
         {
-            var removed = _bindings.RemoveAll(b => b.UserId == userId);
-            if (removed > 0)
+            var removed = _bindings.Where(b => b.UserId == userId).ToList();
+            if (removed.Count == 0)
             {
-                SaveLocked();
+                return 0;
             }
 
-            return removed;
+            _bindings.RemoveAll(b => removed.Contains(b));
+
+            if (!SaveLocked())
+            {
+                _bindings.AddRange(removed);
+                return 0;
+            }
+
+            return removed.Count;
         }
     }
 
@@ -176,15 +213,25 @@ public sealed class BindingStore
             b.UserId == userId &&
             string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase));
 
-    private void SaveLocked()
+    /// <summary>
+    /// 落盘。返回 false 表示这次修改没有写到磁盘上 —— 调用方必须据此回滚内存状态。
+    ///
+    /// 不返回结果是个隐蔽的坑：写入失败时只有一行日志，接口照样回"成功"，
+    /// 于是老师看到"注册成功"，重启服务器后账号却不见了；
+    /// 或者管理员改了口令、界面上说改好了，重启后又变回旧口令。
+    /// 内存与磁盘要么一起前进，要么都不动。
+    /// </summary>
+    private bool SaveLocked()
     {
         try
         {
             AtomicStateFile.Write(_statePath, JsonSerializer.Serialize(_bindings.ToList(), SerializerOptions));
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogError(ex, "保存授权表失败：{Path}", _statePath);
+            return false;
         }
     }
 

@@ -20,6 +20,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ClassShout.Core\ClassShout.Core.csproj" />
     <ProjectReference Include="..\..\src\ClassShout.Classroom\ClassShout.Classroom.csproj" />
+    <!--
+      直接引用中继服务器，是为了能压 MessageQueue 的并发不变量。
+      长轮询里"检查历史"与"登记等待者"之间的丢唤醒窗口只有几百纳秒，
+      走 HTTP 根本撞不上 —— 只能把那个类拿到进程内来打。
+    -->
+    <ProjectReference Include="..\..\src\ClassShout.RelayServer\ClassShout.RelayServer.csproj" />
   </ItemGroup>
 
   <ItemGroup>

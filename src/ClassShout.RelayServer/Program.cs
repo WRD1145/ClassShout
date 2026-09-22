@@ -819,12 +819,23 @@ app.MapPost(RelayPaths.ConsoleBindings, (
         return Results.BadRequest(new { error = "教室不存在，请先让教室端连接一次服务器完成注册。" });
     }
 
-    if (!bindings.Grant(user.Id, classroom.Uuid, config.AdminUsername))
+    var (granted, alreadyExists) = bindings.Grant(user.Id, classroom.Uuid, config.AdminUsername);
+
+    if (granted)
+    {
+        return Results.Ok(new { ok = true, message = $"已把「{classroom.Name}」授权给「{user.DisplayName}」。" });
+    }
+
+    if (alreadyExists)
     {
         return Results.Ok(new { ok = true, message = $"「{user.DisplayName}」本来就可以使用「{classroom.Name}」。" });
     }
 
-    return Results.Ok(new { ok = true, message = $"已把「{classroom.Name}」授权给「{user.DisplayName}」。" });
+    // 写盘失败。这里必须报失败 —— 界面说"已授权"、重启后授权消失，
+    // 是那种要到第二天上课才发现的问题。
+    return Results.Json(
+        new { error = "授权未能写入磁盘，未生效。请检查服务器磁盘空间与文件权限。" },
+        statusCode: StatusCodes.Status500InternalServerError);
 });
 
 /// <summary>取消授权。</summary>
@@ -888,9 +899,10 @@ app.MapPost("/api/console/password", (
         return Results.Ok(new { ok = true, message = "管理员口令已更新，请用新口令重新登录。" });
     }
 
-    if (!users.SetPassword(request.UserId, request.NewPassword))
+    var (passwordOk, passwordError) = users.SetPassword(request.UserId, request.NewPassword);
+    if (!passwordOk)
     {
-        return Results.BadRequest(new { error = "账号不存在或口令不符合要求。" });
+        return Results.BadRequest(new { error = passwordError ?? "口令未修改。" });
     }
 
     // 同理：口令变了，之前签发的令牌不该继续可用

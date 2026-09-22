@@ -176,7 +176,15 @@ public sealed class UserStore
             };
 
             _users.Add(user);
-            SaveLocked();
+
+            if (!SaveLocked())
+            {
+                // 内存与磁盘必须一起前进。写不进去就把这条记录撤掉，
+                // 否则会出现"注册成功、重启后账号消失"—— 老师那边表现为
+                // 今天还能登录、明天口令就不对了，且没有任何人改过东西。
+                _users.Remove(user);
+                return (null, "服务器无法写入用户表，注册未生效。请检查磁盘空间与文件权限。");
+            }
 
             _logger.LogInformation("新用户注册：{Display}（用户名 {Username}，邮箱 {Email}）",
                 user.DisplayName, user.Username ?? "-", user.Email ?? "-");
@@ -212,6 +220,8 @@ public sealed class UserStore
                 return (null, "该账号已被停用，请联系管理员。");
             }
 
+            // 登录时间只是记账，写不进去不该让登录失败 —— 为它拒绝一次正常登录
+            // 反而更糟。这里明确忽略返回值。
             user.LastLoginAt = DateTimeOffset.UtcNow;
             SaveLocked();
 
@@ -228,6 +238,7 @@ public sealed class UserStore
         }
     }
 
+    /// <summary>停用 / 启用账号。返回 false 表示没有生效（账号不存在，或写盘失败）。</summary>
     public bool SetDisabled(string id, bool disabled)
     {
         lock (_lock)
@@ -238,8 +249,15 @@ public sealed class UserStore
                 return false;
             }
 
+            var previous = user.Disabled;
             user.Disabled = disabled;
-            SaveLocked();
+
+            if (!SaveLocked())
+            {
+                user.Disabled = previous;
+                return false;
+            }
+
             return true;
         }
     }
@@ -248,12 +266,15 @@ public sealed class UserStore
     /// 重置某个账号的口令（管理控制台用）。
     /// 重置后该账号的旧口令立即失效，但已签发的登录令牌仍然有效，
     /// 所以调用方还应当顺带撤销它的会话。
+    ///
+    /// 返回错误文案而不是简单的 bool：写盘失败和"账号不存在"是完全两回事，
+    /// 都回一句"账号或口令不符合要求"会把运维引到错误的方向。
     /// </summary>
-    public bool SetPassword(string id, string newPassword)
+    public (bool Ok, string? Error) SetPassword(string id, string newPassword)
     {
         if (!AccountRules.IsValidPassword(newPassword))
         {
-            return false;
+            return (false, $"口令至少 {AccountRules.MinPasswordLength} 位。");
         }
 
         lock (_lock)
@@ -261,12 +282,22 @@ public sealed class UserStore
             var user = _users.FirstOrDefault(u => u.Id == id);
             if (user is null)
             {
-                return false;
+                return (false, "账号不存在。");
             }
 
+            var previousHash = user.PasswordHash;
+            var previousSalt = user.PasswordSalt;
             (user.PasswordHash, user.PasswordSalt) = HashPassword(newPassword);
-            SaveLocked();
-            return true;
+
+            if (!SaveLocked())
+            {
+                // 回滚，否则会出现"界面说改好了、重启后又是旧口令"——
+                // 那种现象最难排查，运维多半会以为自己记错了。
+                (user.PasswordHash, user.PasswordSalt) = (previousHash, previousSalt);
+                return (false, "服务器无法写入用户表，口令未修改。请检查磁盘空间与文件权限。");
+            }
+
+            return (true, null);
         }
     }
 
@@ -301,16 +332,26 @@ public sealed class UserStore
 
     // ======================== 持久化 ========================
 
-    private void SaveLocked()
+    /// <summary>
+    /// 落盘。返回 false 表示这次修改没有写到磁盘上 —— 调用方必须据此回滚内存状态。
+    ///
+    /// 不返回结果是个隐蔽的坑：写入失败时只有一行日志，接口照样回"成功"，
+    /// 于是老师看到"注册成功"，重启服务器后账号却不见了；
+    /// 或者管理员改了口令、界面上说改好了，重启后又变回旧口令。
+    /// 内存与磁盘要么一起前进，要么都不动。
+    /// </summary>
+    private bool SaveLocked()
     {
         try
         {
             var json = JsonSerializer.Serialize(_users.ToList(), SerializerOptions);
             AtomicStateFile.Write(_statePath, json);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogError(ex, "保存用户表失败：{Path}", _statePath);
+            return false;
         }
     }
 

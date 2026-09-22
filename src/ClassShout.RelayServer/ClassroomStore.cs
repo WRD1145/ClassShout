@@ -117,8 +117,15 @@ public sealed class ClassroomStore
 
                 if (!string.IsNullOrWhiteSpace(name) && !string.Equals(existing.Name, name, StringComparison.Ordinal))
                 {
+                    var previousName = existing.Name;
                     existing.Name = name;
-                    SaveLocked();
+
+                    if (!SaveLocked())
+                    {
+                        // 改名只是一次记账，写不进去不该拦住教室上线 ——
+                        // 但内存也要跟着退回去，免得读写不一致。
+                        existing.Name = previousName;
+                    }
                 }
 
                 existing.LastSeenAt = DateTimeOffset.UtcNow;
@@ -137,7 +144,15 @@ public sealed class ClassroomStore
 
             (record.SecretHash, record.SecretSalt) = HashSecret(plain);
             _records[uuid] = record;
-            SaveLocked();
+
+            if (!SaveLocked())
+            {
+                // 注册必须落盘才算数：写不进去就撤掉，
+                // 否则教室端会以为自己注册好了，而服务器重启后这条记录消失，
+                // 老师手上的 UUID 与口令一起作废。
+                _records.Remove(uuid);
+                return (null, false, null, "服务器无法写入教室注册表，注册未生效。请检查磁盘空间与文件权限。");
+            }
 
             return (record, true, plain, null);
         }
@@ -152,17 +167,26 @@ public sealed class ClassroomStore
         }
     }
 
-    /// <summary>删除注册记录（忘记口令时由管理员使用）。</summary>
+    /// <summary>删除注册记录（忘记口令时由管理员使用）。返回 false 表示没删成或没写进磁盘。</summary>
     public bool Remove(string uuid)
     {
         lock (_lock)
         {
-            if (!_records.Remove(uuid))
+            if (!_records.TryGetValue(uuid, out var removed))
             {
                 return false;
             }
 
-            SaveLocked();
+            _records.Remove(uuid);
+
+            if (!SaveLocked())
+            {
+                // 删不掉就放回去。返回 false 让接口如实报告失败 ——
+                // 管理员点了"删除"，界面说成功、重启后教室又回来了，这最误导人。
+                _records[uuid] = removed;
+                return false;
+            }
+
             return true;
         }
     }
@@ -240,7 +264,15 @@ public sealed class ClassroomStore
 
     // ======================== 持久化 ========================
 
-    private void SaveLocked()
+    /// <summary>
+    /// 落盘。返回 false 表示这次修改没有写到磁盘上 —— 调用方必须据此回滚内存状态。
+    ///
+    /// 不返回结果是个隐蔽的坑：写入失败时只有一行日志，接口照样回"成功"，
+    /// 于是老师看到"注册成功"，重启服务器后账号却不见了；
+    /// 或者管理员改了口令、界面上说改好了，重启后又变回旧口令。
+    /// 内存与磁盘要么一起前进，要么都不动。
+    /// </summary>
+    private bool SaveLocked()
     {
         try
         {
@@ -249,10 +281,12 @@ public sealed class ClassroomStore
 
             // 先写临时文件再替换，避免写一半断电导致状态文件损坏
             AtomicStateFile.Write(_statePath, json);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogError(ex, "保存注册表失败：{Path}", _statePath);
+            return false;
         }
     }
 
