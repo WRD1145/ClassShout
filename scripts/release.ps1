@@ -135,6 +135,17 @@ try {
 
     # ---------- 打标签 ----------
 
+    # 先把分支推上去，再打标签。
+    #
+    # 顺序不能反：标签一旦推上去，发行版的附件就已经对外可见了，
+    # 而这时若分支还停在本地，别人从发行版下载到的代码在仓库里根本找不到 ——
+    # 上一个版本就是这么漏掉的（标签推了、main 没推，事后才发现远端落后一个提交）。
+    Write-Host ''
+    Write-Host '[推送] 分支…' -ForegroundColor Yellow
+
+    git push origin HEAD
+    if ($LASTEXITCODE -ne 0) { throw "推送分支失败 —— 标签尚未创建，可以先修好网络再重跑。" }
+
     git tag -a $Version -m $Version
     if ($LASTEXITCODE -ne 0) { throw "创建标签失败" }
 
