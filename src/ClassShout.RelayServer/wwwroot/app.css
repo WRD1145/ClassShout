@@ -173,6 +173,8 @@ tr:hover td { background: color-mix(in srgb, var(--on-surface) 4%, transparent);
 /* ---------- 提示条 ---------- */
 .banner {
   padding: 12px 16px; border-radius: var(--shape-sm); margin-bottom: 16px; font-size: 13px;
+  /* 批量导入的逐行说明是多行的，默认会把换行折成空格，读起来全糊在一起 */
+  white-space: pre-line;
 }
 .banner.error { background: var(--error-container); color: var(--on-error-container); }
 .banner.warn { background: var(--tertiary-container); color: var(--on-surface); }
@@ -223,3 +225,16 @@ select {
   border: 1px solid var(--outline); border-radius: var(--shape-sm);
   font-size: 14px; font-family: inherit;
 }
+/* ---------- 列表上方的操作行 ---------- */
+.row-actions { display: flex; gap: 8px; margin: 12px 0 4px; }
+.row-actions button + button { margin-left: 0; }
+
+/* ---------- 文本域（批量导入用） ---------- */
+textarea {
+  width: 100%; padding: 12px 14px;
+  background: transparent; color: var(--on-surface);
+  border: 1px solid var(--outline); border-radius: var(--shape-sm);
+  font-size: 13px; font-family: Consolas, "Cascadia Mono", monospace;
+  resize: vertical;
+}
+textarea:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }

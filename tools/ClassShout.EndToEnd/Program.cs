@@ -600,7 +600,73 @@ internal static class Program
                     ? $"教室={adminBind.ClassroomName}"
                     : adminBind?.Error ?? "绑定失败");
 
-            var adminGrantResponse = await adminHttp.PostAsJsonAsync(
+                // ---------- 7c. 控制台的账号管理与喊话 ----------
+
+            // 手动创建账号
+            var createdName = "ctl" + Guid.NewGuid().ToString("N")[..8];
+            var createResponse = await adminHttp.PostAsJsonAsync($"{root}/api/console/users",
+                new CreateUserRequest(createdName, null, "控制台创建的张老师", "Init12345"), JsonOptions);
+            var createBody = await createResponse.Content.ReadAsStringAsync();
+            Check("控制台能手动创建账号", createResponse.IsSuccessStatusCode, Trim(createBody));
+
+            // 新建的账号应当立刻出现在用户列表里
+            var afterCreate = await adminHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [];
+            Check("新建的账号出现在用户列表里",
+                afterCreate.Any(u => u.Username == createdName),
+                $"列表共 {afterCreate.Count} 个账号");
+
+            // CSV 批量导入：一行合法、一行列数不足、一行重名、一行与管理员冲突
+            var importCsv = string.Join('\n',
+                "用户名,邮箱,姓名,口令",
+                $"csvok{Guid.NewGuid():N}"[..12] + ",,CSV 老师甲,Init12345",
+                "只有一列",
+                $"{createdName},,重复账号,Init12345",
+                "admin,,冒名管理员,Init12345");
+
+            var importResponse = await adminHttp.PostAsJsonAsync($"{root}/api/console/users/import",
+                new ImportUsersRequest(importCsv), JsonOptions);
+            var import = await importResponse.Content.ReadFromJsonAsync<ImportUsersResponse>(JsonOptions);
+
+            Check("CSV 批量导入逐行处理（成功的建成、失败的不拖累其他行）",
+                import is { Created: 1, Failed: 3 },
+                import is null ? "解析失败" : $"成功 {import.Created} 条、失败 {import.Failed} 条");
+
+            Check("CSV 导入会挡掉与内置管理员重名的行",
+                import?.Details.Any(d => d.Contains("内置管理员")) == true,
+                import?.Details.LastOrDefault(d => d.Contains("内置管理员")) ?? "没有相关说明");
+
+            // 管理员直接对教室喊话
+            var consoleShoutText = $"控制台喊话测试 {Guid.NewGuid():N}"[..24];
+            var shoutResponse = await adminHttp.PostAsJsonAsync($"{root}/api/console/shout",
+                new ConsoleShoutRequest(uuid, consoleShoutText), JsonOptions);
+            var shoutBody = await shoutResponse.Content.ReadAsStringAsync();
+            Check("管理员能从控制台直接喊话", shoutResponse.IsSuccessStatusCode, Trim(shoutBody));
+
+            // 先订阅再发第二条：上面那条是订阅之前发出去的，
+            // 极可能与轮询的时间窗擦肩而过，用它做断言会偶发失败。
+            var consoleShoutReceived = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var shoutText2 = $"控制台喊话之二 {Guid.NewGuid():N}"[..24];
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == shoutText2)
+                {
+                    consoleShoutReceived.TrySetResult(envelope.From ?? string.Empty);
+                }
+            };
+
+            await adminHttp.PostAsJsonAsync($"{root}/api/console/shout",
+                new ConsoleShoutRequest(uuid, shoutText2), JsonOptions);
+
+            var consoleFrom = await Task.WhenAny(consoleShoutReceived.Task, Task.Delay(6000)) == consoleShoutReceived.Task
+                ? consoleShoutReceived.Task.Result
+                : null;
+
+            Check("控制台喊话经中继送到了教室端", consoleFrom is not null,
+                consoleFrom is null ? "6 秒内没收到" : $"来源显示为 {consoleFrom}");
+
+        var adminGrantResponse = await adminHttp.PostAsJsonAsync(
                 $"{root}{RelayPaths.ConsoleBindings}",
                 new GrantBindingRequest("builtin-admin", uuid),
                 JsonOptions);

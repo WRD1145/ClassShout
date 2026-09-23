@@ -78,6 +78,13 @@
         <p>列表第一行是服务器内置的管理员账号，它不在用户库里，口令以明文存在服务器本地的
           <span class="mono">relay-config.json</span> 里，可以在这里改。它默认就可以使用所有班级，
           不需要逐条授权。</p>
+
+        <!-- 老师也可以自己在教师端 APP 上注册；这里适合开学时一次把全组老师录进来 -->
+        <div class="row-actions">
+          <button class="tonal small" data-action="open-create-user">添加账号</button>
+          <button class="outlined small" data-action="open-import-users">批量导入 CSV</button>
+        </div>
+
         <div id="userList"></div>
       </div>
     </section>
@@ -125,6 +132,70 @@
     <div class="actions">
       <button class="outlined" data-action="close-grant">取消</button>
       <button class="primary" data-action="submit-grant">确认授权</button>
+    </div>
+  </div>
+</div>
+
+<!-- 添加账号对话框 -->
+<div id="createUserOverlay" class="overlay hidden">
+  <div class="dialog">
+    <h2>添加账号</h2>
+    <p>给老师建一个账号。用户名与邮箱至少填一个，两个都填就都能用来登录。老师拿到初始口令后可以自己改。</p>
+    <div id="createUserError" class="hidden"></div>
+    <label for="newUsername">用户名（3~20 位字母数字下划线，字母开头）</label>
+    <input id="newUsername" type="text" autocomplete="off" placeholder="例如 zhangsan">
+    <label for="newEmail">邮箱（可留空）</label>
+    <input id="newEmail" type="text" autocomplete="off" placeholder="例如 zhangsan@school.edu.cn">
+    <label for="newDisplayName">姓名（教室端弹窗显示的就是它）</label>
+    <input id="newDisplayName" type="text" autocomplete="off" placeholder="例如 张老师">
+    <label for="newUserPassword">初始口令（至少 6 位）</label>
+    <input id="newUserPassword" type="text" autocomplete="off" placeholder="例如 Class@2026">
+    <div class="actions">
+      <button class="outlined" data-action="close-create-user">取消</button>
+      <button class="primary" data-action="submit-create-user">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- 批量导入对话框 -->
+<div id="importOverlay" class="overlay hidden">
+  <div class="dialog">
+    <h2>批量导入账号</h2>
+    <p>每行一个账号，格式：<span class="mono">用户名,邮箱,姓名,口令</span>。
+      用户名与邮箱至少填一个（另一个留空即可）。可以直接从 Excel 里复制粘贴，带表头与空行都会自动跳过。
+      某一行为格式不对只会跳过那一行，不影响其他行。</p>
+    <div id="importError" class="hidden"></div>
+    <textarea id="importCsv" rows="9" spellcheck="false"
+              placeholder="用户名,邮箱,姓名,口令&#10;zhangsan,,张老师,Class@2026&#10;,lisi@school.edu.cn,李老师,Class@2026"></textarea>
+    <div class="actions">
+      <button class="outlined" data-action="close-import">取消</button>
+      <button class="primary" data-action="submit-import">开始导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 喊话对话框 -->
+<div id="shoutOverlay" class="overlay hidden">
+  <div class="dialog">
+    <h2>喊话</h2>
+    <p>把这句话发到「<span id="shoutClassroom"></span>」，由教室电脑朗读出来。适合临时通知一句，不必掏手机。</p>
+    <div id="shoutError" class="hidden"></div>
+    <label for="shoutText">要朗读的内容</label>
+    <input id="shoutText" type="text" autocomplete="off" placeholder="例如 请各班打开广播">
+    <div class="actions">
+      <button class="outlined" data-action="close-shout">取消</button>
+      <button class="primary" data-action="submit-shout">发送</button>
+    </div>
+  </div>
+</div>
+
+<!-- 登录失败：账号不存在时的提示 -->
+<div id="loginHelpOverlay" class="overlay hidden">
+  <div class="dialog">
+    <h2>未找到该账户</h2>
+    <p id="loginHelpDetail">请联系管理员手动添加账户，或前往教师端 APP 注册老师账号。</p>
+    <div class="actions">
+      <button class="primary" data-action="close-login-help">知道了</button>
     </div>
   </div>
 </div>

@@ -735,6 +735,161 @@ app.MapGet("/api/console/users", ([FromHeader(Name = RelayPaths.AuthTokenHeader)
     return Results.Ok(users.List().Select(ToDto).Prepend(ToAdminDto()));
 });
 
+/// <summary>手动创建一个账号。</summary>
+app.MapPost("/api/console/users", (
+    CreateUserRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    if (!userSessions.IsAdminSession(authToken))
+    {
+        return Results.Unauthorized();
+    }
+
+    // 管理员建号时同样要挡住与内置管理员重名 —— 否则控制台列表里会出现两个 admin
+    if (IsAdminIdentity(request.Username) || IsAdminIdentity(request.Email))
+    {
+        return Results.BadRequest(new { error = "该账号名由服务器内置管理员保留，请换一个。" });
+    }
+
+    var (profile, error) = users.Register(request.Username, request.Email, request.DisplayName ?? string.Empty, request.Password);
+    if (profile is null)
+    {
+        return Results.BadRequest(new { error = error ?? "创建失败。" });
+    }
+
+    logger.LogInformation("管理员创建账号：{Display}（{Username}）", profile.DisplayName, profile.Username ?? "-");
+    return Results.Ok(new { ok = true, message = $"已创建账号「{profile.DisplayName}」。", user = ToDto(profile) });
+}).RequireRateLimiting("auth");
+
+/// <summary>
+/// 按 CSV 批量创建账号，用于开学时一次录入一批老师。
+///
+/// 格式：每行 用户名,邮箱,姓名,口令。用户名与邮箱至少填一个（另一个留空即可）。
+/// 允许空行，允许以 # 开头的注释行，允许一行带表头 —— 管理员多半是从 Excel 里
+/// 直接复制出来的，格式太严会逼着他手工清理。
+///
+/// 逐行独立处理：某一行不合格只跳过那一行，不整批失败。
+/// 一次导入几十条时，"第 7 行邮箱格式不对"远比"整批失败"有用。
+/// </summary>
+app.MapPost("/api/console/users/import", (
+    ImportUsersRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    if (!userSessions.IsAdminSession(authToken))
+    {
+        return Results.Unauthorized();
+    }
+
+    var details = new List<string>();
+    var created = 0;
+    var failed = 0;
+    var lineNumber = 0;
+
+    foreach (var rawLine in (request.Csv ?? string.Empty).Split('\n'))
+    {
+        lineNumber++;
+        var line = rawLine.Trim().TrimEnd('\r');
+
+        if (line.Length == 0 || line.StartsWith('#'))
+        {
+            continue;
+        }
+
+        // 表头行直接跳过：管理员从 Excel 复制时几乎一定带着它
+        if (lineNumber == 1 && (line.Contains("用户名") || line.Contains("username", StringComparison.OrdinalIgnoreCase)))
+        {
+            continue;
+        }
+
+        var fields = line.Split(',').Select(f => f.Trim().Trim('"')).ToArray();
+        if (fields.Length < 4)
+        {
+            failed++;
+            details.Add($"第 {lineNumber} 行：需要 4 列（用户名,邮箱,姓名,口令），实际 {fields.Length} 列。");
+            continue;
+        }
+
+        var (username, email, displayName, password) =
+            (Empty(fields[0]), Empty(fields[1]), Empty(fields[2]), fields[3]);
+
+        if (username is null && email is null)
+        {
+            failed++;
+            details.Add($"第 {lineNumber} 行：用户名与邮箱至少要填一个。");
+            continue;
+        }
+
+        if (IsAdminIdentity(username) || IsAdminIdentity(email))
+        {
+            failed++;
+            details.Add($"第 {lineNumber} 行：账号名与内置管理员冲突。");
+            continue;
+        }
+
+        var (profile, error) = users.Register(username, email, displayName ?? string.Empty, password);
+        if (profile is null)
+        {
+            failed++;
+            details.Add($"第 {lineNumber} 行：{error}");
+            continue;
+        }
+
+        created++;
+        details.Add($"第 {lineNumber} 行：已创建「{profile.DisplayName}」。");
+    }
+
+    logger.LogInformation("管理员批量导入账号：成功 {Created} 条，失败 {Failed} 条", created, failed);
+    return Results.Ok(new ImportUsersResponse(created, failed, details));
+
+    static string? Empty(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
+}).RequireRateLimiting("auth");
+
+/// <summary>
+/// 管理员在控制台上直接对某个班级喊一句话。
+///
+/// 为什么要有它：老师在教室里调试、或者管理员临时通知一句（"请各班打开广播"），
+/// 手里未必有手机端。控制台本来就能看到所有班级，顺手能喊一句最省事。
+///
+/// 走的是和教师端完全相同的那条转发通路（同一个 MessageHub、同一个信封格式），
+/// 不另开一条 —— 否则教室端就得分两种情况处理，久而久之必然分叉。
+/// 来源写"控制台"，让教室端的弹窗如实显示这句话是谁说的。
+/// </summary>
+app.MapPost("/api/console/shout", (
+    ConsoleShoutRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    if (!userSessions.IsAdminSession(authToken))
+    {
+        return Results.Unauthorized();
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Text))
+    {
+        return Results.BadRequest(new { error = "喊话内容不能为空。" });
+    }
+
+    var classroom = store.Get(request.Uuid);
+    if (classroom is null)
+    {
+        return Results.BadRequest(new { error = "教室不存在，请先让教室端连接一次服务器完成注册。" });
+    }
+
+    hub.Publish(MessageHub.ClassroomKey(classroom.Uuid), new RelayEnvelope
+    {
+        Kind = RelayKinds.TextShout,
+        From = $"{config.AdminUsername}（控制台）",
+        Text = request.Text.Trim(),
+        Rate = request.Rate,
+        Volume = request.Volume,
+        Interrupt = request.Interrupt,
+    });
+
+    // 刻意不额外通知教师端：教师端的信封处理只认状态与上下线，
+    // 收到一条 TextShout 也不会做任何事，多发一份只是噪音。
+    logger.LogInformation("管理员对教室 {Name}（{Uuid}）喊话：{Text}", classroom.Name, classroom.Uuid, request.Text.Trim());
+    return Results.Ok(new { ok = true, message = $"已向「{classroom.Name}」喊话。" });
+}).RequireRateLimiting("auth");
+
 /// <summary>停用 / 启用账号。</summary>
 app.MapPost("/api/console/users/{id}/disabled", (
     string id,

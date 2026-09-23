@@ -62,8 +62,21 @@ async function doLogin() {
       body: JSON.stringify({ account, password })
     });
 
-    if (!result.ok) {
-      setBanner('loginError', result.error || '登录失败。');
+    if (!result || !result.ok) {
+      const message = (result && result.error) || '登录失败。';
+      setBanner('loginError', message);
+
+      // 控制台只接受管理员账号，而"这个账号还不存在"是登录失败最常见的原因：
+      // 老师账号是在教师端 APP 上自己注册的，管理员账号则由服务器首次启动时生成。
+      // 与其让人对着"账号或口令不正确"发呆，不如直接告诉他下一步该做什么。
+      //
+      // 说明一句取舍：服务端刻意不区分"账号不存在"与"口令错误"（那样可以被用来
+      // 枚举账号）。这里只在控制台这一侧、对那句合并后的提示给出行动建议，
+      // 并没有把服务端变成账号探测器。
+      if (message.indexOf('账号或口令不正确') >= 0) {
+        showOverlay('loginHelpOverlay');
+      }
+
       return;
     }
 
@@ -167,6 +180,9 @@ async function loadClassrooms() {
       '<td>' + fmtTime(c.registeredAt) + '</td>' +
       '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
       '<td class="cell-actions">' +
+        '<button class="tonal small" data-action="shout"' +
+          ' data-uuid="' + escapeAttr(c.uuid) + '"' +
+          ' data-name="' + escapeAttr(c.name) + '">喊话</button>' +
         '<button class="tonal small" data-action="grant"' +
           ' data-uuid="' + escapeAttr(c.uuid) + '"' +
           ' data-name="' + escapeAttr(c.name) + '">授权给老师</button>' +
@@ -338,6 +354,155 @@ async function revokeBinding(userId, uuid, userName, classroomName) {
   await Promise.all([loadBindings(), loadClassrooms()]);
 }
 
+/* ---------- 弹层工具 ---------- */
+
+function showOverlay(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('hidden');
+}
+
+function hideOverlay(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.add('hidden');
+}
+
+function fieldValue(id) {
+  const el = document.getElementById(id);
+  return el ? el.value : '';
+}
+
+/* ---------- 添加账号 ---------- */
+
+function openCreateUser() {
+  ['newUsername', 'newEmail', 'newDisplayName', 'newUserPassword'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+
+  setBanner('createUserError', '');
+  showOverlay('createUserOverlay');
+
+  const first = document.getElementById('newUsername');
+  if (first) first.focus();
+}
+
+async function submitCreateUser() {
+  const username = fieldValue('newUsername').trim();
+  const email = fieldValue('newEmail').trim();
+  const displayName = fieldValue('newDisplayName').trim();
+  const password = fieldValue('newUserPassword');
+
+  if (!username && !email) {
+    setBanner('createUserError', '用户名与邮箱至少填一个。');
+    return;
+  }
+
+  if (password.length < 6) {
+    setBanner('createUserError', '初始口令至少 6 位。');
+    return;
+  }
+
+  const result = await apiJson('/api/console/users', {
+    method: 'POST',
+    body: JSON.stringify({
+      username: username || null,
+      email: email || null,
+      displayName: displayName || null,
+      password: password
+    })
+  });
+
+  if (result && result.ok) {
+    hideOverlay('createUserOverlay');
+    toast(result.message || '账号已创建。');
+    await loadUsers();
+  } else {
+    setBanner('createUserError', (result && result.error) || '创建失败。');
+  }
+}
+
+/* ---------- 批量导入 ---------- */
+
+function openImportUsers() {
+  setBanner('importError', '');
+  showOverlay('importOverlay');
+
+  const area = document.getElementById('importCsv');
+  if (area) area.focus();
+}
+
+async function submitImportUsers() {
+  const csv = fieldValue('importCsv');
+
+  if (!csv.trim()) {
+    setBanner('importError', '请把要导入的内容粘贴进来。');
+    return;
+  }
+
+  const result = await apiJson('/api/console/users/import', {
+    method: 'POST',
+    body: JSON.stringify({ csv: csv })
+  });
+
+  if (!result) {
+    setBanner('importError', '导入失败。');
+    return;
+  }
+
+  await loadUsers();
+
+  if (result.failed === 0) {
+    hideOverlay('importOverlay');
+    toast(`导入完成：成功 ${result.created} 条。`);
+    return;
+  }
+
+  // 有失败行时不关对话框：把逐行说明留在眼前，管理员改完可以接着再导一次。
+  // 失败原因里带着行号，比"3 条失败"有用得多。
+  const failedLines = (result.details || []).filter(line => line.indexOf('已创建') < 0);
+  setBanner('importError',
+    `成功 ${result.created} 条，失败 ${result.failed} 条：\n` + failedLines.join('\n'), 'warn');
+}
+
+/* ---------- 喊话 ---------- */
+
+let shoutTarget = null;
+
+function openShout(uuid, name) {
+  shoutTarget = { uuid: uuid, name: name };
+
+  const label = document.getElementById('shoutClassroom');
+  if (label) label.textContent = name;
+
+  const input = document.getElementById('shoutText');
+  if (input) input.value = '';
+
+  setBanner('shoutError', '');
+  showOverlay('shoutOverlay');
+  if (input) input.focus();
+}
+
+async function submitShout() {
+  const text = fieldValue('shoutText').trim();
+
+  if (!text) {
+    setBanner('shoutError', '请填写要朗读的内容。');
+    return;
+  }
+
+  const result = await apiJson('/api/console/shout', {
+    method: 'POST',
+    body: JSON.stringify({ uuid: shoutTarget.uuid, text: text })
+  });
+
+  if (result && result.ok) {
+    hideOverlay('shoutOverlay');
+    toast(result.message || '已发送。');
+  } else {
+    setBanner('shoutError', (result && result.error) || '发送失败。');
+  }
+}
+
 /* ---------- 重置口令对话框 ---------- */
 
 let resetTarget = null;
@@ -429,6 +594,20 @@ const actions = {
 
   revoke: (el) => revokeBinding(
     el.dataset.userId, el.dataset.uuid, el.dataset.userName, el.dataset.classroomName),
+
+  'open-create-user': () => openCreateUser(),
+  'close-create-user': () => hideOverlay('createUserOverlay'),
+  'submit-create-user': () => submitCreateUser(),
+
+  'open-import-users': () => openImportUsers(),
+  'close-import': () => hideOverlay('importOverlay'),
+  'submit-import': () => submitImportUsers(),
+
+  shout: (el) => openShout(el.dataset.uuid, el.dataset.name),
+  'close-shout': () => hideOverlay('shoutOverlay'),
+  'submit-shout': () => submitShout(),
+
+  'close-login-help': () => hideOverlay('loginHelpOverlay'),
 
   'close-grant': () => closeGrant(),
   'submit-grant': () => submitGrant(),

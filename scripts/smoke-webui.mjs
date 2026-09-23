@@ -153,7 +153,37 @@ check('data-* 属性值一律转义后才拼接',
     ? `共 ${dataBindings.length} 处绑定`
     : `未转义：${unsafeBindings.join(' | ')}`);
 
-/* ---------- 4. 结论 ---------- */
+/* ---------- 4. 每个 data-action 都要有处理函数 ---------- */
+
+console.log('');
+console.log('动作接线');
+
+// 从 actions 对象里取键。它是唯一的分发表，写错一个键就是一个点不动的死按钮 ——
+// 而"点了没反应"在浏览器里不会有任何报错，只能靠这种结构性检查发现。
+const actionsBlock = codeOnly.match(/const actions\s*=\s*\{([\s\S]*?)\n\};/);
+const actionHandlers = new Set(
+  (actionsBlock ? actionsBlock[1].matchAll(/^\s*'?([a-z][a-z-]*)'?\s*:/gm) : []).map(m => m[1]));
+
+const usedInJs = new Set([...codeOnly.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]));
+
+const htmlPath = join(here, '..', 'src', 'ClassShout.RelayServer', 'wwwroot', 'index.html');
+const htmlSource = readFileSync(htmlPath, 'utf8');
+const usedInHtml = new Set([...htmlSource.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]));
+
+const used = new Set([...usedInJs, ...usedInHtml]);
+const missing = [...used].filter(a => !actionHandlers.has(a));
+
+check('每个 data-action 都有处理函数', missing.length === 0,
+  missing.length === 0
+    ? `共 ${used.size} 个动作（页面 ${usedInHtml.size} 个、脚本 ${usedInJs.size} 个），全部已接线`
+    : `没有处理函数：${missing.join(', ')}`);
+
+// 反过来也查一遍：定义了却没人用的动作多半是改名改了一半
+const unused = [...actionHandlers].filter(a => !used.has(a));
+check('没有定义了却没人用的动作', unused.length === 0,
+  unused.length === 0 ? '无冗余分支' : `无人调用：${unused.join(', ')}`);
+
+/* ---------- 5. 结论 ---------- */
 
 console.log('');
 if (failures === 0) {
