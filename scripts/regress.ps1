@@ -100,6 +100,11 @@ Write-Host '================ 教室端托盘驻留 ================' -Foreground
 $trayExit = $LASTEXITCODE
 
 Write-Host ''
+Write-Host '================ 教室端单实例 ================' -ForegroundColor Yellow
+& (Join-Path $PSScriptRoot 'smoke-single-instance.ps1') -ErrorAction Continue
+$singleExit = $LASTEXITCODE
+
+Write-Host ''
 Write-Host '================ 控制台前端转义 ================' -ForegroundColor Yellow
 
 # 用 Node 把真正的 app.js 跑起来断言转义行为，所以它守的是浏览器会执行的那份代码，
@@ -114,9 +119,9 @@ else {
 }
 
 Write-Host ''
-Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit    托盘退出码：$trayExit    前端退出码：$webuiExit" -ForegroundColor Cyan
+Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit    托盘退出码：$trayExit    单实例退出码：$singleExit    前端退出码：$webuiExit" -ForegroundColor Cyan
 
-if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $webuiExit -ne 0) {
+if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $singleExit -ne 0 -or $webuiExit -ne 0) {
     Write-Host '存在失败项。' -ForegroundColor Red
     exit 1
 }

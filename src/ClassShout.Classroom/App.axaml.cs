@@ -11,6 +11,7 @@ public partial class App : Application
 {
     private ClassroomViewModel? _viewModel;
     private TrayPresence? _tray;
+    private SingleInstance? _singleInstance;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -21,6 +22,22 @@ public partial class App : Application
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            // 单实例检查放在最前面：还没建视图模型、还没开监听端口。
+            //
+            // 第二个实例若照常启动，它会因为端口被占用而在界面上显示一行错误，
+            // 但窗口照样开着、照样写着"未连接" —— 值日生看到两个窗口，
+            // 很可能把正在工作的那个关掉。
+            _singleInstance = SingleInstance.TryAcquire("Classroom");
+            if (_singleInstance is null)
+            {
+                var notice = SingleInstance.CreateAlreadyRunningWindow("ClassShout 教室端");
+                desktop.MainWindow = notice;
+                notice.Closed += (_, _) => desktop.Shutdown();
+
+                base.OnFrameworkInitializationCompleted();
+                return;
+            }
+
             _viewModel = new ClassroomViewModel();
 
             try
@@ -50,6 +67,7 @@ public partial class App : Application
             desktop.ShutdownRequested += (_, _) =>
             {
                 _tray?.Dispose();
+                _singleInstance?.Dispose();
 
                 try
                 {
