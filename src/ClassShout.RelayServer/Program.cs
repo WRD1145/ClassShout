@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Threading.RateLimiting;
 using ClassShout.Core.Remote;
 using ClassShout.RelayServer;
@@ -668,6 +669,26 @@ app.MapGet("/app.js", () => Results.Content(WebUi.Js, "text/javascript; charset=
 app.MapGet("/favicon.ico", () => Results.StatusCode(204));
 
 /// <summary>概览统计。</summary>
+// 版本号从程序集里读，值来自 Directory.Build.props 的 <Version>。
+//
+// 这里原本硬编码着 "1.0.0"：发布 1.1.0 之后控制台仍然显示 1.0.0，而运维正是
+// 靠这一行判断"新版本到底部署上去了没有"。让它跟着构建走，就不会再漂移。
+static string ReadServerVersion()
+{
+    var informational = Assembly.GetExecutingAssembly()
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+    // 开启源码链接时 InformationalVersion 形如 "1.1.0+abc1234"，控制台只显示语义版本部分
+    if (!string.IsNullOrWhiteSpace(informational))
+    {
+        return informational.Split('+')[0];
+    }
+
+    return Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "未知";
+}
+
+var serverVersion = ReadServerVersion();
+
 app.MapGet("/api/console/overview", ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
 {
     if (!userSessions.IsAdminSession(authToken))
@@ -682,7 +703,7 @@ app.MapGet("/api/console/overview", ([FromHeader(Name = RelayPaths.AuthTokenHead
         bindings.Count,
         config.AdminPasswordIsInitial,
         DateTimeOffset.UtcNow,
-        "1.0.0"));
+        serverVersion));
 });
 
 /// <summary>教室列表。只返回 UUID 与名称等公开信息，绝不返回口令或其派生值。</summary>

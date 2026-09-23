@@ -145,6 +145,14 @@ async function loadOverview() {
   } else {
     setBanner('consoleBanner', '');
   }
+
+  // 用 textContent 而不是 innerHTML：这里没有任何需要标记的内容，
+  // 不给未来的改动留下把服务器返回值当 HTML 解析的机会。
+  const meta = document.getElementById('serverMeta');
+  if (meta) {
+    meta.textContent = '服务器版本 ' + (data.version || '未知') +
+                       ' · 服务器时间 ' + fmtTime(data.serverTime);
+  }
 }
 
 /* ---------- 教室 ---------- */
