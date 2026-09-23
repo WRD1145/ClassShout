@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置：允许明文 HTTP。
+
+  为什么必须开：Android 从 targetSdk 28 起**默认禁止明文 HTTP**，而中继服务器
+  可以是自带部署的 http:// 地址（例如 http://192.168.1.10:8080 或一台还没上 TLS 的
+  公网 VPS）。不开这一项，所有走 http:// 的中继请求都会在连接阶段被系统拦掉，
+  报错是 Java 那层的 "Cleartext HTTP traffic to <host> not permitted"
+  —— 在 .NET 里被包成一句毫无信息量的 "Connection failure"。
+
+  代价要说清楚：允许明文意味着同一网络里的其他人可以读到、也能改动中继链路的内容
+  （文字、音频字节）。这是"让自带部署开箱可用"换来的。
+  公网部署请务必套 HTTPS 反向代理，那时用的就是 https:// 地址，与本配置无关。
+
+  教室端（Windows / Linux）不受这个限制影响 —— 桌面 .NET 没有明文策略。
+-->
+<network-security-config>
+  <base-config cleartextTrafficPermitted="true">
+    <trust-anchors>
+      <certificates src="system" />
+    </trust-anchors>
+  </base-config>
+</network-security-config>

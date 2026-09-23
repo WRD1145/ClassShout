@@ -1020,12 +1020,33 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            ServerAddressError = $"连不上：{ex.Message}";
+            ServerAddressError = $"连不上：{DescribeException(ex)}";
         }
         finally
         {
             IsServerAddressBusy = false;
         }
+    }
+
+    /// <summary>
+    /// 把异常说清楚。
+    ///
+    /// 只写 ex.Message 是不够的：.NET 在 Android 上把 Java 那层异常包了一层，
+    /// 外层消息常常只有一句毫无信息量的 "Connection failure"，真正的原因
+    /// （例如"明文 HTTP 被系统策略拦下"）在内层。排障最怕这种"有报错、但报错什么也没说"，
+    /// 所以这里把内层一并带出来。
+    /// </summary>
+    private static string DescribeException(Exception ex)
+    {
+        var inner = ex;
+        while (inner.InnerException is not null)
+        {
+            inner = inner.InnerException;
+        }
+
+        return ReferenceEquals(inner, ex)
+            ? $"{ex.GetType().Name}：{ex.Message}"
+            : $"{ex.GetType().Name}：{ex.Message}（内层 {inner.GetType().Name}：{inner.Message}）";
     }
 
     private void PersistServerUrl(string normalized)

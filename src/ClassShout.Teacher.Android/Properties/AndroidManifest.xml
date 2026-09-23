@@ -14,8 +14,14 @@
   <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
   <!--
-    Activity 与 Application 节点由构建系统根据 [Activity] 特性和
-    csproj 里的 ApplicationId / 版本号自动生成，这里只声明权限与硬件特性。
+    Activity 与版本号等属性由构建系统根据 [Activity] 特性与 csproj 自动生成；
+    这里只补权限、硬件特性，以及 Application 上那一个必须显式声明的属性。
+
+    networkSecurityConfig 为什么非有不可：
+    Android 从 targetSdk 28 起默认禁止明文 HTTP，而中继服务器允许是自带部署的
+    http:// 地址。不开这一项，所有 http:// 的中继请求都会在连接阶段被系统拦掉，
+    表现就是"填了地址、测试连接永远失败"。详见 Resources/xml/network_security_config.xml。
   -->
+  <application android:networkSecurityConfig="@xml/network_security_config" />
 
 </manifest>
