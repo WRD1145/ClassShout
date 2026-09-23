@@ -522,6 +522,73 @@ cat /opt/classshout/relay-config.json
 
 ---
 
+### 教室端也能跑在 Linux 上
+
+教室端有两个产物：`ClassShout.Classroom.exe`（Windows）与 `ClassShout.Classroom`（linux-x64）。
+Linux 版的定位是「教室里那台便宜的小主机」——无桌面、开机自启、整天挂着收喊话。
+
+**先装上音频依赖**，否则它装得上、界面也正常，就是不发声：
+
+```bash
+sudo apt install alsa-utils        # 提供 aplay（优先用它：直接对 ALSA，不依赖桌面会话）
+# 或者
+sudo apt install pulseaudio-utils  # 提供 paplay
+```
+
+朗读方面，Linux 上没有 Windows SAPI 那样的系统语音，所以**主力引擎是 Edge 在线语音**
+（设置里可切）。想要离线保底就再装一个命令行合成：
+
+```bash
+sudo apt install speech-dispatcher  # 提供 spd-say
+sudo apt install espeak-ng           # 或者 espeak-ng
+```
+
+**装完先自检，别等上课才发现**：
+
+```bash
+./ClassShout.Classroom --diagnose     # 报告本机各后端可用情况
+./ClassShout.Classroom --audio-test   # 真的走一遍播放链路（放 200 毫秒静音）
+```
+
+`--diagnose` 的输出形如：
+
+```
+平台：Linux
+音频播放：不可用 —— 找不到 aplay 或 paplay。
+           安装：apt install alsa-utils（或 pulseaudio-utils）
+系统朗读：不可用 —— 找不到 spd-say、espeak-ng 或 espeak。
+在线朗读：Edge 在线语音（需要能访问 speech.platform.bing.com）
+托盘图标：由 Avalonia 提供；Linux 上需要桌面环境的通知区域支持。
+```
+
+**开机自启（systemd）**。注意教室端要访问音频设备，别用 `nologin` 的服务账号：
+
+```ini
+[Unit]
+Description=ClassShout 教室端
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=classroom
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+ExecStart=/opt/classshout/ClassShout.Classroom
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
+```
+
+> `WantedBy=graphical.target` 而不是 `multi-user.target`：Avalonia 需要一个显示后端。
+> 如果是完全无桌面的机器，得配一个 X 虚拟显示（Xvfb）或者用 `weston --backend=headless`。
+> 教室里有屏幕的场景直接用图形目标即可。
+
+**Linux 上托盘图标依赖桌面环境的通知区域**。没有通知区域时程序会退回「关闭即退出」
+（不会留下一个关不掉的窗口），但那样也就失去了「关闭窗口仍继续收喊话」的能力 ——
+所以要么装一个带通知区域的桌面，要么别关那个窗口。
+
+---
 ### 关闭窗口 = 缩到托盘，不是退出
 
 教室端**点关闭按钮不会退出**，而是缩到通知区域继续接收喊话；双击托盘图标恢复窗口，

@@ -162,8 +162,21 @@ try {
 
         # Web SDK 会带出几个只对 IIS 有意义的文件，独立运行时用不到，清掉免得干扰部署
         Get-ChildItem $linuxOut -File |
-            Where-Object { $_.Name -notin 'ClassShout.RelayServer' } |
+            Where-Object { $_.Name -notin 'ClassShout.RelayServer', 'ClassShout.Classroom' } |
             Remove-Item -Force -ErrorAction SilentlyContinue
+
+        Write-Host ''
+        Write-Host '[Linux] 发布教室端（linux-x64）' -ForegroundColor Yellow
+
+        # 教室端的 Linux 目标是 net10.0（不是 net10.0-windows）：
+        # 播放走 aplay/paplay 管道，保底朗读走 spd-say/espeak，主力朗读是 Edge 在线语音。
+        # 必须显式指定 -f，否则多目标项目会要求选一个框架而直接报错。
+        $classroomLinuxArgs = @('-f', 'net10.0') + $linuxArgs
+
+        & dotnet publish 'src\ClassShout.Classroom\ClassShout.Classroom.csproj' @classroomLinuxArgs -o $linuxOut --nologo -v q
+        if ($LASTEXITCODE -ne 0) {
+            throw "Linux 教室端发布失败（退出码 $LASTEXITCODE）"
+        }
 
         Write-Host ''
         Get-ChildItem $linuxOut -File | Sort-Object Name | ForEach-Object {

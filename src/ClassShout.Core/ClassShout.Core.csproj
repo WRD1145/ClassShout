@@ -6,4 +6,8 @@
     <RootNamespace>ClassShout.Core</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="NLayer" Version="$(NLayerVersion)" />
+  </ItemGroup>
+
 </Project>

@@ -18,7 +18,9 @@ namespace ClassShout.Classroom.Services;
 /// </summary>
 public sealed class TrayPresence : IDisposable
 {
-    private const string IconUri = "avares://ClassShout.Classroom/Assets/classroom.ico";
+    // 用 PNG 而不是 ICO：Skia 能解 PNG，解不了 ICO，而托盘图标在 Linux 上同样需要
+    // （教室端是无桌面常驻的，图标往往是唯一的入口）。Windows 上 PNG 一样能用。
+    private const string IconUri = "avares://ClassShout.Classroom/Assets/classroom.png";
 
     private readonly Window _window;
     private readonly IClassicDesktopStyleApplicationLifetime _desktop;

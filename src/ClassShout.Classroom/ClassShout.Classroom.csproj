@@ -1,16 +1,34 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- 教室端：Windows 桌面应用。接收教师端喊话，文字走系统 TTS 朗读，语音直接播放。 -->
+  <!--
+    教室端：接收教师端喊话，文字走朗读，语音直接播放。
+
+    两个目标框架：
+      net10.0-windows —— Windows 教室机，播放走 NAudio，朗读保底用系统 SAPI；
+      net10.0         —— Linux 教室机（便宜的小主机常是无桌面常驻），
+                         播放走 aplay/paplay，朗读保底用 spd-say/espeak，
+                         而真正的主力朗读引擎是 Edge 在线语音。
+    没有 iOS / Android 目标：这块屏幕是挂在教室里给学生看的。
+  -->
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>ClassShout.Classroom</RootNamespace>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- 图标由 tools\ClassShout.IconGen 生成，改配色或换图形后重跑该工具即可 -->
-    <ApplicationIcon>..\..\assets\classroom.ico</ApplicationIcon>
-    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <TargetFrameworks>net10.0-windows;net10.0</TargetFrameworks>
     <UseWindowsForms>false</UseWindowsForms>
     <UseWPF>false</UseWPF>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
+    <OutputType>WinExe</OutputType>
+    <!-- 图标由 tools\ClassShout.IconGen 生成，改配色或换图形后重跑该工具即可 -->
+    <ApplicationIcon>..\..\assets\classroom.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' != 'net10.0-windows'">
+    <!-- Linux 上必须是 Exe：diagnose 参数要把后端情况打到终端，
+         WinExe 在某些发行版上会被当成无控制台的程序。 -->
+    <OutputType>Exe</OutputType>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,6 +36,14 @@
     <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" />
     <PackageReference Include="FluentAvaloniaUI" Version="$(FluentAvaloniaVersion)" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
+  </ItemGroup>
+
+  <!--
+    Windows 专有依赖。放进条件组而不是无条件引用：
+    System.Speech 与 NAudio 在 Linux 上根本不存在可用实现，
+    无条件引用会让 net10.0 目标也把它们拉进来，运行期再判断已经太晚。
+  -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
     <!-- 系统 TTS：Windows SAPI（Microsoft Huihui / Yaoyao 等中文语音） -->
     <PackageReference Include="System.Speech" Version="$(SystemSpeechVersion)" />
     <!-- 网络音频流播放 -->
@@ -29,13 +55,19 @@
     <ProjectReference Include="..\ClassShout.Design\ClassShout.Design.csproj" />
   </ItemGroup>
 
+  <!-- 只在 Windows 目标里编译这两个文件：它们直接引用 NAudio 与 System.Speech -->
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows'">
+    <Compile Remove="Services\NAudioLoopbackPlayer.cs" />
+    <Compile Remove="Services\WindowsSpeechSynthesizer.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <!--
-      托盘图标要求把 .ico 作为 Avalonia 资源嵌进程序集。
-      ApplicationIcon 只决定 exe 自己在资源管理器里长什么样，运行时的 TrayIcon 读不到它，
-      所以同一个文件要按两种方式各引一次。
+      托盘图标用 PNG 而不是 ICO：Skia 能解 PNG，但解不了 ICO，
+      而托盘图标在 Linux 上同样需要（教室端是无桌面常驻的，图标是唯一的入口）。
+      同一个文件在 Windows 上也照样能用。
     -->
-    <AvaloniaResource Include="..\..\assets\classroom.ico" Link="Assets\classroom.ico" />
+    <AvaloniaResource Include="..\..\assets\classroom-512.png" Link="Assets\classroom.png" />
   </ItemGroup>
 
   <ItemGroup>
@@ -44,7 +76,7 @@
 
       NuGet 默认解析到 0.21.2，而该版本命中 GHSA-xrw6-gwf8-vvr9 / CVE-2026-39959
       （High）：恶意 D-Bus 对端可以伪造信号、耗尽文件描述符并造成拒绝服务。
-      Linux 桌面下这是真实可达的攻击面 —— 客户端的 Linux 支持正是靠这个后端。
+      Linux 桌面下这是真实可达的攻击面 —— 教室端的 Linux 支持正是靠这个后端。
 
       选 0.21.3 而不是最新的 0.9x：它是同一小版本线上的补丁，
       Avalonia 11.3 的 X11 后端就是对着 0.21 的 API 写的，

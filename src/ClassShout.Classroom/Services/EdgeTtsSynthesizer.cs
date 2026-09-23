@@ -19,7 +19,8 @@ public sealed class EdgeTtsSynthesizer : ISpeechSynthesizer
 {
     private readonly EdgeTtsClient _client;
     private readonly ISpeechSynthesizer _systemVoice;
-    private readonly NAudioLoopbackPlayer _player = new();
+    // 走平台工厂：Windows 上是 NAudio，Linux 上是 aplay/paplay 管道。
+    private readonly IAudioPlayer _player = ClassroomPlatform.CreatePlayer();
     private readonly Lock _stateLock = new();
 
     private volatile bool _speaking;

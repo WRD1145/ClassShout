@@ -18,6 +18,8 @@
     <MaterialIconsVersion>2.1.9</MaterialIconsVersion>
     <NaudioVersion>2.2.1</NaudioVersion>
     <SystemSpeechVersion>8.0.0</SystemSpeechVersion>
+    <!-- 纯托管的 MP3 解码：Edge 在线语音只回 MP3，而 NAudio 的解码走 Windows ACM，Linux 上用不了 -->
+    <NLayerVersion>3.0.0</NLayerVersion>
     <AndroidApiLevel>36</AndroidApiLevel>
     <!-- 见各项目里对 Tmds.DBus.Protocol 的显式引用说明 -->
     <TmdsDBusProtocolVersion>0.21.3</TmdsDBusProtocolVersion>

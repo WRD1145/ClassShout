@@ -48,7 +48,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     private readonly ClassroomAnnouncer _announcer;
     private readonly EdgeTtsSynthesizer _speech;
     private readonly ClassroomSpeechSettings _speechSettings;
-    private readonly NAudioLoopbackPlayer _player = new();
+    private readonly IAudioPlayer _player = ClassroomPlatform.CreatePlayer();
     private readonly Dictionary<string, TeacherSession> _sessions = [];
     private readonly Dictionary<string, int> _textCounts = [];
     private readonly Dictionary<string, int> _audioCounts = [];
@@ -93,11 +93,20 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 系统语音始终建起来：它不依赖外网，是保底引擎，
         // 也是 Edge 连不上时的回落目标。
         _speechSettings = LocalSettings.LoadSpeech();
-        _speech = new EdgeTtsSynthesizer(new EdgeTtsClient(_http), new WindowsSpeechSynthesizer())
+        _speech = new EdgeTtsSynthesizer(new EdgeTtsClient(_http), ClassroomPlatform.CreateSystemSpeech())
         {
             Engine = _speechSettings.Engine,
             EdgeVoice = _speechSettings.EdgeVoice,
         };
+
+        // 本机没有系统朗读（Linux 上没装 spd-say / espeak）时必须说出来：
+        // 否则老师在"系统语音"引擎下会看到界面一切正常、教室里却毫无声音，
+        // 而唯一的线索是这个平台没有它。
+        if (!ClassroomPlatform.HasSystemSpeech)
+        {
+            Logs.Insert(0, new LogEntry(DateTime.Now, "朗读",
+                "本机没有可用的系统朗读（Linux 上需要 spd-say 或 espeak-ng）。建议改用 Edge 在线语音。"));
+        }
 
         // 读出本机身份：UUID 首次启动生成一次后永久保留，是这台教室在服务器上的身份
         _relaySettings = LocalSettings.LoadClassroom();
@@ -788,19 +797,17 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 也算一次"开始呈现"：上一条朗读迟到的收尾不该把语音界面打回待机
         _presentationTicket++;
 
-        try
+        // 启动失败的类型是平台专有的（Windows 上是 NAudio 的 MmException，
+        // Linux 上是进程启动失败），所以判断收在平台层里，
+        // VM 只问"成没成、为什么"——免得这里长出一串条件编译。
+        if (!ClassroomPlatform.TryStartPlayer(_player, format, out var startError))
         {
-            _player.Start(format);
-        }
-        catch (Exception ex) when (ex is NotSupportedException or NAudio.MmException or InvalidOperationException)
-        {
-            // 声卡被占用、格式被驱动拒绝之类：记一笔就好，不该让教室端退出
             lock (_audioStateLock)
             {
                 _audioOwner = null;
             }
 
-            AddLog("语音", $"无法开始播放：{ex.Message}");
+            AddLog("语音", $"无法开始播放：{startError}");
             return;
         }
 

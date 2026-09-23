@@ -818,6 +818,26 @@ internal static class Program
         var isMp3 = audio.Length >= 3 && audio[0] == 0xFF && (audio[1] & 0xE0) == 0xE0;
         Check("返回的是 MP3（帧同步头正确）", isMp3,
             audio.Length >= 3 ? $"前 3 字节 {audio[0]:X2} {audio[1]:X2} {audio[2]:X2}" : "数据太短");
+
+        // 解码这一步是 Linux 教室端朗读的命脉：那边没有 SAPI，
+        // 在线语音是唯一的朗读引擎，而它只回 MP3。
+        // 用 NLayer 解（纯托管）而不是 NAudio 的 Mp3FileReader，
+        // 因为后者走 Windows 的 ACM，在 Linux 上根本不工作。
+        var decoded = Mp3AudioDecoder.TryDecode(audio);
+        Check("MP3 能解码成 PCM", decoded is { Pcm.Length: > 0 },
+            decoded is { } d ? $"{d.SampleRate} Hz / {d.Channels} 声道 / {d.BitsPerSample} bit，{d.Pcm.Length} 字节" : "解码失败");
+
+        if (decoded is { } info)
+        {
+            // 24 kHz 单声道是接口约定；位深统一转成 16 bit 给播放设备
+            Check("解码格式符合接口约定", info.SampleRate == 24000 && info.Channels == 1 && info.BitsPerSample == 16,
+                $"{info.SampleRate} Hz / {info.Channels} 声道 / {info.BitsPerSample} bit");
+
+            // 一秒 24 kHz 16 bit 单声道 = 48000 字节，用它估算时长是否合理
+            var seconds = info.Pcm.Length / (double)(info.SampleRate * info.Channels * 2);
+            Check("解出的时长合理（1~30 秒）", seconds is > 1 and < 30,
+                $"约 {seconds:F1} 秒");
+        }
     }
 
     /// <summary>
