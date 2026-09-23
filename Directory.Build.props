@@ -28,7 +28,7 @@
   <PropertyGroup>
     <Product>ClassShout</Product>
     <Company>ClassShout</Company>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
   </PropertyGroup>
 

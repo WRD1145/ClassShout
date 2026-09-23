@@ -14,8 +14,17 @@
     <AssemblyName>ClassShout.Teacher.Android</AssemblyName>
 
     <ApplicationId>com.classshout.teacher</ApplicationId>
-    <ApplicationVersion>1</ApplicationVersion>
-    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <!--
+      ApplicationVersion 是 Android 的 versionCode（整数），每次发版必须递增：
+      它不跟着 Directory.Build.props 的 <Version> 走，只能手动维护。
+      1.0.0 / 1.0.1 / 1.1.0 三个包都停在 1，等于发给老师的包在系统眼里是同一个版本，
+      覆盖安装会被安装器拒绝，只能先卸载。自 1.1.1 起每版递增。
+
+      ApplicationDisplayVersion 则是老师在「设置 - 应用」里看到的版本号，
+      与产品版本保持一致，避免"装的到底是哪一版"又要靠猜。
+    -->
+    <ApplicationVersion>2</ApplicationVersion>
+    <ApplicationDisplayVersion>1.1.1</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
 
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
