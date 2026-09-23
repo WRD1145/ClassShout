@@ -180,9 +180,16 @@ public static class LocalSettings
 
     public static bool SaveSpeech(ClassroomSpeechSettings settings) => Save("classroom-speech.json", settings);
 
-    public static SttSettings LoadStt() => Load("teacher-stt.json", static () => new SttSettings());
+    /// <summary>
+    /// 语音转文字（ASR）的设置。
+    ///
+    /// 存在教室端而不是教师端：密钥该由管理员在教室里那台固定机器上配一次，
+    /// 而不是让每个老师在各自手机上都填一遍。转写也发生在教室端 ——
+    /// 那里是语音真正到达、也是需要把文字显示出来的地方。
+    /// </summary>
+    public static SttSettings LoadStt() => Load("classroom-stt.json", static () => new SttSettings());
 
-    public static bool SaveStt(SttSettings settings) => Save("teacher-stt.json", settings);
+    public static bool SaveStt(SttSettings settings) => Save("classroom-stt.json", settings);
 
     public static AppearanceSettings LoadAppearance() => Load("appearance.json", static () => new AppearanceSettings());
 

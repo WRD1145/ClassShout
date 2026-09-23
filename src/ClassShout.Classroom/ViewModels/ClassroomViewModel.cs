@@ -21,6 +21,14 @@ public enum ClassroomStage
 
     /// <summary>正在播放教师端的语音喊话。</summary>
     PlayingAudio,
+
+    /// <summary>
+    /// 语音已经放完，正在把它的识别结果当字幕摆在大字区。
+    ///
+    /// 单独一档而不是复用 SpeakingText：它没有声音在响，
+    /// 界面上那句「正在朗读」会是在说谎，顶栏的状态也会一直停在"正在朗读"。
+    /// </summary>
+    ShowingTranscript,
 }
 
 /// <summary>一条运行日志。</summary>
@@ -88,6 +96,40 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     // —— 屏幕边缘弹窗 ——
     private readonly ClassroomNotificationSettings _notificationSettings;
     private readonly NotificationPresenter _notificationPresenter;
+
+    // —— 语音转文字 ——
+    //
+    // 它配在教室端而不是教师端：音频本来就落在这里，识别也在这里做，
+    // 教室里那块屏幕才能把老师说的话摆成字幕。
+    // 老师那台手机上再识别一遍毫无意义 —— 那边只有自己的麦克风，
+    // 而教室里真正放出来的是什么、有没有听清，只有教室端知道。
+    private readonly SttSettings _sttSettings;
+    private readonly SttClient _stt;
+
+    /// <summary>正在攒的这一路语音的原始 PCM。加锁是因为写入在接收线程、取走在 UI 线程。</summary>
+    private readonly Lock _transcribeLock = new();
+    private readonly MemoryStream _transcribeBuffer = new();
+
+    /// <summary>这一路音频的格式。识别服务要靠它解释这段 PCM，用错格式识别出来就是乱码。</summary>
+    private AudioFormat _transcribeFormat = AudioFormat.Default;
+
+    /// <summary>这一路是否已经因为超长被截断过，用于只记一次日志。</summary>
+    private bool _transcribeTruncated;
+
+    /// <summary>
+    /// 单次转写的时长上限。
+    ///
+    /// 不是为了省钱，是为了内存：识别接口收的是整个音频文件，
+    /// 攒在内存里的 PCM 会一直涨。按音频自己的格式换算成字节数，
+    /// 而不是写死"16 kHz 下多少字节" —— 采样率是网络对端说了算的。
+    /// </summary>
+    private const int TranscribeLimitMs = 5 * 60 * 1000;
+
+    /// <summary>字幕停留多久后收回待机。够学生读完一句话，又不至于一直占着屏幕。</summary>
+    private const int TranscriptHoldMs = 60 * 1000;
+
+    /// <summary>字幕收起用的计时器。换一条喊话就把上一个取消掉。</summary>
+    private CancellationTokenSource? _transcriptHide;
 
     public ClassroomViewModel(int port = ShoutProtocol.DefaultTcpPort, int discoveryPort = ShoutProtocol.DefaultDiscoveryPort)
     {
@@ -173,7 +215,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 它内部持有 Avalonia 窗口，换线程创建会拿到 null 的 Dispatcher。
         _notificationSettings = ClassroomNotificationSettings.Load();
         _notificationPresenter = new NotificationPresenter(_notificationSettings);
-        _classIslandNotifier = new ClassIslandNotifier(_http);
+        _classIslandNotifier = new ClassIslandNotifier();
+
+        // 语音转文字：密钥由管理员在这台教室电脑上填一次，只存本机。
+        // 默认关闭 —— 它需要密钥，不能默认替学校打开。
+        _sttSettings = LocalSettings.LoadStt();
+        _stt = new SttClient(_http);
 
         NotificationEnabled = _notificationSettings.Enabled;
         NotificationDuration = _notificationSettings.DurationSeconds;
@@ -259,6 +306,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     {
         ClassroomStage.SpeakingText => "正在朗读文字喊话",
         ClassroomStage.PlayingAudio => "正在播放语音喊话",
+        ClassroomStage.ShowingTranscript => "语音已转写成文字",
         _ => "等待教师端连接",
     };
 
@@ -410,6 +458,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     public bool IsPlayingAudio => Stage == ClassroomStage.PlayingAudio;
 
+    /// <summary>大字区现在有没有字要显示。文字喊话与语音转写的字幕共用同一块区域。</summary>
+    public bool ShowTextStage => Stage is ClassroomStage.SpeakingText or ClassroomStage.ShowingTranscript;
+
+    /// <summary>大字区顶上那枚 chip 的文字。同一条通道，两种来源要说清是哪一种。</summary>
+    public string StageChipText => Stage == ClassroomStage.ShowingTranscript ? "语音已转写" : "正在朗读";
+
     public bool HasTeachers => Teachers.Count > 0;
 
     /// <summary>
@@ -455,6 +509,8 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(IsIdle));
         OnPropertyChanged(nameof(IsSpeakingText));
         OnPropertyChanged(nameof(IsPlayingAudio));
+        OnPropertyChanged(nameof(ShowTextStage));
+        OnPropertyChanged(nameof(StageChipText));
         OnPropertyChanged(nameof(ShouldMeterAudio));
         OnPropertyChanged(nameof(StageHeadline));
 
@@ -462,6 +518,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         {
             ClassroomStage.SpeakingText => "正在朗读文字喊话",
             ClassroomStage.PlayingAudio => "正在播放语音喊话",
+            ClassroomStage.ShowingTranscript => "正在显示语音转写的文字",
             _ => Teachers.Count == 0 ? "等待教师端连接" : "已就绪",
         };
     }
@@ -737,7 +794,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         CurrentText = message.Text;
         Stage = ClassroomStage.SpeakingText;
 
-        NotifyOnScreen(sourceName, message.Text, isVoice: false);
+        NotifyOnScreen(sourceName, message.Text, ShoutNoticeKind.Text);
 
         _ = SpeakAsync(message, ticket);
     }
@@ -855,6 +912,15 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             _currentAudioFormat = format;
         }
 
+        // 这一路要转写的音频从头开始攒：上一路没转成功的残留绝不能混进这一句，
+        // 否则识别出来的是"上一位老师的话尾 + 这一位的开头"。
+        lock (_transcribeLock)
+        {
+            _transcribeBuffer.SetLength(0);
+            _transcribeFormat = format;
+            _transcribeTruncated = false;
+        }
+
         // 也算一次"开始呈现"：上一条朗读迟到的收尾不该把语音界面打回待机
         _presentationTicket++;
 
@@ -879,7 +945,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         Stage = ClassroomStage.PlayingAudio;
         AddLog("语音", $"「{sourceName}」开始语音喊话（{format}）");
 
-        NotifyOnScreen(sourceName, "（语音喊话，正在教室播放）", isVoice: true);
+        NotifyOnScreen(sourceName, "（语音喊话，正在教室播放）", ShoutNoticeKind.Voice);
     }
 
     private void OnAudioChunk(string ownerKey, ReadOnlyMemory<byte> payload)
@@ -904,6 +970,23 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
 
         _player.Write(payload.Span);
+
+        // 顺手攒一份送去识别。
+        //
+        // 只在 _audioOwner 确实属于这一路时才会走到这里 —— 上面那道归属检查
+        // 顺带保证了"静音期间收到的分片不进缓冲"：静音时 PresentAudioStart
+        // 根本没设过 owner，分片全在检查处被丢掉了。
+        lock (_transcribeLock)
+        {
+            if (_transcribeBuffer.Length + payload.Length <= _transcribeFormat.BytesForDuration(TranscribeLimitMs))
+            {
+                _transcribeBuffer.Write(payload.Span);
+            }
+            else
+            {
+                _transcribeTruncated = true;
+            }
+        }
 
         var level = PcmLevel.Compute(payload.Span);
         Post(() =>
@@ -937,6 +1020,138 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             }
 
             AddLog("语音", $"语音喊话结束，时长 {AudioSeconds:F1} 秒");
+
+            // 收尾之后才把这一路攒下的音频交出去识别。
+            //
+            // 顺序很重要：转写是网络请求，可能几秒才有结果，
+            // 所以它绝不参与"播放结束了没有"这件事，也不会拖慢下一条喊话 ——
+            // StartTranscription 只负责把音频取走就返回。
+            StartTranscription(CurrentSpeaker, _presentationTicket);
+        });
+    }
+
+    /// <summary>
+    /// 把刚刚播完的这一路语音送去识别。
+    ///
+    /// 刻意 fire-and-forget：喊话本身已经放完了，字幕只是**附加**的一行。
+    /// 网速慢、密钥填错、识别服务挂了，都不该让教室端的界面卡住或者弹一个
+    /// 没人会处理的错误框 —— 那些只写进日志，教室里没人需要为一个附加功能停下来。
+    /// </summary>
+    private void StartTranscription(string sourceName, long ticket)
+    {
+        // 没配好就一点开销都不产生：连缓冲都不该攒。
+        // 缓冲本身是无条件攒的（配置随时可能在设置里被打开），
+        // 但只有走到这里才做网络请求。
+        if (!_sttSettings.IsUsable)
+        {
+            return;
+        }
+
+        byte[] pcm;
+        AudioFormat format;
+        bool truncated;
+
+        lock (_transcribeLock)
+        {
+            pcm = _transcribeBuffer.ToArray();
+            _transcribeBuffer.SetLength(0);
+            format = _transcribeFormat;
+            truncated = _transcribeTruncated;
+            _transcribeTruncated = false;
+        }
+
+        // 太短的一段识别不出有意义的内容，却要花一次请求；
+        // 半秒以下基本就是老师误触了按键。
+        if (pcm.Length < format.BytesForDuration(500))
+        {
+            return;
+        }
+
+        if (truncated)
+        {
+            AddLog("语音", "这段语音较长，只转写前 5 分钟。");
+        }
+
+        _ = TranscribeAsync(pcm, format, sourceName, ticket);
+    }
+
+    /// <summary>真正去调识别服务，并把文字摆到教室的大字区。</summary>
+    private async Task TranscribeAsync(byte[] pcm, AudioFormat format, string sourceName, long ticket)
+    {
+        // ConfigureAwait(true)：下面要改的都是界面状态，必须在 UI 线程上。
+        // 这一步的起点就是 UI 线程（StartTranscription 由 Post 的回调调用）。
+        var result = await _stt.TranscribeAsync(pcm, format, _sttSettings).ConfigureAwait(true);
+
+        if (!result.Ok || string.IsNullOrWhiteSpace(result.Text))
+        {
+            AddLog("语音", $"语音转文字失败：{result.Error}");
+            return;
+        }
+
+        AddLog("语音", $"「{sourceName}」的语音转文字：{result.Text}");
+
+        // 识别要几秒才有结果，这期间完全可能已经来了新的一条喊话。
+        // 那就只留下日志，不再去动大字区 ——
+        // 否则新老师正在说的话会被上一位的迟到字幕顶掉，教室里看到的是错的人说的错的话。
+        if (ticket != _presentationTicket || IsMuted)
+        {
+            return;
+        }
+
+        CurrentSpeaker = sourceName;
+        CurrentText = result.Text;
+        Stage = ClassroomStage.ShowingTranscript;
+
+        // 顺带把识别结果也投给 ClassIsland：那边原来只显示一句"语音消息"，
+        // 现在能看见老师到底说了什么 —— 教室里没听清的人多一处能看的地方。
+        NotifyClassIsland(sourceName, result.Text, ShoutNoticeKind.VoiceTranscript);
+
+        ScheduleTranscriptHide(ticket);
+    }
+
+    /// <summary>
+    /// 字幕摆一会儿就收回待机。
+    ///
+    /// 不做这一步的话，Stage 会永远停在"有字"上：顶栏一直说"正在显示…"，
+    /// 教室里那块屏幕也再回不到待机画面 —— 而喊话早就结束了。
+    /// 收回只认两件事：还是同一条喊话（ticket 没变），且现在显示的确实是字幕
+    /// （期间来了文字喊话或新语音就不能动它）。
+    /// </summary>
+    private void ScheduleTranscriptHide(long ticket)
+    {
+        _transcriptHide?.Cancel();
+        _transcriptHide?.Dispose();
+
+        var cts = new CancellationTokenSource();
+        _transcriptHide = cts;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TranscriptHoldMs, cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            await PostAsync(() =>
+            {
+                if (cts.IsCancellationRequested || ticket != _presentationTicket)
+                {
+                    return;
+                }
+
+                if (Stage != ClassroomStage.ShowingTranscript)
+                {
+                    return;
+                }
+
+                Stage = ClassroomStage.Idle;
+                CurrentText = string.Empty;
+                CurrentSpeaker = string.Empty;
+            });
         });
     }
 
@@ -957,6 +1172,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         {
             _audioOwner = null;
         }
+
+        lock (_transcribeLock)
+        {
+            _transcribeBuffer.SetLength(0);
+        }
+
+        // 这次手动停止也算一次"开始呈现"：正在路上的一次识别回来时，
+        // ticket 已经变了，它就不会再把刚被清掉的字幕重新贴回屏幕上。
+        _presentationTicket++;
+        _transcriptHide?.Cancel();
 
         Stage = ClassroomStage.Idle;
         AudioLevel = 0;
@@ -1599,8 +1824,116 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void HideNotification() => _notificationPresenter.Hide();
 
+    // ======================== 语音转文字（密钥自填） ========================
+    //
+    // 这几个属性只给设置窗口用。写回磁盘用 LocalSettings.SaveStt ——
+    // 它落在 classroom-stt.json：这份配置属于**教室端**，因为音频到这里才算真正放出来。
+    //
+    // 每一项都立刻落盘（设置窗口写着"改动即时生效并自动保存"）。
+    // 用属性而不是 [ObservableProperty] 字段，是为了在 setter 里顺手保存和刷新状态行。
+
+    /// <summary>是否启用语音转文字。</summary>
+    public bool SttEnabled
+    {
+        get => _sttSettings.Enabled;
+        set
+        {
+            if (_sttSettings.Enabled == value)
+            {
+                return;
+            }
+
+            _sttSettings.Enabled = value;
+            LocalSettings.SaveStt(_sttSettings);
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SttStatus));
+
+            AddLog("语音", value ? "已启用语音转文字。" : "已关闭语音转文字。");
+        }
+    }
+
+    /// <summary>接口地址。默认 OpenAI，也可填任何兼容 /v1/audio/transcriptions 的服务。</summary>
+    public string SttBaseUrl
+    {
+        get => _sttSettings.BaseUrl;
+        set
+        {
+            if (_sttSettings.BaseUrl == value)
+            {
+                return;
+            }
+
+            _sttSettings.BaseUrl = value;
+            LocalSettings.SaveStt(_sttSettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SttStatus));
+        }
+    }
+
+    /// <summary>密钥。只存本机，日志里不出现。</summary>
+    public string SttApiKey
+    {
+        get => _sttSettings.ApiKey ?? string.Empty;
+        set
+        {
+            if (_sttSettings.ApiKey == value)
+            {
+                return;
+            }
+
+            _sttSettings.ApiKey = value;
+            LocalSettings.SaveStt(_sttSettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SttStatus));
+        }
+    }
+
+    /// <summary>模型名。默认 whisper-1。</summary>
+    public string SttModel
+    {
+        get => _sttSettings.Model;
+        set
+        {
+            if (_sttSettings.Model == value)
+            {
+                return;
+            }
+
+            _sttSettings.Model = value;
+            LocalSettings.SaveStt(_sttSettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SttStatus));
+        }
+    }
+
+    /// <summary>提示语言。留空由服务自行判断，中文课堂填 zh 通常更准。</summary>
+    public string SttLanguage
+    {
+        get => _sttSettings.Language ?? string.Empty;
+        set
+        {
+            if (_sttSettings.Language == value)
+            {
+                return;
+            }
+
+            _sttSettings.Language = value;
+            LocalSettings.SaveStt(_sttSettings);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>配置状态一行说明，直接显示给管理员看。</summary>
+    public string SttStatus => _sttSettings switch
+    {
+        { Enabled: false } => "未启用",
+        { ApiKey: null or "" } => "已开启，但还没填密钥",
+        _ => $"已启用 · {_sttSettings.Model}",
+    };
+
     /// <summary>收到喊话时弹一条提示。</summary>
-    private void NotifyOnScreen(string sourceName, string text, bool isVoice)
+    private void NotifyOnScreen(string sourceName, string text, ShoutNoticeKind kind)
     {
         if (!NotificationEnabled)
         {
@@ -1612,12 +1945,28 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 只用 ClassIsland 的提醒，或者两处都显示。
         if (SelectedChannel?.Value is not ShoutNotificationChannel.ClassIsland)
         {
-            _notificationPresenter.Show(new NotificationContent(sourceName, text, isVoice));
+            _notificationPresenter.Show(new NotificationContent(sourceName, text, kind is ShoutNoticeKind.Voice));
+        }
+
+        NotifyClassIsland(sourceName, text, kind);
+    }
+
+    /// <summary>
+    /// 只投 ClassIsland，不碰教室端自己的弹窗。
+    ///
+    /// 转写结果走这条路：它比喊话本身晚几秒到，而弹窗是"现在有人在说话"的提示，
+    /// 隔了几秒再给同一句话弹第二个窗，只会让人以为又有人喊了一遍。
+    /// </summary>
+    private void NotifyClassIsland(string sourceName, string text, ShoutNoticeKind kind)
+    {
+        if (!NotificationEnabled)
+        {
+            return;
         }
 
         if (SelectedChannel?.Value is ShoutNotificationChannel.ClassIsland or ShoutNotificationChannel.Both)
         {
-            _ = NotifyClassIslandAsync(sourceName, text, isVoice);
+            _ = NotifyClassIslandAsync(sourceName, text, kind);
         }
     }
 
@@ -1628,12 +1977,11 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// 而这条投递只是"顺便再通知一处"—— 它绝不能让喊话本身慢下来或失败。
     /// 失败只在头几次和每 20 次记一条，免得教室端日志被刷满、真正的异常反而被埋掉。
     /// </summary>
-    private async Task NotifyClassIslandAsync(string sourceName, string text, bool isVoice)
+    private async Task NotifyClassIslandAsync(string sourceName, string text, ShoutNoticeKind kind)
     {
-        // 语音喊话没有文字，给它一句人看得懂的说明，否则 ClassIsland 那边会是一条空提醒。
-        var content = isVoice ? "正在语音喊话…" : text;
+        var content = ClassIslandNotice.ContentFor(kind, text);
 
-        if (!await _classIslandNotifier.TryNotifyAsync(sourceName, content).ConfigureAwait(true))
+        if (!await _classIslandNotifier.TryNotifyAsync(sourceName, content, kind).ConfigureAwait(true))
         {
             if (_classIslandNotifier.ShouldLogFailure())
             {
@@ -1655,9 +2003,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 它们本身也不需要等待：Dispose 是同步的，而且各自内部已经把
         // 与在跑任务的竞态处理掉了（例如合成器会先等在读的那一条读完）。
         _notificationPresenter.Dispose();
+        _classIslandNotifier.Dispose();
         _speech.Dispose();
         _player.Dispose();
         _http.Dispose();
+
+        // 字幕计时器也要收掉：它内部持有一个 Task，
+        // 退出时留着它没有任何好处，而它醒来后还会去碰已经关掉的界面。
+        _transcriptHide?.Cancel();
+        _transcriptHide?.Dispose();
+        _transcriptHide = null;
 
         // 下面这些要等，属于"尽力而为"的部分
         if (_relay is not null)

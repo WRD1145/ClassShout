@@ -181,6 +181,71 @@
           </StackPanel>
         </md3:Md3Card>
 
+        <!-- ==================== 语音转文字 ==================== -->
+        <!--
+          这一项配在教室端，不在教师端。
+          音频是流到这台机器上才放出来的，识别也就在这里做：
+          教室里那块屏幕才能把老师说的话摆成字幕。
+        -->
+        <md3:Md3Card Classes="outlined">
+          <StackPanel Spacing="10">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="cardTitle" Text="语音转文字" Margin="0" />
+              <TextBlock Grid.Column="1" Classes="bodySmall" VerticalAlignment="Center"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="{Binding SttStatus}" />
+            </Grid>
+
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="开启后，收到语音喊话时会在放完的几秒内把它识别成文字，摆到教室的大字区并记进日志。教室音响听不清、或者班里有听障学生时，看见字才算真的听见。密钥只存在这台教室电脑上，不上传、不写日志；留空则完全不用这个功能。" />
+
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="bodyMedium" Text="启用" VerticalAlignment="Center" />
+              <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                            IsChecked="{Binding SttEnabled}" />
+            </Grid>
+
+            <StackPanel Spacing="8" IsVisible="{Binding SttEnabled}">
+              <StackPanel Spacing="4">
+                <TextBlock Classes="bodySmall"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="接口地址" />
+                <TextBox Classes="outlined dense" Text="{Binding SttBaseUrl}" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="默认 OpenAI。任何兼容 /v1/audio/transcriptions 的服务都能填，例如自建的 whisper 服务。" />
+              </StackPanel>
+
+              <StackPanel Spacing="4">
+                <TextBlock Classes="bodySmall"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="密钥" />
+                <TextBox Classes="outlined dense" PasswordChar="●" Text="{Binding SttApiKey}" />
+              </StackPanel>
+
+              <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                <StackPanel Spacing="4">
+                  <TextBlock Classes="bodySmall"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="模型" />
+                  <TextBox Classes="outlined dense" Text="{Binding SttModel}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="4">
+                  <TextBlock Classes="bodySmall"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="语言（可留空）" />
+                  <TextBox Classes="outlined dense" Text="{Binding SttLanguage}" />
+                </StackPanel>
+              </Grid>
+
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="识别是「附加」的一步：网络不通、密钥填错都只记一条日志，不会影响喊话的声音，也不会弹框打断教室里的人。" />
+            </StackPanel>
+          </StackPanel>
+        </md3:Md3Card>
+
         <!-- ==================== 跨局域网（中继服务器） ==================== -->
         <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="12">

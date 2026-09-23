@@ -180,7 +180,10 @@ internal static class Program
         // ---------- 3f. 语音转文字客户端 ----------
         await AssertSttClientAsync();
 
-        // ---------- 3g. 发送队列 ----------
+        // ---------- 3g. 投给 ClassIsland 的那条通知 ----------
+        await AssertClassIslandNoticeAsync();
+
+        // ---------- 3h. 发送队列 ----------
         await AssertShoutQueueAsync();
 
         // ---------- 4. 语音流 ----------
@@ -1098,6 +1101,173 @@ internal static class Program
         Check("一条失败不会卡住后面的", finished.Count == 3, string.Join("、", finished));
 
         Check("队列发空之后计数归零", queue.PendingCount == 0, $"{queue.PendingCount} 条");
+    }
+
+    /// <summary>
+    /// 投给 ClassIsland 联动插件的那条通知：三类喊话各自的正文与类别。
+    ///
+    /// 同一个 TcpListener 桩同时顶替插件，所以这里断言的是**离开教室端的那个报文**，
+    /// 而不是"我们以为会发出去的东西"。中文在 JSON 里会被转义成 \uXXXX，
+    /// 所以按解析后的字符串比对，不去搜原始字节。
+    /// </summary>
+    private static async Task AssertClassIslandNoticeAsync()
+    {
+        const string textShout = "现在讲第三题";
+        const string transcript = "同学们把书翻到第三十七页";
+
+        // 三类喊话各自应该长什么样。
+        //
+        // 期望文案**硬编码**在这里，不拿生产代码去生成 —— 用被测代码给自己定标准，
+        // 改坏了文案这个断言也照样通过，那它就什么都没测。
+        var expected = new[]
+        {
+            (Kind: "text", Content: textShout),
+            (Kind: "voice", Content: "语音消息"),
+            (Kind: "voiceTranscript",
+                Content: $"语音消息{Environment.NewLine}识别结果：{transcript}"),
+        };
+
+        // 投递时走的是教室端真正走的那条路：正文先过一遍 ClassIslandNotice。
+        var kindValues = new[] { ShoutNoticeKind.Text, ShoutNoticeKind.Voice, ShoutNoticeKind.VoiceTranscript };
+        var rawTexts = new[] { textShout, string.Empty, transcript };
+
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        var bodies = new string[expected.Length];
+        var server = Task.Run(async () =>
+        {
+            for (var i = 0; i < expected.Length; i++)
+            {
+                using var client = await listener.AcceptTcpClientAsync();
+                var stream = client.GetStream();
+                bodies[i] = await ReadHttpBodyAsync(stream);
+
+                var response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK";
+                await stream.WriteAsync(Encoding.UTF8.GetBytes(response));
+            }
+        });
+
+        var notifier = new ClassIslandNotifier($"http://127.0.0.1:{port}/shout");
+
+        var sent = new List<bool>(expected.Length);
+        for (var i = 0; i < expected.Length; i++)
+        {
+            sent.Add(await notifier.TryNotifyAsync(
+                "张老师",
+                ClassIslandNotice.ContentFor(kindValues[i], rawTexts[i]),
+                kindValues[i]));
+        }
+
+        notifier.Dispose();
+
+        await server.WaitAsync(TimeSpan.FromSeconds(10));
+        listener.Stop();
+
+        Check("三类喊话都投递成功", sent.All(x => x), string.Join("、", sent));
+
+        // 把三条报文的正文解析出来，后面的断言都基于它们 ——
+        // 中文在 JSON 里是 \uXXXX 转义，按原始字节搜中文必然是搜不到的。
+        var parsed = new (string? From, string? Text, string? Kind)[expected.Length];
+
+        for (var i = 0; i < expected.Length; i++)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(bodies[i]);
+                var root = document.RootElement;
+                parsed[i] = (
+                    root.TryGetProperty("from", out var f) ? f.GetString() : null,
+                    root.TryGetProperty("text", out var t) ? t.GetString() : null,
+                    root.TryGetProperty("kind", out var k) ? k.GetString() : null);
+            }
+            catch (JsonException)
+            {
+                // 留成 null，下面那几条断言会如实报失败
+            }
+        }
+
+        for (var i = 0; i < expected.Length; i++)
+        {
+            var label = expected[i].Kind switch
+            {
+                "text" => "文字喊话",
+                "voice" => "没配转写的语音喊话",
+                _ => "语音转写结果",
+            };
+
+            var (from, text, kind) = parsed[i];
+
+            Check($"{label}的类别正确", kind == expected[i].Kind, $"kind={kind ?? "(缺失)"}");
+
+            Check($"{label}的内容正确", text == expected[i].Content,
+                text is null ? "(没有正文)" : text.Replace(Environment.NewLine, " / "));
+
+            Check($"{label}带上喊话人", from == "张老师", $"from={from ?? "(缺失)"}");
+        }
+
+        // 这一条就是这次改动的目的本身：识别结果必须真的躺在投出去的那条通知里。
+        // 少了它，"转写结果传给了插件"只是代码里的说法，没有任何东西拦得住它退化。
+        Check("转写结果那条通知里带着识别出来的字",
+            parsed[2].Text?.Contains(transcript, StringComparison.Ordinal) == true,
+            parsed[2].Text is null ? "(没有正文)" : "正文含识别结果");
+
+        // 没配语音转文字时，内容就只有「语音消息」—— 不能是空的，也不能还留着别的字样。
+        var voiceText = parsed[1].Text;
+        Check("没配转写时内容只有「语音消息」",
+            voiceText == "语音消息" && !voiceText.Contains("识别", StringComparison.Ordinal),
+            voiceText ?? "(没有正文)");
+    }
+
+    /// <summary>
+    /// 读一个最小可用的 HTTP 请求体：先读到头部结束拿 Content-Length，再按字节数读完。
+    /// </summary>
+    private static async Task<string> ReadHttpBodyAsync(NetworkStream stream)
+    {
+        var buffer = new byte[16 * 1024];
+        using var received = new MemoryStream();
+        var headerEnd = -1;
+
+        while (headerEnd < 0)
+        {
+            var read = await stream.ReadAsync(buffer);
+            if (read <= 0)
+            {
+                return string.Empty;
+            }
+
+            received.Write(buffer, 0, read);
+            headerEnd = FindHeaderEnd(received.ToArray());
+        }
+
+        var data = received.ToArray();
+        var head = Encoding.ASCII.GetString(data, 0, headerEnd);
+        var contentLength = 0;
+
+        foreach (var line in head.Split("\r\n"))
+        {
+            if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+            {
+                int.TryParse(line[15..].Trim(), out contentLength);
+            }
+        }
+
+        while (received.Length < headerEnd + 4 + contentLength)
+        {
+            var read = await stream.ReadAsync(buffer);
+            if (read <= 0)
+            {
+                break;
+            }
+
+            received.Write(buffer, 0, read);
+        }
+
+        var available = (int)Math.Min(contentLength, received.Length - headerEnd - 4);
+        return available > 0
+            ? Encoding.UTF8.GetString(received.ToArray(), headerEnd + 4, available)
+            : string.Empty;
     }
 
     /// <summary>在字节数组里找一段 ASCII 子串。二进制体不能按 UTF-8 解码后再搜。</summary>

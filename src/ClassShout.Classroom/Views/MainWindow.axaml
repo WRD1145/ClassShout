@@ -114,14 +114,16 @@
                        Text="{Binding IdleHint}" />
           </StackPanel>
 
-          <!-- 文字朗读中 -->
-          <StackPanel IsVisible="{Binding IsSpeakingText}"
+          <!-- 文字朗读中 / 语音转写的字幕。
+               两块内容长得一样，差别只在顶上那枚 chip 怎么称呼它，
+               所以共用一块区域、只把 chip 的文字绑到 StageChipText。 -->
+          <StackPanel IsVisible="{Binding ShowTextStage}"
                       VerticalAlignment="Center" HorizontalAlignment="Center"
                       Spacing="20" Margin="56">
             <Border Classes="chip" HorizontalAlignment="Center">
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <md3:Md3Icon Kind="Bullhorn" Size="16" Classes="secondary" />
-                <TextBlock Classes="labelLarge" Text="正在朗读" />
+                <TextBlock Classes="labelLarge" Text="{Binding StageChipText}" />
               </StackPanel>
             </Border>
             <TextBlock Classes="labelLarge" HorizontalAlignment="Center"
