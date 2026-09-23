@@ -36,6 +36,17 @@ if (-not $Exe -or -not (Test-Path $Exe)) {
 $Exe = (Resolve-Path $Exe).Path
 Write-Host "被测程序：$Exe" -ForegroundColor Cyan
 
+# 开跑前先清掉可能残留的教室端进程。
+#
+# 这不是洁癖：单实例互斥体是**进程级**的，一个上次没退干净的实例会让本次启动
+# 直接变成"第二个实例"——只弹一个"已在运行"的提示窗。于是这个测试看到的会是
+# "关了窗口进程就退了"（因为它关掉的是那个提示窗，关掉即退出），
+# 报成"没有缩到托盘"，而其实什么都没坏。
+# 每个阶段都从干净状态出发，才不会把上一阶段的残留当成这一阶段的结论。
+Get-Process -Name 'ClassShout.Classroom' -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Milliseconds 800
+
 Add-Type -Namespace ClassShout -Name Win32 -MemberDefinition @'
 [DllImport("user32.dll", SetLastError = true)]
 public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);

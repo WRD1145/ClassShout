@@ -34,6 +34,15 @@ $Exe = (Resolve-Path $Exe).Path
 $mainTitle = 'ClassShout 教室端'
 Write-Host "被测程序：$Exe" -ForegroundColor Cyan
 
+# 开跑前先清掉可能残留的教室端进程。
+#
+# 单实例互斥体是**进程级**的：一个上次没退干净的实例会让这里的"第一个实例"
+# 直接变成第二个、只弹"已在运行"提示，于是本测试报出"第一个实例没有出现主窗口"。
+# 那是上游残留，不是产品缺陷 —— 从干净状态出发才不会误判。
+Get-Process -Name 'ClassShout.Classroom' -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Milliseconds 800
+
 function Wait-ForTitle([System.Diagnostics.Process]$proc, [string]$title, [int]$seconds) {
     $deadline = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $deadline) {
