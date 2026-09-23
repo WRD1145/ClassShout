@@ -24,7 +24,7 @@ MIT 协议开源。欢迎自建，也欢迎改。详见 [开源协议](#十三�
 | [四、通信协议](#四通信协议) | TCP 分帧、控制消息、音频格式 |
 | [五、跨局域网（中继服务器）](#五跨局域网中继服务器) | 为什么用长轮询、怎么部署、线路一览 |
 | [六、账号与安全](#六账号与安全) | 两类账号、口令存储、姓名为何不可冒充 |
-| [七、屏幕弹窗](#七屏幕弹窗) | 三档置顶强度与它的边界 |
+| [七、屏幕弹窗](#七屏幕弹窗) | 置顶强度与它的边界 |
 | [八、WebUI 管理控制台](#八webui-管理控制台) | 服务器自带的管理界面 |
 | [九、Material Design 3 设计系统](#九material-design-3-设计系统) | 令牌、控件主题、如何换主题色 |
 | [十、验证](#十验证) | 两套自检怎么跑、覆盖了什么 |
@@ -42,13 +42,16 @@ MIT 协议开源。欢迎自建，也欢迎改。详见 [开源协议](#十三�
 | 语音喊话 | 手机按住说话 → 教室端实时播放（16 kHz 单声道 PCM，20 毫秒一片，低延迟） |
 | 自动发现 | 同一 Wi-Fi 下自动列出所有教室端，无需记 IP；也支持手动填 `IP:端口` |
 | **跨局域网** | 两端接到同一台中继服务器即可跨网络喊话，支持多班级并存互不串台 |
-| **屏幕弹窗** | 教室端收到喊话时在屏幕边缘弹出提示卡，三档置顶强度可选，且不抢焦点 |
+| **屏幕弹窗** | 教室端收到喊话时在屏幕边缘弹出提示卡，置顶强度可选，且不抢焦点 |
 | **账号登录** | 老师用用户名或邮箱注册登录；教室端弹窗显示的是账号里的真实姓名 |
 | **管理控制台** | 服务器自带 WebUI：查看教室与用户、重置口令、停用账号 |
 | 常用语 | 「同学们请安静」等课堂高频用语一键填入 |
 | 教室端控制 | 静音、立即停止、音量、语速、选择系统语音、亮/暗主题 |
 | 状态同步 | 教室端的静音与音量实时回传给手机端显示 |
 | **后台驻留** | 关闭窗口不退出，教室端缩到通知区域继续接收喊话；退出要经托盘菜单刻意操作 |
+| **开机自启** | 设置里一个开关，在启动文件夹放个快捷方式，重启后自动打开教室端；也可用命令行开关 |
+| **个性化** | 两端设置里可挑主题色（8 个预设或自填 `#RRGGBB`），整套配色由算法重算，改完即时生效 |
+| **内置中文字体** | HarmonyOS Sans SC 随程序分发，三端中文观感一致，不依赖目标机装没装中文字体 |
 
 ---
 
@@ -75,11 +78,13 @@ ClassShout/
 │  │  └─ wwwroot/index.html            管理控制台页面（嵌入资源，无外部依赖）
 │  ├─ ClassShout.Design/               Material Design 3 设计系统
 │  │  ├─ Md3Theme.axaml                主题入口（应用只需引这一个文件）
-│  │  ├─ Md3Typography.cs              平台字重适配（见「踩过的坑」）
+│  │  ├─ Theming/Md3Palette.cs         种子色 → 48 色角色（material-color-utilities）
+│  │  ├─ Theming/Md3Appearance.cs      把配色装到应用资源上，支持随时换
+│  │  ├─ Assets/Fonts/                 内置 HarmonyOS Sans SC（含许可原文，勿改字体）
 │  │  ├─ Themes/Tokens/                颜色/字体/形状/高度/动效/状态层令牌
 │  │  ├─ Themes/Controls/              控件主题（Button、TextField、Card、List…）
 │  │  ├─ Themes/Md3Styles.axaml        作用于控件实例的全局样式
-│  │  └─ Controls/                     自定义控件（Md3Icon、Md3Card、Md3AudioWave）
+│  │  └─ Controls/                     自定义控件（Md3Icon、Md3Card、Md3AudioWave、ThemePicker）
 │  ├─ ClassShout.Teacher/              教师端共享 UI（两个平台头共用）
 │  │  └─ Diagnostics/                  字体回退诊断页（真机排查用）
 │  ├─ ClassShout.Teacher.Desktop/      教师端桌面头（手机比例窗口，用于调试）
@@ -87,6 +92,7 @@ ClassShout/
 │  └─ ClassShout.Classroom/            教室端（Windows，TTS + 音频播放 + 屏幕弹窗）
 │     ├─ Services/NotificationPresenter.cs  弹窗生命周期
 │     ├─ Services/WindowTopmost.cs      Windows 置顶强度控制
+│     ├─ Services/StartupShortcut.cs    开机自启（启动文件夹里的 .lnk，走 IShellLink COM）
 │     └─ Views/NotificationWindow.axaml     弹窗本体
 ├─ assets/                             应用图标（由 IconGen 生成，勿手工编辑）
 ├─ scripts/
@@ -237,6 +243,8 @@ dist/
    ```
    %LOCALAPPDATA%\ClassShout\classroom.json               教室名、UUID、口令、服务器地址
    %LOCALAPPDATA%\ClassShout\classroom-notification.json  弹窗设置
+   %LOCALAPPDATA%\ClassShout\classroom-speech.json        朗读设置
+   %LOCALAPPDATA%\ClassShout\appearance.json              主题色（个性化，两端共用同一份格式）
    ```
 
    这一点是有意为之：程序可能被装在 `Program Files` 这类只读位置，
@@ -257,16 +265,36 @@ dist/
 
 **设为开机自启**（教室电脑通常没人管，重启后要能自己起来）：
 
+界面上就有开关：教室端 → 设置 → 「后台运行」→ **开机自启**。打开后会在
+`shell:startup`（启动文件夹）里放一个指向本程序的快捷方式，删掉它即关闭。
+
+命令行同样可以设，教室里那台机器不方便点界面时用得上：
+
 ```powershell
-$exe = "C:\ClassShout\ClassShout.Classroom.exe"
-$action  = New-ScheduledTaskAction -Execute $exe
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-Register-ScheduledTask -TaskName "ClassShout 教室端" -Action $action -Trigger $trigger `
-  -RunLevel Highest -Description "课堂喊话教室端"
+.\ClassShout.Classroom.exe --autostart-on       # 开启
+.\ClassShout.Classroom.exe --autostart-off      # 关闭
+.\ClassShout.Classroom.exe --autostart-status   # 查状态：文件在不在、指向哪里
 ```
 
-> 用**计划任务**而不是启动文件夹：计划任务可以设「最高权限」并以指定账户运行，
-> 也能在无人登录时以服务方式跑（需改 `-AtStartup` 并配置账户密码）。
+> 为什么用启动文件夹而不是注册表 `Run` 键：运维看得见、改得动 —— 打开 `shell:startup`
+> 就是一个文件，删掉即关闭；而 `Run` 键藏在注册表里，出问题很难发现。
+>
+> 状态**以文件是否存在为准**，不另存一个布尔值：老师手动删掉快捷方式是很正常的操作，
+> 程序若还记着"已开启"就会显示一个和实际不符的状态。
+> 程序被移动或换目录后，下次启动会自动把指向失效的快捷方式改写过来。
+
+> 需要「无人登录也能跑」或「以最高权限运行」时，仍要用**计划任务**（启动文件夹做不到这两点）：
+>
+> ```powershell
+> $exe = "C:\ClassShout\ClassShout.Classroom.exe"
+> $action  = New-ScheduledTaskAction -Execute $exe
+> $trigger = New-ScheduledTaskTrigger -AtLogOn
+> Register-ScheduledTask -TaskName "ClassShout 教室端" -Action $action -Trigger $trigger `
+>   -RunLevel Highest -Description "课堂喊话教室端"
+> ```
+>
+> 用计划任务时请把界面上的「开机自启」保持关闭，否则会同时被拉起两次
+> （单实例机制会拦住第二个，但没必要制造这次冲突）。
 
 ### 3.5 第三步：部署教师端
 
@@ -551,7 +579,7 @@ cat /opt/classshout/relay-config.json
 | 教室端收不到跨网喊话 | 教室端界面是否显示「已连接服务器」；服务器上该教室的「最后在线」是否是刚刚 |
 | 老师能连上但一喊话就断 | 反代的 `proxy_read_timeout` 是否够长（见 3.6） |
 | WebUI 打不开 | 服务器是否在跑；反代是否配好；端口是否放行 |
-| 弹窗被别的窗口盖住 | 把置顶档位调到「UIA 置顶（强制）」；注意它仍盖不住开始菜单、任务管理器这类更高窗口段的系统窗口（原因见「七、屏幕弹窗」） |
+| 弹窗被别的窗口盖住 | 把置顶档位调到「强制置顶（周期性重申）」；注意它仍盖不住开始菜单、任务管理器这类更高窗口段的系统窗口（原因见「七、屏幕弹窗」） |
 | 中文显示成方块（Android） | 已知问题的修复已包含在代码里；若自行改过设计系统，见「踩过的坑：Android 上非 Normal 字重的中文会变方块」 |
 
 还有一条通用手段：教师端「设备」页有**运行日志**，教室端右下角也有，
@@ -849,26 +877,36 @@ dotnet run --project src\ClassShout.RelayServer -- --urls "http://0.0.0.0:8080"
   提示不该把当前窗口顶下去；
 - **不进 Alt+Tab**（`WS_EX_TOOLWINDOW`）：它是通知，不是一个应用窗口。
 
-### 三档置顶强度
+### 置顶强度
 
 | 档位 | 行为 |
 |---|---|
 | 不置顶 | 普通窗口。别的窗口被激活后会被盖住 |
 | 普通置顶 | 设置系统置顶。若别的程序也抢置顶，可能被压下去 |
-| UIA 置顶（强制） | 在系统置顶之上周期性重申（每秒一次），能抢过多数置顶窗口 |
+| 强制置顶（周期性重申） | 在系统置顶之上周期性重申（每秒一次），能抢过多数置顶窗口 |
+| ~~UIA 置顶~~ | **暂不可用**，界面上列出来但置灰 —— 原因见下 |
 
 下图是实测：把教室端窗口移到弹窗所在位置，弹窗仍稳定压在最上层。
 
 ![弹窗覆盖在教室端窗口之上](docs/images/notification-topmost.png)
 
-**关于"UIA 置顶"这个说法的边界**：Windows 存在"窗口段"机制，普通置顶窗口盖不住
+**为什么「UIA 置顶」置灰而不是直接删掉**：Windows 存在"窗口段"机制，普通置顶窗口盖不住
 更高窗口段的东西（开始菜单、任务管理器、通知中心等）。要盖住它们必须持有
 **UIAccess 令牌**，而 Windows 要求 UIAccess 程序**必须数字签名且安装在安全目录**
 （如 `Program Files`），否则清单里的 `uiAccess="true"` 会让程序直接无法启动。
 
-因此未签名的便携版本做不到真正的 UIA 置顶，当前实现的是"周期性重申置顶"这一档。
-如果后续要对 exe 签名并安装到安全目录，在 `app.manifest` 里加上
-`<requestedExecutionLevel level="asInvoker" uiAccess="true"/>` 即可获得完整能力。
+未签名的便携版本做不到这一层。把这一项列出来并写明"暂不可用"，比藏起来更好 ——
+它说明白了这个能力不是漏做，而是有前置条件。如果后续给 exe 签名并安装到安全目录，
+在 `app.manifest` 里加上 `<requestedExecutionLevel level="asInvoker" uiAccess="true"/>`
+即可获得完整能力，届时把这一项放开即可。
+
+> 顺带一提：这一档原本叫「UIA 置顶（强制）」，但它实际做的是周期性重申置顶，
+> 并不是 UIAccess —— 名字承诺了做不到的事。现在改名为「强制置顶（周期性重申）」，
+> 说清它到底做了什么。
+>
+> 置灰必须落在**容器**上（`ComboBoxItem.IsEnabled`），只在数据模板里把文字调暗
+> 只是看起来灰、照样能选中。DesignPreview 里有一条断言逐项核对
+> "不可用的项确实禁用、可用的项确实可用"，因为截图分辨不出这两种状态。
 
 ---
 
@@ -967,28 +1005,56 @@ Fluent 底座负责 Md3 没有重做的控件（下拉框、滚动条、弹窗�
 另把 Avalonia 的 `SystemAccentColor` 对齐到 MD3 主色，因此滑块、开关、下拉框、
 滚动条这些没有重做模板的控件也会呈现 MD3 配色，而不是系统默认的蓝色。
 
-### 换主题色
+### 个性化：换主题色
 
-不需要改设计系统。在应用的 `Application.Resources` 里用同名 key 覆盖即可：
+**给老师与教室用的方式**：两端设置里的「个性化」区块。点一个色卡，或填一个 `#RRGGBB`，
+整套配色立刻跟着变；设置只写在本机（`appearance.json`），与账号、服务器地址互不影响。
 
-```xml
-<Application.Resources>
-  <ResourceDictionary>
-    <ResourceDictionary.ThemeDictionaries>
-      <ResourceDictionary x:Key="Light">
-        <SolidColorBrush x:Key="Md3.Primary" Color="#00696D" />
-        <SolidColorBrush x:Key="Md3.OnPrimary" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="Md3.PrimaryContainer" Color="#6FF6FC" />
-        <SolidColorBrush x:Key="Md3.OnPrimaryContainer" Color="#002021" />
-      </ResourceDictionary>
-      <ResourceDictionary x:Key="Dark"> <!-- 同理给一套暗色值 --> </ResourceDictionary>
-    </ResourceDictionary.ThemeDictionaries>
-  </ResourceDictionary>
-</Application.Resources>
-```
+配色不是手调的，而是把选定的种子色交给 Google **material-color-utilities**
+（Material You 自己那套算法）算出来的：种子色先进 HCT 色彩空间，再由各色调色板按 MD3
+规范取音调，展开成全部 48 个色角色以及 Avalonia 的强调色。这样**任意颜色都不会出现
+对比度不够** —— 自检里拿 14 个种子（含纯黑、纯白、纯红、纯蓝这些极端值）
+× 亮暗两套 × 10 对成对角色验过，最低 5.51:1，而门槛是 4.5:1。
 
-应用层资源查找优先级更高，会自动生效。完整色角色清单见
-`src/ClassShout.Design/Themes/Tokens/Color.axaml`。
+没选颜色时用的是**手工基线配色**（种子 `#6750A4`，数值取自 Material Theme Builder），
+而不是把同一个种子算一遍 —— 两者并不完全相等（算法会把彩度规整到风格允许的范围）。
+默认走手工基线，好处是设计稿与实现逐像素可校验，DesignPreview 就是靠这一点做回归的。
+
+**开发时写死一个新默认色**：在 `Application.Resources` 里用同名 key 覆盖即可，
+完整色角色清单见 `src/ClassShout.Design/Themes/Tokens/Color.axaml`。
+
+> **一个静默失效的坑**：`FontFamily` 里**不能**把 avares 家族名与逗号分隔的系统中文字体链
+> 写在同一串里。那样 Avalonia 会把整串当成一个"字体源"（解析结果形如 `compositefont:…#…`），
+> 链首的内置字体和后面的兜底**全都不生效**，界面悄悄退回平台默认字体 ——
+> 中文照样显示，只是不是你要的那个字体。DesignPreview 里的字体断言专门盯着这件事。
+
+### 内置字体：HarmonyOS Sans SC
+
+Regular + Medium 两个字重随程序集分发（`src/ClassShout.Design/Assets/Fonts/`），
+于是三端中文观感一致，也不再依赖目标机装没装中文字体。
+
+只带两个字重是有意的：设计系统只用到 Normal 与 Medium（`Md3.Weight.Emphasis`），
+多带一个 Bold 要多 8 MB，而收益只是唯一一处诊断页的标题。
+
+体积代价是实打实的（原因见下面的许可约束）：
+
+| 产物 | 之前 | 现在 |
+|---|---|---|
+| 教室端 exe | 61.0 MB | 71.7 MB |
+| 教师端 APK | 63.5 MB | 84.4 MB |
+| 中继服务器 | 48.1 MB | 48.1 MB（不受影响，它不引用设计系统） |
+
+**许可**：HarmonyOS Sans 由华为以《HarmonyOS Sans 字体许可协议》发布，允许原样嵌入、
+捆绑、随软件分发，免费商用；但有四条约束，本项目逐条遵守：
+
+| 协议约束 | 本项目的做法 |
+|---|---|
+| 须在软件内显著声明使用了 HarmonyOS Sans | 两端「个性化」区块里的字体声明行 |
+| **不得修改字体或其任何组件** | 不做子集化、不转换格式 —— 体积只能靠打包压缩消化 |
+| 不得把字体本身单独再分发或售卖 | 只随程序集 / 安装包一并提供 |
+| 须随字体保留版权声明与协议原文 | `Assets/Fonts/LICENSE.txt`，与字体同目录并打进程序集 |
+
+协议原文见 [`src/ClassShout.Design/Assets/Fonts/LICENSE.txt`](src/ClassShout.Design/Assets/Fonts/LICENSE.txt)。
 
 ### 应用图标
 
@@ -1007,44 +1073,67 @@ dotnet run --project tools\ClassShout.IconGen -- .
 改配色或换图形只需改 `Program.cs` 里的两个常量，重新生成即可保持全部尺寸一致。
 ### 踩过的坑：Android 上非 Normal 字重的中文会变方块
 
-**现象**：教师端在 Android 真机上，部分中文显示成方块（tofu），而同一行里的
-拉丁字母正常、其他中文也正常。
+**现象**：教师端在 Android 上，部分中文显示成方块（tofu），而同一行里的拉丁字母正常、
+其他中文也正常。
 
-**定位过程**：在 Android 16 / x86_64 模拟器上做对照实验 ——
-5 种字体链 × 4 档字重排成矩阵渲染，结论非常干净：
+**第一轮定位（结论对了一半）**：在 Android 16 / x86_64 模拟器上把
+5 种字体链 × 4 档字重排成矩阵渲染，结论很干净：
 
-- **字体族完全无关**：不指定字体族、只写 `Noto Sans CJK SC`、只写 `sans-serif`、
-  只写 `Roboto`，表现一模一样；
 - **字重是决定因素**：`Normal` 下中文全部正常，`Medium` / `SemiBold` / `Bold`
   下中文全部变方块，而拉丁字母始终正常；
-- 模拟器上系统只有 `NotoSansCJK-Regular.ttc` —— **只有 Regular 一档**。
+- 模拟器上系统只有 `NotoSansCJK-Regular.ttc` —— **只有 Regular 一档**；
+- 于是判定：Avalonia 在 Android 上的逐字字形回退只覆盖 `Normal` 字重，
+  非 Normal 时解析到的系统字体没有中文字形，回退又不生效。
+  当时的结论是"**换字体族解决不了**"，只能把强调字重降为 `Normal`。
 
-所以根因是：Android 上 Avalonia 的逐字字形回退只覆盖 `Normal` 字重，
-非 Normal 时解析到的字体没有中文字形，回退又不生效。换字体族解决不了。
+**这个结论是错的，而且错了很久**。矩阵里"字体族完全无关"那一半，
+真正的解释不是"换族没用"，而是**那个字体链压根就没生效过**：
 
-修复前后（Android 16 模拟器实拍）：
+1. `Md3.FontFamily` 一开始挂在 `Style Selector="Window"` 上，
+   而 Android 上根本没有 `Window`（用的是 `ISingleViewApplicationLifetime`）；
+2. 后来改成 `Selector="TopLevel"`，看着对了，其实仍然不生效 ——
+   Avalonia 里裸类型选择器是**精确类型匹配**，`TopLevel` 不匹配 `Window` 这类派生类型，
+   要用 `:is(TopLevel)`。
+3. 症状极具迷惑性：全局字体、`Background`、`Foreground` 三条默认从未应用，
+   但每个视图都自己写了 `Background`，所以界面看起来一切正常，
+   只有字体静默退回平台默认值 —— 而"换字体链没区别"恰恰就是没生效的表现。
 
-| 修复前 | 修复后 |
-|---|---|
-| ![修复前](docs/images/android-font-before.png) | ![修复后](docs/images/android-font-after.png) |
+第三轮才抓准：DesignPreview 里加了一条断言，直接问字体管理器
+"请求这一档字重，你实际给的是哪个家族的哪个字重"，并在探针窗口上读
+`Background` 是否为 `Md3.Surface`。断言立刻报出 `Segoe UI Variable Text` +
+`#F3F3F3`（Fluent 的默认底色），于是定位到选择器。
 
-**修复**：把 MD3 的强调字重做成资源 `Md3.Weight.Emphasis`，
-Android 头在创建视图前把它覆盖为 `Normal`（见 `Md3Typography.ApplyPlatformDefaults`）。
-Windows 保持 `Medium`，MD3 的层次感不受影响。
+**修复与复测**（2026-09，Android 16 / x86_64 模拟器，同一个 AVD）：
 
-**顺带修掉的两个问题**：
+| 字体链 | Normal | Medium | SemiBold | Bold |
+|---|---|---|---|---|
+| 内置 HarmonyOS Sans SC | 正常 | 正常 | 正常 | 正常 |
+| 设计系统令牌（即内置字体） | 正常 | 正常 | 正常 | 正常 |
+| 对照：只写 `sans-serif` | 正常 | **方块** | **方块** | **方块** |
 
-1. `Md3.FontFamily` 原本挂在 `Style Selector="Window"` 上 ——
-   而 Android 上根本没有 `Window`（用的是 `ISingleViewApplicationLifetime`），
-   字体链在 Android 上从未生效过。改为 `TopLevel`（`Window` 与 Android 宿主视图的共同基类）。
-2. 曾尝试用 `{OnPlatform Default=Medium, Android=Normal}` 做平台条件，
-   但平台条件语法写在 `Setter` 的 `Value` 里只会得到一个字符串，
-   不会转换成 `FontWeight`，运行时直接抛 `InvalidCastException` 把应用搞崩。
-   资源 + 运行时覆盖才是可行路径。
+![Android 字体矩阵](docs/images/android-font-matrix.png)
+
+也就是说：内置字体**自带全部中文字形，根本不走逐字回退那一步**，
+于是那条平台限制整个失效了。因此 Android 上"把强调字重降为 `Normal`"的变通
+（`Md3Typography.ApplyPlatformDefaults`）已随之**删除** —— 留着它只会让
+Android 平白少一档层次，而 Windows 又有，两端反而不一致。
+
+> 教训：一个"改了没反应"的实验，先怀疑实验本身有没有生效，再下结论。
+> 这次正是因为把"没区别"当成了"无关"，才把一个平台限制写进了文档并沿用很久。
 
 排查工具保留在 `src/ClassShout.Teacher/Diagnostics/FontDiagnostics.axaml`：
 把 `App.ShowFontDiagnostics` 改成 `true` 重新打包，应用启动后会直接进入字重矩阵页 ——
-真机上一眼就能看出哪些组合可用，不必靠"改代码、打包、安装、截图"反复试。
+真机上一眼就能看出哪些组合可用。该页的「设计系统当前字体链」一行
+**直接读令牌值**而不是抄一份写死，否则它会测一条已经不存在的字体链、
+一边报"正常"一边与真实界面无关。
+
+### Android 上实测个性化
+
+![Android 个性化](docs/images/android-appearance.png)
+
+换色在 Android 上实测通过：点色卡后整套配色实时重算（顶栏图标、导航胶囊、按钮一起变），
+设置写入本机，强停进程重启后仍是所选配色。窄屏（320 dp）下输入行会换行 ——
+早先是横向 `StackPanel`，「恢复默认」按钮被右侧直接裁掉，既看不出也点不到。
 
 ---
 
@@ -1172,14 +1261,19 @@ dotnet run --project tools\ClassShout.DesignPreview -- artifacts
    若要上架 Google Play（2025 年 11 月起对 targetSdk 35+ 强制要求），
    需整体升级到 Avalonia 12.1.x + FluentAvalonia 3.1.0，那套用 SkiaSharp 3.119.x。
 
-2. **APK 体积约 63 MB**（arm64 + x64 两个 ABI）
-   体积大头是 `libassembly-store.so`（约 29 MB），即托管程序集被打包成原生库 —— 根源是
-   关闭了裁剪以保证 Avalonia 的 XAML 反射解析不出问题。
+2. **APK 体积约 84 MB**（arm64 + x64 两个 ABI）
+   体积由两块构成：内置字体约 17 MB（两个字重），以及 `libassembly-store.so` ——
+   托管程序集被打包成原生库，根源是关闭了裁剪以保证 Avalonia 的 XAML 反射解析不出问题。
+   字体这块**没法靠子集化削减**：HarmonyOS Sans 许可明确禁止修改字体或其组件，
+   而子集化就是一种修改。要缩小只能减少字重（每个约 8 MB）。
+
    几个可选方向：
-   - 只保留 `android-arm64`：约 32 MB（改 `RuntimeIdentifiers` 即可）
+   - 只保留 `android-arm64`：约 40 MB（改 `RuntimeIdentifiers` 即可）
    - 改用 `AndroidLinkMode=SdkOnly`：只裁剪 BCL，保留 Avalonia 与业务程序集，
      风险可控，但**必须在真机上实测**后再上线
    - 发布到 Google Play 时用 AAB 格式，商店会按设备 ABI 自动拆分
+
+   Windows 教室端同样受影响：61.0 → 71.7 MB。中继服务器不受影响（它不引用设计系统）。
 
 3. **局域网链路的音频未加密**
    同网段直连是"有连接即接受"，没有配对码。校园内网可以接受，
