@@ -244,6 +244,65 @@ internal static class Program
     private const string CustomSeed = "#3F51B5";
 
     /// <summary>
+    /// 教室端顶栏那个连接状态 chip。
+    ///
+    /// 锁的是"界面在说谎"这件事：它原本只数局域网 TCP 会话，
+    /// 于是教室端正通过中继收着喊话、chip 上却写着"未连接"。
+    /// 局域网那一路要有真实会话才能构造，这里验的是能构造出来的几种组合 ——
+    /// 也就是被报出来的那一种（已连服务器却显示未连接）。
+    /// </summary>
+    private static bool VerifyClassroomLinkChip()
+    {
+        Console.WriteLine("教室端顶栏连接状态 chip：");
+
+        var passed = true;
+
+        void Check(string label, bool ok, string detail)
+        {
+            passed &= ok;
+            Console.WriteLine($"  [{(ok ? "通过" : "失败")}] {label} —— {detail}");
+        }
+
+        var vm = new ClassroomViewModel();
+
+        Check("什么都没有时显示未连接", vm.TeacherCountText == "未连接", vm.TeacherCountText);
+        Check("什么都没有时引导语同时提到两条路",
+            vm.IdleHint.Contains("中继服务器", StringComparison.Ordinal),
+            vm.IdleHint);
+
+        var notified = false;
+        var hintNotified = false;
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ClassroomViewModel.TeacherCountText))
+            {
+                notified = true;
+            }
+
+            if (e.PropertyName == nameof(ClassroomViewModel.IdleHint))
+            {
+                hintNotified = true;
+            }
+        };
+
+        vm.IsRelayConnected = true;
+
+        Check("连上服务器后不再说未连接",
+            vm.TeacherCountText == "已连服务器",
+            vm.TeacherCountText);
+        Check("状态变化会通知界面重画（否则要等下一次别的刷新才更新）", notified, $"收到通知={notified}");
+        Check("引导语换成服务器口径，不再教同一局域网",
+            !vm.IdleHint.Contains("同一局域网时", StringComparison.Ordinal) && hintNotified,
+            $"{vm.IdleHint}（引导语收到通知={hintNotified}）");
+
+        vm.IsRelayConnected = false;
+        Check("断开后回到未连接", vm.TeacherCountText == "未连接", vm.TeacherCountText);
+
+        Console.WriteLine();
+        return passed;
+    }
+
+    /// <summary>
     /// 教师端"服务器地址"这条配置的断言。
     ///
     /// 锁的是一个具体的死锁：服务器地址原本和「教室 UUID / 口令」挤在同一张卡里，
@@ -284,6 +343,11 @@ internal static class Program
 
             Check("新装机器上默认未配置", !vm.IsServerConfigured, vm.ServerAddressStatus);
 
+            // 空地址时按钮应当是禁用的（否则点下去只会得到一个错误提示）
+            Check("地址为空时两个按钮都不可点",
+                !vm.SaveServerAddressCommand.CanExecute(null) && !vm.TestServerCommand.CanExecute(null),
+                $"保存={vm.SaveServerAddressCommand.CanExecute(null)} 测试={vm.TestServerCommand.CanExecute(null)}");
+
             // 未配置就去登录：必须指出"该去哪一步"，而不是一句含糊的失败
             vm.LoginAccount = "someone";
             vm.LoginPassword = "whatever";
@@ -317,6 +381,29 @@ internal static class Program
             Check("非法地址被拒且不影响已保存的值",
                 vm.HasServerAddressError && LocalSettings.LoadTeacher().ServerUrl == "https://relay.wrd1145.dev",
                 vm.ServerAddressError ?? "（没有错误信息）");
+
+            // 走一遍"界面上真正会发生的事"：清空再逐字输入。
+            //
+            // 注意这里**不能**只查 CanExecute 的返回值。CanExecute() 是每次现算的，
+            // 就算属性变更时从不发通知，它照样返回 true —— 而按钮的禁用态来自
+            // CanExecuteChanged 事件：不发通知，按钮就一直停在灰的样子。
+            // 用户报的"填了地址按钮还是灰的"正是后者。
+            // 所以真正要验的是"改 ServerUrl 会不会让命令通知界面重新求值"。
+            vm.ServerUrl = string.Empty;
+
+            var saveNotified = false;
+            var testNotified = false;
+            vm.SaveServerAddressCommand.CanExecuteChanged += (_, _) => saveNotified = true;
+            vm.TestServerCommand.CanExecuteChanged += (_, _) => testNotified = true;
+
+            vm.ServerUrl = "10.0.0.5:8080";
+
+            Check("输入地址会通知按钮重新求值（漏了这条，按钮就永远是灰的）",
+                saveNotified && testNotified,
+                $"保存={saveNotified} 测试={testNotified}");
+            Check("此刻两个按钮确实可点",
+                vm.SaveServerAddressCommand.CanExecute(null) && vm.TestServerCommand.CanExecute(null),
+                $"保存={vm.SaveServerAddressCommand.CanExecute(null)} 测试={vm.TestServerCommand.CanExecute(null)}");
         }
         catch (Exception ex)
         {
@@ -570,6 +657,9 @@ internal static class Program
         // 教师端服务器地址这条配置的逻辑（原本存在一条死锁）
         var serverAddressPassed = VerifyServerAddressFlow();
 
+        // 教室端顶栏 chip 的状态（原本在服务器链路下恒为"未连接"）
+        var linkChipPassed = VerifyClassroomLinkChip();
+
         var scenes = new Scene[]
         {
             new("design-system",
@@ -706,7 +796,7 @@ internal static class Program
                 }),
         };
 
-        var allPassed = fontsPassed && palettePassed && pickerPassed && serverAddressPassed;
+        var allPassed = fontsPassed && palettePassed && pickerPassed && serverAddressPassed && linkChipPassed;
         var written = new List<string>();
         foreach (var scene in scenes)
         {

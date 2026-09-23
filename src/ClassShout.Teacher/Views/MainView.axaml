@@ -370,12 +370,15 @@
                          Watermark="https://relay.example.com 或 http://192.168.1.10:8080"
                          Text="{Binding ServerUrl}" />
 
+                <!--
+                  刻意不写 IsEnabled：按钮的可用性由命令的 CanExecute 决定（含"输入为空"与"正在执行"两种）。
+                  再写一条 IsEnabled 绑定等于给同一件事设两个来源，两个都得为真按钮才亮 ——
+                  排查起来会以为是绑定的问题，实际是命令那道闸门。
+                -->
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                   <Button Grid.Column="0" Classes="block" Content="保存地址"
-                          IsEnabled="{Binding !IsServerAddressBusy}"
                           Command="{Binding SaveServerAddressCommand}" />
                   <Button Grid.Column="1" Classes="outlined block" Content="测试连接"
-                          IsEnabled="{Binding !IsServerAddressBusy}"
                           Command="{Binding TestServerCommand}" />
                 </Grid>
 

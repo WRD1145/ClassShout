@@ -54,7 +54,7 @@
 
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
 
-          <Border Classes="chip">
+          <Border Classes="chip" ToolTip.Tip="{Binding TeacherCountHint}">
             <StackPanel Orientation="Horizontal" Spacing="8">
               <md3:Md3Icon Kind="Wifi" Size="16" Classes="secondary" />
               <TextBlock Classes="labelLarge" Text="{Binding TeacherCountText}" />

@@ -820,8 +820,16 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     /// 而绑定又要求先登录、登录读的却正是那个还没落地的值 ——
     /// 新装的机器上形成死锁：登录提示"请先填写服务器地址"（尽管框里刚填了），
     /// 而让地址生效的唯一按钮永远点不亮。
+    ///
+    /// 另注：属性上那两个 NotifyCanExecuteChangedFor 不能省。
+    /// "填了地址按钮还是灰的"就是这么来的 —— 少了它们，输入时两个命令的 CanExecute
+    /// 从不重算，按钮永远停在禁用态，而功能本身其实是好的。
+    /// 教训记在这里：断言必须走 CanExecute，直接调 ExecuteAsync 会绕过这道闸门
+    /// （DesignPreview 里的 VerifyServerAddressFlow 现在两条都验）。
     /// </summary>
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SaveServerAddressCommand))]
+    [NotifyCanExecuteChangedFor(nameof(TestServerCommand))]
     private string _serverUrl = string.Empty;
 
     /// <summary>

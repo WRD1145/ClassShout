@@ -257,10 +257,27 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         _ => "等待教师端连接",
     };
 
-    /// <summary>待机时的引导语。</summary>
-    public string IdleHint => Teachers.Count == 0
-        ? "教师端与本机处于同一局域网时，打开应用即可自动搜索到本教室"
-        : "教师端已连接，随时可以开始喊话";
+    /// <summary>
+    /// 待机时的引导语。
+    ///
+    /// 已经把服务器接上时就不要再教"同一局域网"了 —— 那样等于对着一个已经能跨网接收的教室
+    /// 说它只能收同网段的喊话，值班老师会照着这句话去排查一个根本不存在的问题。
+    /// </summary>
+    public string IdleHint
+    {
+        get
+        {
+            if (Teachers.Count > 0)
+            {
+                return "教师端已连接，随时可以开始喊话";
+            }
+
+            return IsRelayConnected
+                ? "已接上中继服务器，不在同一网络的老师也能喊到本教室"
+                : "教师端与本机处于同一局域网时，打开应用即可自动搜索到本教室；"
+                  + "跨网络使用需在设置里接上中继服务器";
+        }
+    }
 
     /// <summary>系统语音的可选列表（SAPI）。</summary>
     public ObservableCollection<string> Voices { get; } = [];
@@ -390,7 +407,40 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     public bool HasTeachers => Teachers.Count > 0;
 
-    public string TeacherCountText => Teachers.Count == 0 ? "未连接" : $"{Teachers.Count} 个教师端在线";
+    /// <summary>
+    /// 顶栏那个连接状态 chip 的文字。
+    ///
+    /// 它原本只数局域网 TCP 会话，于是**只要走服务器链路就永远显示"未连接"** ——
+    /// 哪怕教室端正通过中继收着喊话。这属于界面在说谎，比不显示更糟。
+    /// 现在把两条链路的已知状态都说出来，并且不假装知道不知道的事：
+    /// 局域网会话是教室端亲自握过手的，可以数；而"有没有老师绑在这台服务器上"
+    /// 服务器目前不通知教室端，所以这里只说"已连服务器"，不编造人数。
+    /// </summary>
+    public string TeacherCountText
+    {
+        get
+        {
+            var lan = Teachers.Count;
+            var parts = new List<string>(2);
+
+            if (lan > 0)
+            {
+                parts.Add($"{lan} 个教师端在线");
+            }
+
+            if (IsRelayConnected)
+            {
+                parts.Add("已连服务器");
+            }
+
+            return parts.Count == 0 ? "未连接" : string.Join(" · ", parts);
+        }
+    }
+
+    /// <summary>chip 的悬停说明，把"这两个词各代表什么"讲清楚。</summary>
+    public string TeacherCountHint =>
+        "局域网直连的教师端数量，以及本教室是否已接上中继服务器。"
+        + "「已连服务器」表示跨局域网那条路已经通了，可以接收不在同一网络的老师发来的喊话。";
 
     /// <summary>仅在播放语音时才刷新波形，避免待机时白白重绘。</summary>
     public bool ShouldMeterAudio => Stage == ClassroomStage.PlayingAudio;
@@ -1036,6 +1086,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RelayStatusText))]
+
+    // 顶栏 chip 也要跟着变 —— 否则连上服务器之后，那个 chip 仍然显示"未连接"
+    [NotifyPropertyChangedFor(nameof(TeacherCountText))]
+
+    // 待机引导语同理：接上服务器之后它不该还在教"同一局域网"
+    [NotifyPropertyChangedFor(nameof(IdleHint))]
     [NotifyCanExecuteChangedFor(nameof(ConnectRelayCommand))]
     [NotifyCanExecuteChangedFor(nameof(DisconnectRelayCommand))]
     private bool _isRelayConnected;
