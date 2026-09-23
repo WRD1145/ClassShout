@@ -8,7 +8,9 @@
       dist\windows\ClassShout.Teacher.Desktop.exe 教师端桌面头（同上）
       dist\android\classshout-teacher-<版本>-universal.apk   含 arm64 + x64
 
-    另外生成 dist\SHA256SUMS.txt 便于校验分发完整性。
+    另外生成 dist\release\ —— 按「最终附件名」摆好的可发布资产目录，内含 SHA256SUMS.txt。
+    发布脚本（scripts\release.ps1）只需把这个目录里的东西全传上去、再逐个核对，
+    不必再靠记忆去拼"哪个文件叫什么名字"。
 
 .PARAMETER FrameworkDependent
     改为依赖框架发布，体积从约 60 MB 降到约 15 MB，但目标机必须已安装 .NET 10 运行时。
@@ -258,17 +260,59 @@ try {
         Write-Host '[Android] 已跳过' -ForegroundColor DarkGray
     }
 
+    # ---------- 组装可分发的资产目录 ----------
+    #
+    # 这一步是被一次真实事故逼出来的：v1.1.0 的发行版建好了、说明也写全了，
+    # 附件却一个都没传上去，而且没人发现 —— 因为"哪个文件该以什么名字上传"
+    # 只存在于当时敲的那条命令里，不在仓库的任何地方。
+    #
+    # 现在把它固化成下面这张表：打包时就把资产按最终附件名摆进 dist\release\，
+    # 发布脚本只需"把 dist\release 里的东西全传上去，再逐个核对"。
+    $releaseOut = Join-Path $OutputRoot 'release'
+    New-Item -ItemType Directory -Force -Path $releaseOut | Out-Null
+
+    # 附件名一经发布就不要再改：README、历史发行版、别人的脚本都按它引用。
+    $assetMap = @(
+        @{ Source = (Join-Path $windowsOut 'ClassShout.Classroom.exe');           Asset = 'ClassShout.Classroom.exe' }
+        @{ Source = (Join-Path $windowsOut 'ClassShout.Teacher.Desktop.exe');     Asset = 'ClassShout.Teacher.Desktop.exe' }
+        @{ Source = (Join-Path $windowsOut 'server\ClassShout.RelayServer.exe');  Asset = 'ClassShout.RelayServer-win-x64.exe' }
+    )
+
+    if ($IncludeLinuxServer) {
+        $assetMap += @{ Source = (Join-Path $OutputRoot 'linux\ClassShout.RelayServer'); Asset = 'ClassShout.RelayServer-linux-x64' }
+        $assetMap += @{ Source = (Join-Path $OutputRoot 'linux\ClassShout.Classroom');   Asset = 'ClassShout.Classroom-linux-x64' }
+    }
+
+    # APK 的文件名本来就是最终附件名（含版本号），直接沿用
+    Get-ChildItem $androidOut -Filter '*.apk' -ErrorAction SilentlyContinue | ForEach-Object {
+        $assetMap += @{ Source = $_.FullName; Asset = $_.Name }
+    }
+
+    foreach ($item in $assetMap) {
+        if (-not (Test-Path $item.Source)) {
+            throw "缺少产物：$($item.Source) —— 打包没有真正完成"
+        }
+        Copy-Item $item.Source (Join-Path $releaseOut $item.Asset) -Force
+    }
+
     # ---------- 校验清单 ----------
-    Write-Host ''
-    $manifestPath = Join-Path $OutputRoot 'SHA256SUMS.txt'
-    Get-ChildItem $OutputRoot -Recurse -File |
+    #
+    # 名字用附件名、行格式用 sha256sum 能直接吃的「哈希 + 两空格 + 文件名」。
+    # 早先这里写的是构建目录里的相对路径（Windows 下还带反斜杠），
+    # 下载的人拿它跟手里的附件名对不上号，等于没有清单。
+    $manifestPath = Join-Path $releaseOut 'SHA256SUMS.txt'
+    Get-ChildItem $releaseOut -File |
         Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
+        Sort-Object Name |
         ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
-            $relative = $_.FullName.Substring((Resolve-Path $OutputRoot).Path.Length + 1)
-            "$hash  $relative"
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
         } | Set-Content $manifestPath -Encoding UTF8
 
+    Write-Host ''
+    Write-Host '可发布资产（dist\release，附件名即文件名）：' -ForegroundColor Green
+    Get-ChildItem $releaseOut -File | Sort-Object Name | ForEach-Object {
+        Write-Host ("    {0,-46} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB))
+    }
     Write-Host "校验清单：$manifestPath" -ForegroundColor Green
     Write-Host ''
     Write-Host ('=' * 66)
