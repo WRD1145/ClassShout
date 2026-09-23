@@ -922,6 +922,26 @@ dotnet run --project src\ClassShout.RelayServer -- --urls "http://0.0.0.0:8080"
   提示不该把当前窗口顶下去；
 - **不进 Alt+Tab**（`WS_EX_TOOLWINDOW`）：它是通知，不是一个应用窗口。
 
+### 提示方式：也可以显示到 ClassIsland
+
+教室那台电脑上往往还挂着 [ClassIsland](https://github.com/ClassIsland/ClassIsland)（课表 / 打铃），
+学生一整天看的都是它。所以「设置 → 喊话弹窗 → 提示方式」给了三个选择：
+
+| 选项 | 行为 |
+|---|---|
+| 只看 ClassShout 弹窗（默认） | 就是下面描述的那套弹窗 |
+| 只看 ClassIsland 提醒 | 交给 ClassIsland 显示，走它自己的提醒通道（遮罩 / 音效 / 朗读都跟着它的设置走） |
+| 两处都显示 | 两条通道各显示一份 |
+
+ClassIsland 那一侧需要一个联动插件，**单独一个仓库**：
+[WRD1145/ClassShoutCiPlugin](https://github.com/WRD1145/ClassShoutCiPlugin)（MIT）。
+它要求 ClassIsland **2.1.1.1 或更高**。
+
+投递走本机回环地址 `127.0.0.1:45902`，只绑回环 —— 同网段其它机器连不上。
+插件没装、ClassIsland 没运行时投递会失败，但**不影响喊话本身**：
+教室端日志只在头几次和每 20 次记一条，免得刷屏把真正的异常埋掉。
+选了带 ClassIsland 的方式却没装插件时，「提示方式」下面会把这一点直接写出来。
+
 ### 置顶强度
 
 | 档位 | 行为 |
