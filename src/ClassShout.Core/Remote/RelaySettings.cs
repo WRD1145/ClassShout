@@ -172,4 +172,8 @@ public static class LocalSettings
     public static SttSettings LoadStt() => Load("teacher-stt.json", static () => new SttSettings());
 
     public static bool SaveStt(SttSettings settings) => Save("teacher-stt.json", settings);
+
+    public static AppearanceSettings LoadAppearance() => Load("appearance.json", static () => new AppearanceSettings());
+
+    public static bool SaveAppearance(AppearanceSettings settings) => Save("appearance.json", settings);
 }

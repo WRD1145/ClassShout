@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using ClassShout.Core.Remote;
 using ClassShout.Teacher.ViewModels;
 using ClassShout.Teacher.Views;
 
@@ -27,8 +28,9 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        // 必须在创建视图之前：控件主题靠 DynamicResource 读这个值，晚了就缓存成旧值了
-        ClassShout.Design.Md3Typography.ApplyPlatformDefaults(this);
+        // 恢复用户选过的主题色（个性化）。必须在创建视图之前：
+        // 控件主题靠 DynamicResource 读这些色角色，晚了就缓存成旧配色了。
+        ClassShout.Design.Theming.Md3Appearance.Apply(this, LocalSettings.LoadAppearance().SeedColor);
 
         _viewModel = new TeacherShellViewModel();
 

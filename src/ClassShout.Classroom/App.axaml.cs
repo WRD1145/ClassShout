@@ -4,6 +4,7 @@ using Avalonia.Markup.Xaml;
 using ClassShout.Classroom.Services;
 using ClassShout.Classroom.ViewModels;
 using ClassShout.Classroom.Views;
+using ClassShout.Core.Remote;
 
 namespace ClassShout.Classroom;
 
@@ -17,8 +18,10 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        // 与教师端保持一致；教室端目前只跑在 Windows 上，这里调用是无副作用的
-        ClassShout.Design.Md3Typography.ApplyPlatformDefaults(this);
+        // 恢复用户选过的主题色。必须早于任何窗口的创建：
+        // 换色是往 Application.Resources 里换一块资源字典，而控件一旦构造完就把
+        // 一部分颜色值缓存下来了；能提前就提前，免得界面出现"一半新一半旧"。
+        ClassShout.Design.Theming.Md3Appearance.Apply(this, LocalSettings.LoadAppearance().SeedColor);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

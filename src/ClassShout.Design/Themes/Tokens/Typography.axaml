@@ -11,35 +11,38 @@
   <Styles.Resources>
     <ResourceDictionary>
       <!--
-        字体族：候选顺序会影响中文观感，但**不是**"中文变方块"的成因（见下）。
+        字体族：只用随程序集分发的 HarmonyOS Sans SC。
 
-        在 Android 模拟器（Android 16 / x86_64，系统仅有 NotoSansCJK-Regular.ttc）上
-        用 5 种字体链 × 4 档字重做过对照实验，结论是：
-          · 不指定字体族、只写 Noto Sans CJK SC、只写 sans-serif、只写 Roboto、
-            以及本文件用的这条链 —— 六种选择的表现**完全一致**；
-          · FontWeight.Normal 下中文全部正常，Medium / SemiBold / Bold 下中文全部变方块，
-            而同一行里的拉丁字母（Abc123）始终正常。
-        也就是说：Android 上 Avalonia 的逐字回退只在 Normal 字重生效，
-        换字体族解决不了，只能从字重入手 —— 见下面各号样式里的 OnPlatform。
+        这里刻意**不**在后面接一串系统中文字体。原因是实测出来的：
+        写成 "avares://…#家族名, 微软雅黑, …" 时 Avalonia 会把整个字符串当成一个
+        「字体源」（解析结果形如 compositefont:…#…），逗号之后的兜底链**根本没生效**，
+        而链首的 avares 家族名也没被拆出来 —— 界面于是退回平台默认字体：
+        中文照样显示、也不报错，只是根本不是我们要的字体。
+        逗号分隔的多家族与 avares 家族不能写在同一个 FontFamily 字符串里。
 
-        这条链仍然值得保留：它让中文优先命中带中文字形的字体，
-        在 Windows 命中微软雅黑、macOS 命中苹方，比让平台随便挑一个要可控。
+        那兜底怎么办？不需要显式兜底：字体本身缺某个字形（生僻字、emoji、部分符号）时，
+        Avalonia 会逐字回退到平台字体，这本来就是它的默认行为。
+        DesignPreview 里的字体断言会验证"实际命中的确实是 HarmonyOS"，
+        防止将来有人再往这个令牌里塞逗号。
       -->
-      <FontFamily x:Key="Md3.FontFamily">Noto Sans CJK SC, Noto Sans SC, Source Han Sans SC, Microsoft YaHei UI, Microsoft YaHei, PingFang SC, Hiragino Sans GB, sans-serif, Roboto</FontFamily>
+      <FontFamily x:Key="Md3.FontFamily">avares://ClassShout.Design/Assets/Fonts#HarmonyOS Sans SC</FontFamily>
 
       <!--
         强调字重：MD3 的 Label / Title / Button 用 Medium 表达层次。
 
-        做成资源而不是写死，是因为 Android 上必须降为 Normal ——
-        实测（Android 16 / x86_64 模拟器）Avalonia 只对 FontWeight.Normal 做中文字形回退，
-        Medium / SemiBold / Bold 下中文一律渲染成方块，而同一行的拉丁字母正常。
-        换字体族解决不了：试过 5 种链（含只写 Noto Sans CJK SC、只写 sans-serif），
-        表现完全一致。
+        这里曾经有一条平台变通：Android 上把它降为 Normal。原因是当时观察到
+        "Android 上 Medium / SemiBold / Bold 的中文全部渲染成方块，只有 Normal 正常"。
+        现在这条变通已删除，因为**根因已经不存在了**：
 
-        Android 头会在启动时把它覆盖为 Normal，见 Md3Typography.ApplyPlatformDefaults。
-        之所以走"运行时覆盖资源"而不是 XAML 里的 {OnPlatform}：
-        平台条件语法放在 Setter 里只会得到字符串，不会转换成 FontWeight，
-        直接抛 InvalidCastException 把应用搞崩（已实测踩过）。
+        那个现象成立的前提是"字形要靠系统字体逐字回退来补"。Avalonia 在 Android 上
+        的逐字回退只在 Normal 字重生效，非 Normal 时解析到的系统字体没有中文字形、
+        回退又不发生，于是出方块。而内置的 HarmonyOS Sans SC 自带全部中文字形，
+        根本不走回退这一步 —— 2026-09 在 Android 16 / x86_64 模拟器上重新实测：
+        内置字体链下 Normal / Medium / SemiBold / Bold 四档中文全部正常，
+        而对照组"只写 sans-serif"依旧在非 Normal 上整片方块，原 bug 精确复现。
+
+        也就是说：内置字体不只是"更好看"，它把这条平台限制整个消掉了，
+        于是 Android 与 Windows 的强调字重终于一致。
       -->
       <FontWeight x:Key="Md3.Weight.Emphasis">Medium</FontWeight>
 

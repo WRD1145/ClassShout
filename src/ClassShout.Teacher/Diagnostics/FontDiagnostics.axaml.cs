@@ -18,14 +18,21 @@ namespace ClassShout.Teacher.Diagnostics;
 /// </summary>
 public partial class FontDiagnostics : UserControl
 {
-    /// <summary>待测的字体链。</summary>
-    private static readonly (string Label, string? Chain)[] Chains =
+    /// <summary>随程序集分发的字体。单独列一行，用来确认它自己是否可用。</summary>
+    public const string BundledFamily = "avares://ClassShout.Design/Assets/Fonts#HarmonyOS Sans SC";
+
+    /// <summary>
+    /// 对照组字体链。
+    ///
+    /// 保留这几条是有来历的：当初为查"Android 上中文变方块"，正是靠它们证明
+    /// **换字体族解决不了**（六种选择表现完全一致），问题出在字重上。
+    /// 留着它们，将来换平台或换 Avalonia 版本时可以原样再跑一遍这个对照。
+    /// </summary>
+    private static readonly (string Label, string? Chain)[] ControlChains =
     [
         ("不指定字体族（平台默认）", null),
-        ("只写 Noto Sans CJK SC", "Noto Sans CJK SC"),
-        ("只写 sans-serif", "sans-serif"),
-        ("只写 Roboto", "Roboto"),
-        ("设计系统当前字体链", "Noto Sans CJK SC, Noto Sans SC, Source Han Sans SC, Microsoft YaHei UI, Microsoft YaHei, PingFang SC, Hiragino Sans GB, sans-serif, Roboto"),
+        ("对照：只写 sans-serif", "sans-serif"),
+        ("对照：只写 Noto Sans CJK SC", "Noto Sans CJK SC"),
     ];
 
     private static readonly FontWeight[] Weights =
@@ -80,7 +87,25 @@ public partial class FontDiagnostics : UserControl
         var mutedBrush = this.FindResource("Md3.OnSurfaceVariant") as IBrush;
         var accentBrush = this.FindResource("Md3.Primary") as IBrush;
 
-        foreach (var (label, chain) in Chains)
+        // 「设计系统当前字体链」直接取令牌本身，而不是把它抄一份写死在上面。
+        //
+        // 抄一份的代价当场就发生了：字体链已改成以内置字体打头，
+        // 而这里还留着旧的那条 —— 诊断页测的于是是一条已经不存在的字体链，
+        // 一边报"一切正常"、一边和真实界面毫无关系。诊断工具必须测真东西。
+        var designFamily = this.FindResource("Md3.FontFamily") as FontFamily;
+
+        var chains = new List<(string Label, FontFamily? Family)>
+        {
+            ("内置字体单独测（HarmonyOS Sans SC）", new FontFamily(BundledFamily)),
+            ($"设计系统当前字体链（令牌值）", designFamily),
+        };
+
+        foreach (var (label, chain) in ControlChains)
+        {
+            chains.Add((label, chain is null ? null : new FontFamily(chain)));
+        }
+
+        foreach (var (label, family) in chains)
         {
             root.Children.Add(new TextBlock
             {
@@ -110,9 +135,10 @@ public partial class FontDiagnostics : UserControl
                     FontWeight = weight,
                 };
 
-                if (chain is not null)
+                // null 表示"不指定"，让文字继承上层字体链（即平台默认那一行）
+                if (family is not null)
                 {
-                    sample.FontFamily = new FontFamily(chain);
+                    sample.FontFamily = family;
                 }
 
                 row.Children.Add(sample);

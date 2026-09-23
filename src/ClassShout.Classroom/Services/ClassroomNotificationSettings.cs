@@ -39,8 +39,31 @@ public enum TopmostMode
 /// <param name="Label">界面显示文本。</param>
 public sealed record CornerOption(NotificationCorner Value, string Label);
 
-/// <inheritdoc cref="CornerOption" />
-public sealed record TopmostOption(TopmostMode Value, string Label);
+/// <summary>
+/// 置顶档位的下拉选项。
+///
+/// 支持"存在但不可选"的档位：真正的 UIAccess 置顶需要程序签名并装在安全目录，
+/// 当前是未签名的便携版本，做不到。与其把它藏起来让用户以为没有，或者让它可选却名不副实，
+/// 不如**照常列出来、置灰、写明暂不可用** —— 这也说明白了这个能力不是漏做，而是有前置条件。
+/// </summary>
+/// <param name="Value">
+/// 实际取值。为 null 表示这一项只是占位、不可选，也就永远不会被写进设置。
+/// </param>
+/// <param name="Label">界面显示文本。</param>
+/// <param name="UnavailableReason">不可用的原因；非 null 即表示该项不可选。</param>
+public sealed record TopmostOption(TopmostMode? Value, string Label, string? UnavailableReason = null)
+{
+    /// <summary>是否可选。</summary>
+    public bool IsAvailable => UnavailableReason is null;
+
+    /// <summary>
+    /// 不可选项的显示透明度。
+    ///
+    /// 做成属性而不是在 XAML 里用转换器：Avalonia 没有内置的 布尔 到 双精度 转换器，
+    /// 为一个置灰效果专门写一个转换器不值得，而绑一个现成的数值最省事。
+    /// </summary>
+    public double Opacity => IsAvailable ? 1.0 : 0.38;
+}
 
 /// <summary>教室端弹窗与显示的配置。</summary>
 public sealed class ClassroomNotificationSettings

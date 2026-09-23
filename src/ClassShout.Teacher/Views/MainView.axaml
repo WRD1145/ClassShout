@@ -616,6 +616,15 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!--
+              个性化：换主题色。与教室端共用同一个控件，
+              持久化由本视图的代码后置负责（控件只抛选择结果）。
+            -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <!-- 名字不叫 Theme：Avalonia 的 StyledElement.Theme 会与 x:Name 撞名 -->
+              <md3:ThemePicker x:Name="Appearance" />
+            </md3:Md3Card>
+
           </StackPanel>
         </ScrollViewer>
 

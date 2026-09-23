@@ -175,6 +175,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         NotificationDuration = _notificationSettings.DurationSeconds;
         SelectedCorner = CornerOptions.FirstOrDefault(o => o.Value == _notificationSettings.Corner) ?? CornerOptions[1];
         SelectedTopmost = TopmostOptions.FirstOrDefault(o => o.Value == _notificationSettings.Topmost) ?? TopmostOptions[2];
+
+        // 开机自启：状态以启动文件夹里的快捷方式为准，并顺手修正指向已失效的那一个 ——
+        // 程序被移动或换目录之后，旧快捷方式指向不存在的路径，开机时会静默失败，
+        // 而教室里没人会注意到"今天没自动打开"。
+        _autoStart = StartupShortcut.IsEnabled;
+        HealAutoStartShortcut();
     }
 
     // ======================== 可绑定状态 ========================
@@ -1280,7 +1286,6 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// <summary>弹窗位置。</summary>
     [ObservableProperty]
     private CornerOption? _selectedCorner;
-
     /// <summary>置顶档位。</summary>
     [ObservableProperty]
     private TopmostOption? _selectedTopmost;
@@ -1289,6 +1294,27 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(NotificationDurationText))]
     private int _notificationDuration;
+
+    /// <summary>
+    /// 是否已设置开机自启。
+    ///
+    /// 初值直接取自"启动文件夹里有没有那个快捷方式"，而不是另存一个布尔值：
+    /// 老师手动删掉快捷方式是常见操作，程序若还记着"已开启"就会显示一个假状态。
+    /// </summary>
+    [ObservableProperty]
+    private bool _autoStart;
+
+    /// <summary>Linux 上不讲"启动文件夹"这一套，部署走 systemd 单元（见 README）。</summary>
+    public bool SupportsAutoStart => StartupShortcut.IsSupported;
+
+    /// <summary>防止"设置失败 → 回滚开关 → 又触发一次设置"这种来回。</summary>
+    private bool _updatingAutoStart;
+
+    /// <summary>同上，用于置顶档位的占位项兜底拨回。</summary>
+    private bool _updatingTopmost;
+
+    /// <summary>启动文件夹的位置，直接写在界面上，方便运维自己去看。</summary>
+    public string AutoStartLocation => StartupShortcut.StartupFolder;
 
     public IReadOnlyList<CornerOption> CornerOptions { get; } =
     [
@@ -1302,22 +1328,55 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     [
         new(TopmostMode.None, "不置顶"),
         new(TopmostMode.Normal, "普通置顶"),
-        new(TopmostMode.Forced, "UIA 置顶（强制）"),
+
+        // 这一档原本叫「UIA 置顶（强制）」，但它实际上做的是周期性重申置顶，
+        // 并不是 UIAccess —— 名字承诺了做不到的事。改名说清它到底做了什么。
+        new(TopmostMode.Forced, "强制置顶（周期性重申）"),
+
+        // 真正的那一档列出来但置灰：它需要签名 + 安全目录安装，当前构建满足不了。
+        new(null, "UIA 置顶（暂不可用）",
+            "需要程序数字签名并安装在安全目录，当前为未签名的便携版本，做不到。"),
     ];
 
     public string NotificationDurationText => NotificationDuration <= 0
         ? "不自动消失（点击关闭）"
         : $"{NotificationDuration} 秒后自动消失";
 
-    /// <summary>置顶档位的说明，直接写在界面上，避免用户猜"UIA 置顶"到底做到了什么。</summary>
+    /// <summary>
+    /// 已开启自启、但快捷方式指向的不是当前这份程序时，改写它。
+    ///
+    /// 只在指向不符时才写：每次启动都重写一遍虽然也算幂等，但没必要去动用户的启动文件夹。
+    /// </summary>
+    private void HealAutoStartShortcut()
+    {
+        if (!StartupShortcut.IsEnabled)
+        {
+            return;
+        }
+
+        var current = Environment.ProcessPath;
+        var target = StartupShortcut.Describe();
+
+        if (current is null || string.Equals(target, current, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var error = StartupShortcut.Enable();
+
+        AddLog("系统", error is null
+            ? "开机自启的快捷方式原本指向别处，已更新为当前程序。"
+            : $"开机自启的快捷方式指向别处，且更新失败：{error}");
+    }
+
+    /// <summary>置顶档位的说明，直接写在界面上，避免用户猜各档到底做到了什么。</summary>
     public string TopmostModeHint => SelectedTopmost?.Value switch
     {
         TopmostMode.None => "弹窗可能被其他窗口盖住。",
         TopmostMode.Normal => "设置系统置顶。若别的程序也抢置顶，可能被压下去。",
         TopmostMode.Forced => "在系统置顶之上周期性重申，能抢过多数置顶窗口。"
-                              + "但要盖住开始菜单、任务管理器这类更高窗口段的系统窗口，"
-                              + "需要 UIAccess 令牌，而 Windows 要求该程序必须数字签名并安装在安全目录 —— "
-                              + "当前为未签名的便携版本，因此做不到那一层。",
+                              + "但盖不住开始菜单、任务管理器这类更高窗口段的系统窗口 —— "
+                              + "那一层需要 UIAccess 令牌，见下一条。",
         _ => string.Empty,
     };
 
@@ -1346,12 +1405,29 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnSelectedTopmostChanged(TopmostOption? value)
     {
-        if (value is null)
+        if (_updatingTopmost)
         {
             return;
         }
 
-        _notificationSettings.Topmost = value.Value;
+        if (value?.Value is not { } mode)
+        {
+            // 占位项（Value 为 null）被选中了。正常情况下 ComboBoxItem 已置灰、根本选不动，
+            // 这里只是兜底：拨回设置里真正生效的那一档，别让界面停在一个不生效的值上。
+            _updatingTopmost = true;
+            try
+            {
+                SelectedTopmost = TopmostOptions.FirstOrDefault(o => o.Value == _notificationSettings.Topmost);
+            }
+            finally
+            {
+                _updatingTopmost = false;
+            }
+
+            return;
+        }
+
+        _notificationSettings.Topmost = mode;
         OnPropertyChanged(nameof(TopmostModeHint));
         PersistNotificationSettings();
     }
@@ -1360,6 +1436,41 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     {
         _notificationSettings.DurationSeconds = value;
         PersistNotificationSettings();
+    }
+
+    /// <summary>
+    /// 开关开机自启。实际动作就是把快捷方式建出来 / 删掉，失败要把开关拨回去 ——
+    /// 留着"开着但没生效"的界面状态，比功能不可用更糟。
+    /// </summary>
+    partial void OnAutoStartChanged(bool value)
+    {
+        if (_updatingAutoStart)
+        {
+            return;
+        }
+
+        var error = value ? StartupShortcut.Enable() : StartupShortcut.Disable();
+
+        if (error is not null)
+        {
+            AddLog("系统", $"设置开机自启失败：{error}");
+
+            _updatingAutoStart = true;
+            try
+            {
+                AutoStart = StartupShortcut.IsEnabled;
+            }
+            finally
+            {
+                _updatingAutoStart = false;
+            }
+
+            return;
+        }
+
+        AddLog("系统", value
+            ? $"已设置开机自启：每次登录 Windows 都会自动打开教室端（{StartupShortcut.ShortcutPath}）。"
+            : "已取消开机自启。");
     }
 
     private void PersistNotificationSettings()

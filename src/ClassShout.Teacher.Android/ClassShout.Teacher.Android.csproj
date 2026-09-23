@@ -23,8 +23,8 @@
       ApplicationDisplayVersion 则是老师在「设置 - 应用」里看到的版本号，
       与产品版本保持一致，避免"装的到底是哪一版"又要靠猜。
     -->
-    <ApplicationVersion>2</ApplicationVersion>
-    <ApplicationDisplayVersion>1.1.1</ApplicationDisplayVersion>
+    <ApplicationVersion>3</ApplicationVersion>
+    <ApplicationDisplayVersion>1.2.0</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
 
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>

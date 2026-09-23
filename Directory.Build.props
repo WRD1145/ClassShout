@@ -20,6 +20,12 @@
     <SystemSpeechVersion>8.0.0</SystemSpeechVersion>
     <!-- 纯托管的 MP3 解码：Edge 在线语音只回 MP3，而 NAudio 的解码走 Windows ACM，Linux 上用不了 -->
     <NLayerVersion>3.0.0</NLayerVersion>
+    <!--
+      Google material-color-utilities 的 C# 移植（Apache-2.0）。
+      用来把用户选的一个种子色展开成整套 MD3 色角色：它实现的是 HCT 色彩空间，
+      与 Material You 同源，因此对比度与观感都对得上，不必自己近似。
+    -->
+    <MaterialColorUtilitiesVersion>0.3.0</MaterialColorUtilitiesVersion>
     <AndroidApiLevel>36</AndroidApiLevel>
     <!-- 见各项目里对 Tmds.DBus.Protocol 的显式引用说明 -->
     <TmdsDBusProtocolVersion>0.21.3</TmdsDBusProtocolVersion>
@@ -28,7 +34,7 @@
   <PropertyGroup>
     <Product>ClassShout</Product>
     <Company>ClassShout</Company>
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
   </PropertyGroup>
 

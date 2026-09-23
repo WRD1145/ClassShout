@@ -59,7 +59,7 @@
       写 Window 会导致字体链在 Android 上完全不生效 —— 界面退回平台默认字体，
       中文能否显示就全看运气。TopLevel 是 Window 与 Android 宿主视图的共同基类，两边都覆盖。
   -->
-  <Style Selector="TopLevel">
+  <Style Selector=":is(TopLevel)">
     <Setter Property="FontFamily" Value="{DynamicResource Md3.FontFamily}" />
     <Setter Property="Background" Value="{DynamicResource Md3.Surface}" />
     <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurface}" />

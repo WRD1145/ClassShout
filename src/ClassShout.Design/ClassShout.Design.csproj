@@ -10,6 +10,32 @@
     <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
     <PackageReference Include="FluentAvaloniaUI" Version="$(FluentAvaloniaVersion)" />
     <PackageReference Include="Material.Icons" Version="$(MaterialIconsVersion)" />
+    <PackageReference Include="MaterialColorUtilities" Version="$(MaterialColorUtilitiesVersion)" />
+  </ItemGroup>
+
+  <!--
+    内置字体：HarmonyOS Sans SC（Regular + Medium）。
+
+    为什么随程序集分发而不是用系统字体：
+      · 中文观感在 Windows / Android / Linux 上完全一致，不再"这台机器好看、那台机器难看"；
+      · 更关键的是它修掉了一个实打实的 bug —— Android 上 Avalonia 的逐字回退只在
+        Normal 字重生效，Medium / SemiBold / Bold 的中文一律渲染成方块。
+        字形由自带字体直接提供时根本不走回退，那条限制也就不再适用，
+        于是 Android 上"把强调字重降为 Normal"的变通也随之删除。
+        证据与复现方法见 README「踩过的坑」。
+
+    只带两个字重：设计系统只用到 Normal 与 Medium（Md3.Weight.Emphasis），
+    多带一个字重就要多 8 MB，而收益只是 Bold 那唯一一处诊断页标题。
+
+    授权（HarmonyOS Sans Fonts License Agreement，随字体一并分发）：
+      · 允许原样嵌入、捆绑、随软件分发，免费商用；
+      · 要求软件内显著声明使用了 HarmonyOS Sans —— 见两端设置页的「关于字体」；
+      · 明确禁止修改字体或其组件，所以**不能做子集化**，体积只能靠打包压缩消化；
+      · 明确要求随字体保留版权声明与协议原文，故 LICENSE.txt 与字体放在一起并打进程序集。
+  -->
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\Fonts\*.ttf" />
+    <AvaloniaResource Include="Assets\Fonts\LICENSE.txt" />
   </ItemGroup>
 
 </Project>

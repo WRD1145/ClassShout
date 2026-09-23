@@ -298,18 +298,40 @@
 
             <StackPanel Spacing="6" IsEnabled="{Binding NotificationEnabled}">
               <TextBlock Classes="bodyMedium" Text="置顶档位" />
-              <ComboBox HorizontalAlignment="Stretch"
+              <ComboBox x:Name="TopmostPicker"
+                        HorizontalAlignment="Stretch"
                         ItemsSource="{Binding TopmostOptions}"
                         SelectedItem="{Binding SelectedTopmost}">
+                <!--
+                  让"存在但不可用"的档位真的选不动。
+                  IsEnabled 必须在**容器**上生效，光把文字调暗只是看起来灰、照样能选中；
+                  这里给 ComboBoxItem 挂一个基于默认主题的 ControlTheme，只加一条 Setter，
+                  外观（Fluent/MD3 的选中态、悬停态）仍由原主题提供。
+
+                  用 ReflectionBinding 而不是 Binding：ControlTheme 里的编译期绑定会
+                  按窗口的 x:DataType（ClassroomViewModel）去解析，找不到 IsAvailable 而编译失败。
+                  反射绑定按运行时实际的 DataContext（也就是列表项本身）解析，正合此处。
+                -->
+                <ComboBox.ItemContainerTheme>
+                  <ControlTheme TargetType="ComboBoxItem"
+                                BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                    <Setter Property="IsEnabled" Value="{ReflectionBinding IsAvailable}" />
+                  </ControlTheme>
+                </ComboBox.ItemContainerTheme>
                 <ComboBox.ItemTemplate>
                   <DataTemplate x:DataType="svc:TopmostOption">
-                    <TextBlock Text="{Binding Label}" />
+                    <TextBlock Text="{Binding Label}"
+                               Opacity="{Binding Opacity}"
+                               ToolTip.Tip="{Binding UnavailableReason}" />
                   </DataTemplate>
                 </ComboBox.ItemTemplate>
               </ComboBox>
               <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                          Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                          Text="{Binding TopmostModeHint}" />
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="「UIA 置顶」需要程序数字签名并安装在安全目录（Windows 对 UIAccess 的硬性要求），当前为未签名的便携版本，因此该档暂不可用。" />
             </StackPanel>
 
             <StackPanel Spacing="6" IsEnabled="{Binding NotificationEnabled}">
@@ -343,6 +365,23 @@
             <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                        Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                        Text="电脑关机、注销或重启时会正常退出，不会被窗口拦住。" />
+
+            <!-- 开机自启。Linux 上显示不出来：那边的部署走 systemd 单元，没有"启动文件夹"这一套 -->
+            <StackPanel Spacing="4" Margin="0,6,0,0" IsVisible="{Binding SupportsAutoStart}">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="bodyMedium" Text="开机自启" />
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="在「启动」文件夹里放一个快捷方式，登录 Windows 后自动打开教室端。" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                              IsChecked="{Binding AutoStart}" />
+              </Grid>
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="{Binding AutoStartLocation, StringFormat='启动文件夹：{0}'}" />
+            </StackPanel>
           </StackPanel>
         </md3:Md3Card>
 
@@ -368,6 +407,19 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </StackPanel>
+        </md3:Md3Card>
+        <md3:Md3Card Classes="outlined">
+          <!--
+            个性化：换主题色。
+            做成共享控件（ClassShout.Design.Controls.ThemePicker）而不是在这里铺一遍 XAML ——
+            教师端也有同一项，各写一份迟早会长歪。
+            持久化由本窗口的代码后置负责，控件只抛选择结果。
+          -->
+          <!--
+            名字刻意不叫 Theme：Avalonia 的 StyledElement 上已经有一个 Theme 属性
+            （给 ControlTheme 用的），x:Name 取同名会撞出 CS0108 警告。
+          -->
+          <md3:ThemePicker x:Name="Appearance" />
         </md3:Md3Card>
       </StackPanel>
     </ScrollViewer>
