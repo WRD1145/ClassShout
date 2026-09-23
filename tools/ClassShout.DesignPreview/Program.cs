@@ -703,6 +703,25 @@ internal static class Program
                 () => new ClassroomWindow { DataContext = new ClassroomViewModel() }, 0, 0,
                 isDark => isDark ? Combine(CommonDark, ClassroomExtraDark) : Combine(CommonLight, ClassroomExtraLight)),
 
+            // 教室端正在显示语音转写字幕的样子。
+            //
+            // 大字区那块面板的可见性从「正在朗读」改成了「有字要显示就显示」
+            // （文字喊话与转写字幕共用它），而待机那张图里它整个是不可见的 ——
+            // 绑定名写错、chip 文案取错，都只有真把它显示出来才看得出来。
+            new("classroom-transcript",
+                () =>
+                {
+                    var vm = new ClassroomViewModel
+                    {
+                        CurrentSpeaker = "张老师",
+                        CurrentText = "同学们把书翻到第三十七页，我们看第三题。",
+                        Stage = ClassroomStage.ShowingTranscript,
+                    };
+
+                    return new ClassroomWindow { DataContext = vm };
+                }, 0, 0,
+                _ => null),
+
             // 教室端设置窗口。设置项从主界面搬出来之后，主界面只留大字区，
             // 所以必须单独渲染一次确认它自己站得住 ——
             // 不做像素判据（内容以文字与控件为主，颜色占比判据不适用），
