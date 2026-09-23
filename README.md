@@ -89,7 +89,11 @@ ClassShout/
 │     ├─ Services/WindowTopmost.cs      Windows 置顶强度控制
 │     └─ Views/NotificationWindow.axaml     弹窗本体
 ├─ assets/                             应用图标（由 IconGen 生成，勿手工编辑）
-├─ scripts/pack.ps1                    打包脚本：exe + APK
+├─ scripts/
+│  ├─ pack.ps1                        打包脚本：exe + APK，并摆出 dist\release 资产目录
+│  ├─ release.ps1                     发布脚本：打包 + 打标签 + 建发行版 + 上传并逐个核对
+│  ├─ regress.ps1                     五阶段回归自检（局域网 / 中继 / 托盘 / 单实例 / 前端）
+│  └─ smoke-*.ps1、smoke-webui.mjs    单项冒烟测试
 └─ tools/
    ├─ ClassShout.DesignPreview/        把界面渲染成 PNG 并做像素级校验
    ├─ ClassShout.EndToEnd/             端到端联调自检（局域网 + 中继两套）
@@ -164,11 +168,29 @@ dist/
 │  ├─ ClassShout.Teacher.Desktop.exe     教师端桌面头（调试用，可不分发）
 │  └─ server/ClassShout.RelayServer.exe  中继服务器（跨局域网部署用，见 3.6）
 ├─ android/
-│  └─ classshout-teacher-1.0.0-universal.apk   教师端（发到老师手机）
-└─ SHA256SUMS.txt                        校验清单
+│  └─ classshout-teacher-<版本>-universal.apk   教师端（发到老师手机）
+├─ linux/                                加 -IncludeLinuxServer 时才有
+│  ├─ ClassShout.RelayServer             Linux 中继服务器
+│  └─ ClassShout.Classroom               Linux 教室端
+└─ release/                              **可直接上传的资产目录**
+   ├─ ClassShout.Classroom.exe          文件名就是发行版附件名
+   ├─ ClassShout.RelayServer-linux-x64
+   ├─ classshout-teacher-<版本>-universal.apk
+   └─ SHA256SUMS.txt                    校验清单（LF 换行，sha256sum -c 可直接用）
 ```
 
+`dist\release\` 是发布时唯一需要的东西：`pack.ps1` 已经把每个产物按**最终附件名**摆好，
+发布脚本不必再靠记忆去拼"哪个文件叫什么名字"。
+
 三个 exe 都是**自包含单文件**：拷到目标机双击即可，不需要预先安装 .NET 运行时。
+
+> 校验下载完整性（Linux 上直接可用，Windows 上用 `certutil -hashfile <文件> SHA256` 对照）：
+>
+> ```bash
+> sha256sum -c --ignore-missing SHA256SUMS.txt
+> ```
+>
+> `--ignore-missing` 让你只下了其中几个附件时也能校验 —— 没下的条目会被跳过。
 
 > 部署到 **Linux 服务器**时单独发布一次即可：
 >
@@ -185,6 +207,26 @@ dist/
 | `-FrameworkDependent` | 改为依赖框架发布：教室端 60.9 → 34.0 MB，但目标机必须先装 .NET 10 运行时 |
 | `-SplitApk` | 额外为 arm64 / x64 / arm 各出一个 APK（实测 32.6 / 33.3 / 32.0 MB） |
 | `-SkipAndroid` | 跳过 Android 打包（本机未配 SDK 时用） |
+| `-IncludeLinuxServer` | 额外发布 linux-x64 的中继服务器与教室端，一并摆进 `dist\release` |
+
+#### 发布一个版本（维护者）
+
+```powershell
+# 1. 先把 Directory.Build.props 里的 <Version> 改成新版本并提交
+# 2. 写一份发行说明（三段：Bug 修复 / 新功能 / 回退，每条形如「说明 · 提交 · 相关提议」）
+.\scripts\release.ps1 -Version v1.1.1 -NotesFile notes.md -Proxy http://127.0.0.1:7890
+```
+
+`release.ps1` 依次做：校验标签与 `<Version>` 一致 → 校验工作区干净 → 打包 →
+打标签并推送 → 建发行版 → 把 `dist\release` 里的附件全部上传 → **逐个核对附件名与大小**。
+任何一步对不上就以非零码退出，并回滚刚推上去的标签（要保留请加 `-KeepTag`）。
+
+> 上传在这里不是"发出去就完了"，而是一组必须通过的断言。这个规矩来自一次真实事故：
+> v1.1.0 的发行版建好了、说明也写全了，附件却一个都没传上去，过了很久才被发现 ——
+> 因为当时没有任何一步去核对"附件到底上去了没有"。
+
+> 替换同名附件后 GitHub 的 CDN 会短暂继续返回旧对象，验证要稍等片刻再做，否则会误判成
+> 上传失败或文件损坏。
 
 ### 3.4 第二步：部署教室端
 
@@ -231,7 +273,7 @@ Register-ScheduledTask -TaskName "ClassShout 教室端" -Action $action -Trigger
 **方式 A：adb 安装（手机已开 USB 调试）**
 
 ```powershell
-adb install -r dist\android\classshout-teacher-1.0.0-universal.apk
+adb install -r dist\android\classshout-teacher-<版本>-universal.apk
 ```
 
 **方式 B：直接发文件**。把 APK 发给老师（微信/网盘），手机上点开安装。
