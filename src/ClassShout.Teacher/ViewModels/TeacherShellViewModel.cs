@@ -1,6 +1,8 @@
 using ClassShout.Core.Audio;
 using System.Collections.ObjectModel;
 using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Avalonia.Threading;
 using ClassShout.Core.Net;
 using ClassShout.Core.Protocol;
@@ -10,6 +12,12 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 namespace ClassShout.Teacher.ViewModels;
+
+/// <summary>服务器健康检查的解析选项。与 AccountClient 用同一套（Web 默认：camelCase + 大小写不敏感）。</summary>
+internal static class RelayJsonOptions
+{
+    public static readonly JsonSerializerOptions Value = new(JsonSerializerDefaults.Web);
+}
 
 /// <summary>底部导航的三个页面。</summary>
 public enum TeacherPage
@@ -76,6 +84,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     {
         _relaySettings = LocalSettings.LoadTeacher();
         ServerUrl = _relaySettings.ServerUrl ?? string.Empty;
+
+        // 已保存的地址单独存一份：登录、注册、绑定教室都以它为准，
+        // 输入框里改到一半的内容不会影响任何一次网络请求。
+        SavedServerUrl = _relaySettings.ServerUrl ?? string.Empty;
         BindUuid = _relaySettings.LastUuid ?? string.Empty;
 
         // 默认走局域网；连上服务器并绑定后再切过去
@@ -531,6 +543,14 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
+            // 按钮刻意不因"没配服务器"而置灰：置灰没有解释，老师只会以为功能坏了。
+            // 让他点得动、然后告诉他该去哪一步，比一个点不亮的按钮有用。
+            if (!IsServerConfigured)
+            {
+                AccountError = "还没有配置服务器地址。请先在上面那张「中继服务器」卡片里填写地址并点「保存地址」。";
+                return;
+            }
+
             var (ok, error) = await _account.LoginAsync(LoginAccount, LoginPassword).ConfigureAwait(true);
             if (!ok)
             {
@@ -556,6 +576,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
+            if (!IsServerConfigured)
+            {
+                AccountError = "还没有配置服务器地址。请先在上面那张「中继服务器」卡片里填写地址并点「保存地址」。";
+                return;
+            }
+
             var (ok, error) = await _account
                 .RegisterAsync(RegisterUsername, RegisterEmail, RegisterDisplayName, RegisterPassword)
                 .ConfigureAwait(true);
@@ -786,10 +812,41 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     // ======================== 公网中继（跨局域网） ========================
 
-    /// <summary>中继服务器地址。</summary>
+    /// <summary>
+    /// 服务器地址输入框里正在编辑的文字。
+    ///
+    /// 与 <see cref="SavedServerUrl"/> 分开是有原因的，这个区分本身就是一处修复：
+    /// 两者原本是一个值，于是"填地址"这件事只能靠点「绑定教室」来落地，
+    /// 而绑定又要求先登录、登录读的却正是那个还没落地的值 ——
+    /// 新装的机器上形成死锁：登录提示"请先填写服务器地址"（尽管框里刚填了），
+    /// 而让地址生效的唯一按钮永远点不亮。
+    /// </summary>
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(BindServerCommand))]
     private string _serverUrl = string.Empty;
+
+    /// <summary>
+    /// 已保存、当前生效的服务器地址。登录、注册、绑定教室用的都是它。
+    /// 只由 <see cref="SaveServerAddressAsync"/> 改写。
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsServerConfigured))]
+    [NotifyPropertyChangedFor(nameof(ServerAddressStatus))]
+    [NotifyPropertyChangedFor(nameof(ServerAddressPill))]
+    [NotifyCanExecuteChangedFor(nameof(BindServerCommand))]
+    private string _savedServerUrl = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasServerAddressError))]
+    private string? _serverAddressError;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasServerAddressNotice))]
+    private string? _serverAddressNotice;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SaveServerAddressCommand))]
+    [NotifyCanExecuteChangedFor(nameof(TestServerCommand))]
+    private bool _isServerAddressBusy;
 
     /// <summary>教室 UUID。绑定成功后会被记住，下次只需填口令。</summary>
     [ObservableProperty]
@@ -821,7 +878,158 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     public bool HasServerError => !string.IsNullOrWhiteSpace(ServerError);
 
+    public bool HasServerAddressError => !string.IsNullOrWhiteSpace(ServerAddressError);
+
+    public bool HasServerAddressNotice => !string.IsNullOrWhiteSpace(ServerAddressNotice);
+
     public bool HasRecentClassrooms => RecentClassrooms.Count > 0;
+
+    /// <summary>
+    /// 是否已经配置过服务器地址。
+    ///
+    /// 这是"跨局域网"这一整套功能的总开关：没配置时登录、注册都无从谈起，
+    /// 绑定教室也不该可点 —— 三个入口都由它把关，提示语也指向上面那张卡片。
+    /// </summary>
+    public bool IsServerConfigured => !string.IsNullOrWhiteSpace(SavedServerUrl);
+
+    public string ServerAddressStatus => IsServerConfigured
+        ? $"当前生效：{SavedServerUrl}"
+        : "尚未配置 —— 只用同一局域网内的教室时，不必配置";
+
+    /// <summary>卡片右上角的小徽标：只表达"配没配"，具体地址另起一行写全。</summary>
+    public string ServerAddressPill => IsServerConfigured ? "已配置" : "未配置";
+
+    private bool CanSaveServerAddress => !IsServerAddressBusy && !string.IsNullOrWhiteSpace(ServerUrl);
+
+    private bool CanTestServer => !IsServerAddressBusy && !string.IsNullOrWhiteSpace(ServerUrl);
+
+    /// <summary>
+    /// 保存服务器地址。
+    ///
+    /// 这是**独立的一步**：不要求登录，也不要求绑定教室。地址属于"这个账号在哪台服务器上"，
+    /// 它的层级比"绑定了哪间教室"更高，也先于登录发生 —— 所以它不该藏在绑定卡片里，
+    /// 更不该要靠绑定成功才写得进去。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanSaveServerAddress))]
+    private async Task SaveServerAddressAsync()
+    {
+        IsServerAddressBusy = true;
+        ServerAddressError = null;
+        ServerAddressNotice = null;
+
+        try
+        {
+            if (!TryNormalizeServerUrl(ServerUrl, out var normalized, out var urlError))
+            {
+                ServerAddressError = urlError;
+                return;
+            }
+
+            ServerUrl = normalized;
+
+            if (string.Equals(normalized, SavedServerUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                PersistServerUrl(normalized);
+                ServerAddressNotice = "地址没有变化。";
+                return;
+            }
+
+            // 换服务器等于换了一整套账号与绑定关系：账号只存在于某一台服务器上。
+            // 不把旧会话拆掉的话，界面会继续显示"已登录 某某"，而那个账号属于上一台服务器 ——
+            // 之后所有操作都会以一个不存在的身份发出去。
+            var hadSession = IsSignedIn || IsServerBound;
+
+            if (hadSession)
+            {
+                await TearDownRelayAsync().ConfigureAwait(true);
+                await _account.LogoutAsync().ConfigureAwait(true);
+                IsServerBound = false;
+                ClassroomName = string.Empty;
+                NotifyLinkChanged();
+                OnAccountChanged();
+            }
+
+            PersistServerUrl(normalized);
+
+            ServerAddressNotice = hadSession
+                ? "地址已保存。因为换了服务器，之前的登录与教室绑定都已解除。"
+                : "地址已保存。接下来就可以登录或注册账号了。";
+
+            AddLog(hadSession
+                ? $"服务器地址改为 {normalized}，原有登录与绑定已解除。"
+                : $"服务器地址已设为 {normalized}。");
+        }
+        finally
+        {
+            IsServerAddressBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 测试地址是否可达、对面是不是 ClassShout 服务器。
+    ///
+    /// 在还没有账号、也没有凭据的时候，这是唯一能确认"地址填对了"的办法 ——
+    /// 否则老师只能靠"登录失败"去猜是自己填错了、还是口令错了、还是服务器没起来。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanTestServer))]
+    private async Task TestServerAsync()
+    {
+        IsServerAddressBusy = true;
+        ServerAddressError = null;
+        ServerAddressNotice = null;
+
+        try
+        {
+            if (!TryNormalizeServerUrl(ServerUrl, out var normalized, out var urlError))
+            {
+                ServerAddressError = urlError;
+                return;
+            }
+
+            using var response = await _http
+                .GetAsync($"{normalized}{RelayPaths.Health}", HttpCompletionOption.ResponseHeadersRead)
+                .ConfigureAwait(true);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                ServerAddressError = $"能连上，但 {RelayPaths.Health} 返回 HTTP {(int)response.StatusCode}。"
+                                     + "请确认这个地址指向的是 ClassShout 中继服务器。";
+                return;
+            }
+
+            var health = await response.Content
+                .ReadFromJsonAsync<RelayHealthDto>(RelayJsonOptions.Value)
+                .ConfigureAwait(true);
+
+            if (health is null || !health.Ok)
+            {
+                ServerAddressError = "服务器有响应，但自检结果不正常。";
+                return;
+            }
+
+            ServerAddressNotice = $"连接正常：{health.Service} · 协议 {health.Protocol} · "
+                                  + $"教室 {health.Classrooms} 间 · 账号 {health.Users} 个";
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            ServerAddressError = $"连不上：{ex.Message}";
+        }
+        finally
+        {
+            IsServerAddressBusy = false;
+        }
+    }
+
+    private void PersistServerUrl(string normalized)
+    {
+        SavedServerUrl = normalized;
+        _relaySettings.ServerUrl = normalized;
+
+        if (!LocalSettings.SaveTeacher(_relaySettings))
+        {
+            ServerAddressError = "地址没能写入本机，重启后会恢复原样。";
+        }
+    }
 
     public string ServerStatusText => IsServerBound
         ? $"已绑定「{ClassroomName}」"
@@ -831,7 +1039,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         => !IsServerBusy
            && !IsServerBound
            && IsSignedIn
-           && !string.IsNullOrWhiteSpace(ServerUrl)
+           && IsServerConfigured
            && !string.IsNullOrWhiteSpace(BindUuid)
            && !string.IsNullOrWhiteSpace(BindSecret);
 
@@ -846,14 +1054,20 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            if (!TryNormalizeServerUrl(ServerUrl, out var normalized, out var urlError))
+            if (!TryNormalizeServerUrl(SavedServerUrl, out var normalized, out _))
             {
-                ServerError = urlError;
+                ServerError = "还没有配置服务器地址，请先在上面那张「中继服务器」卡片里填写并保存。";
                 return;
             }
 
-            ServerUrl = normalized;
-            _relaySettings.ServerUrl = normalized;
+            // 绑定用的是**已保存**的地址。输入框里若有未保存的改动就明确拦下来 ——
+            // 否则老师会以为"我刚改的地址生效了"，实际绑上去的却是上一台服务器。
+            if (TryNormalizeServerUrl(ServerUrl, out var typed, out _) &&
+                !string.Equals(typed, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                ServerError = "服务器地址有未保存的修改，请先点「保存地址」，再回来绑定教室。";
+                return;
+            }
 
             // 换服务器或换教室前先拆掉旧连接，避免出现两条并存的会话
             await TearDownRelayAsync().ConfigureAwait(true);
@@ -1104,8 +1318,21 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             return false;
         }
 
-        if (!text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        // 已经写了协议但不是 http / https 的，直接拒绝。
+        //
+        // 这里原本是一律补前缀，于是 "ftp://nope" 会变成 "http://ftp://nope" ——
+        // 那居然是个语法合法的 URI（主机名 ftp，路径 //nope），于是被当成有效地址存了下来，
+        // 直到登录时才以一个看不懂的错误暴露出来。宁可在这里就说清只支持哪两种。
+        if (text.Contains("://", StringComparison.Ordinal))
+        {
+            if (!text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "只支持 http:// 与 https:// 两种地址。";
+                return false;
+            }
+        }
+        else
         {
             text = "http://" + text;
         }
@@ -1114,6 +1341,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {
             error = "地址格式不对，应形如 https://relay.example.com 或 http://192.168.1.10:8080";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(uri.Host))
+        {
+            error = "地址里没有主机名，应形如 https://relay.example.com 或 http://192.168.1.10:8080";
             return false;
         }
 

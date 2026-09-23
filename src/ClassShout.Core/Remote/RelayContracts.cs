@@ -132,6 +132,26 @@ public sealed record RegisterRequest(string? Username, string? Email, string Dis
 /// <summary>登录请求。<paramref name="Account"/> 填用户名或邮箱都可以。</summary>
 public sealed record LoginRequest(string Account, string Password);
 
+/// <summary>
+/// 服务器健康检查的返回。
+///
+/// 教师端在「中继服务器」里点「测试连接」时用它 —— 在还没登录、也没有任何凭据的情况下，
+/// 这是唯一能确认"地址填对了、对面确实是 ClassShout 服务器"的办法。
+/// </summary>
+/// <param name="Ok">服务器自认为是否正常。</param>
+/// <param name="Service">服务名，用来确认对面不是别的什么东西占着同一个端口。</param>
+/// <param name="Protocol">协议版本，供客户端判断兼容性。</param>
+/// <param name="Classrooms">已注册教室数；</param>
+/// <param name="Users">已注册账号数。两者都只是给管理员看的概览数字。</param>
+/// <param name="Time">服务器时间。</param>
+public sealed record RelayHealthDto(
+    bool Ok,
+    string? Service,
+    int Protocol,
+    int Classrooms,
+    int Users,
+    DateTimeOffset Time);
+
 /// <summary>账号公开信息。刻意不含任何口令相关字段。</summary>
 /// <param name="IsAdmin">是否为内置管理员。管理控制台只对管理员开放。</param>
 public sealed record UserProfileDto(

@@ -7,6 +7,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using ClassShout.Classroom.Services;
+using ClassShout.Core.Remote;
 using ClassShout.Classroom.ViewModels;
 using ClassShout.Design.Controls;
 using ClassShout.Design.Theming;
@@ -242,6 +243,120 @@ internal static class Program
     /// <summary>预览自定义配色时用的种子色（靛蓝）。与基线紫差别明显，一眼能看出换没换。</summary>
     private const string CustomSeed = "#3F51B5";
 
+    /// <summary>
+    /// 教师端"服务器地址"这条配置的断言。
+    ///
+    /// 锁的是一个具体的死锁：服务器地址原本和「教室 UUID / 口令」挤在同一张卡里，
+    /// 而把地址写进配置的唯一路径是「绑定教室」—— 绑定要求已登录，登录读的却正是
+    /// 那个还没写进去的地址。新装的机器于是卡死：登录提示"请先填写服务器地址"
+    /// （尽管地址框里刚填了），而能让地址生效的那个按钮永远点不亮。
+    ///
+    /// 断言覆盖"填地址"能独立完成、地址已规范化并落盘、以及未配置时登录会指出该去哪一步。
+    /// 整个过程跑在临时数据目录里，不碰使用者真实的 teacher.json。
+    /// </summary>
+    private static bool VerifyServerAddressFlow()
+    {
+        var dataDir = Path.Combine(Path.GetTempPath(), "cs-preview-serverdir");
+
+        if (Directory.Exists(dataDir))
+        {
+            Directory.Delete(dataDir, recursive: true);
+        }
+
+        // 记下原值再改，跑完恢复 —— 不能直接置 null，
+        // 否则后面的画面会退回读使用者真实的设置文件。
+        var previousDataDir = Environment.GetEnvironmentVariable("CLASSSHOUT_DATA_DIR");
+        Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", dataDir);
+
+        Console.WriteLine("教师端服务器地址断言：");
+
+        var passed = true;
+
+        void Check(string label, bool ok, string detail)
+        {
+            passed &= ok;
+            Console.WriteLine($"  [{(ok ? "通过" : "失败")}] {label} —— {detail}");
+        }
+
+        try
+        {
+            var vm = new TeacherShellViewModel();
+
+            Check("新装机器上默认未配置", !vm.IsServerConfigured, vm.ServerAddressStatus);
+
+            // 未配置就去登录：必须指出"该去哪一步"，而不是一句含糊的失败
+            vm.LoginAccount = "someone";
+            vm.LoginPassword = "whatever";
+            Pump(vm.LoginCommand.ExecuteAsync(null));
+            Check("未配置时登录给出明确指引",
+                vm.AccountError?.Contains("中继服务器", StringComparison.Ordinal) == true,
+                vm.AccountError ?? "（没有错误信息）");
+
+            // 只填主机名：应当被规范化后保存 —— 这正是"填地址"独立成一步的核心
+            vm.ServerUrl = "relay.example.com";
+            Pump(vm.SaveServerAddressCommand.ExecuteAsync(null));
+
+            Check("保存后即视为已配置", vm.IsServerConfigured, vm.ServerAddressStatus);
+            Check("地址被规范化（补 http:// 并去掉末尾斜杠）",
+                vm.SavedServerUrl == "http://relay.example.com",
+                vm.SavedServerUrl);
+
+            // 关键：真的写进了磁盘，而不是只改内存 —— 否则重启后又回到死锁
+            var saved = LocalSettings.LoadTeacher().ServerUrl;
+            Check("已落盘", saved == "http://relay.example.com", saved ?? "（空）");
+
+            vm.ServerUrl = "https://relay.wrd1145.dev/";
+            Pump(vm.SaveServerAddressCommand.ExecuteAsync(null));
+            Check("改地址后覆盖保存",
+                LocalSettings.LoadTeacher().ServerUrl == "https://relay.wrd1145.dev",
+                LocalSettings.LoadTeacher().ServerUrl ?? "（空）");
+
+            // 地址非法时要拦住，且不能把上一次的正确值改坏
+            vm.ServerUrl = "ftp://nope";
+            Pump(vm.SaveServerAddressCommand.ExecuteAsync(null));
+            Check("非法地址被拒且不影响已保存的值",
+                vm.HasServerAddressError && LocalSettings.LoadTeacher().ServerUrl == "https://relay.wrd1145.dev",
+                vm.ServerAddressError ?? "（没有错误信息）");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  [失败] 断言过程抛异常：{ex.GetType().Name}: {ex.Message}");
+            passed = false;
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", previousDataDir);
+            Directory.Delete(dataDir, recursive: true);
+        }
+
+        Console.WriteLine();
+        return passed;
+    }
+
+    /// <summary>
+    /// 等一个异步命令跑完，其间持续泵消息。
+    ///
+    /// 不能直接 .GetAwaiter().GetResult()：视图模型里用的是 ConfigureAwait(true)，
+    /// 续体要回到 UI 线程，而阻塞等待的正是 UI 线程 —— 那样会直接死锁。
+    /// </summary>
+    private static void Pump(Task task)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+
+        while (!task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(10);
+        }
+
+        Dispatcher.UIThread.RunJobs();
+
+        if (task.IsFaulted)
+        {
+            throw task.Exception!;
+        }
+    }
+
     /// <summary>取颜色里的 RGB，用于与渲染帧的像素值比对。</summary>
     private static uint ToRgb(Color color) => ((uint)color.R << 16) | ((uint)color.G << 8) | color.B;
 
@@ -419,6 +534,21 @@ internal static class Program
         var outputDirectory = args.Length > 0 ? args[0] : "artifacts";
         Directory.CreateDirectory(outputDirectory);
 
+        // 把设置目录指到一个临时位置，让整轮预览从"全新安装"的状态出发。
+        //
+        // 不这样做的话，导出的图会取决于跑预览这台机器上残留的设置：本机若选过主题色、
+        // 登录过某个测试账号，画面上就会出现"色卡选中了青、界面却还是基线紫"
+        // 这种自相矛盾的状态（截图里真的见到过）——
+        // 而预览的全部价值就是"图里看到的等于用户看到的"，它不该随开发机漂移。
+        var previewDataDir = Path.Combine(Path.GetTempPath(), "cs-preview-data");
+
+        if (Directory.Exists(previewDataDir))
+        {
+            Directory.Delete(previewDataDir, recursive: true);
+        }
+
+        Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", previewDataDir);
+
         AppBuilder.Configure<PreviewApp>()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions
             {
@@ -436,6 +566,9 @@ internal static class Program
 
         // 交互状态的先验：截图看不出"置灰"与"禁用"的区别
         var pickerPassed = VerifyTopmostPicker();
+
+        // 教师端服务器地址这条配置的逻辑（原本存在一条死锁）
+        var serverAddressPassed = VerifyServerAddressFlow();
 
         var scenes = new Scene[]
         {
@@ -472,7 +605,7 @@ internal static class Program
                     var vm = new TeacherShellViewModel();
                     vm.NavigateDevicesCommand.Execute(null);
                     return new TeacherView { DataContext = vm };
-                }, 430, 1400,
+                }, 430, 1750,
                 _ => null),
 
             // 教室端窗口自带尺寸，这里传 0 表示用窗口自己的
@@ -556,7 +689,7 @@ internal static class Program
                     view.FindControl<ThemePicker>("Appearance")?.SelectedSeedHex = CustomSeed;
 
                     return view;
-                }, 430, 1500,
+                }, 430, 1850,
                 isDark =>
                 {
                     // 判据直接由配色算法算出来，而不是抄一份写死：
@@ -573,7 +706,7 @@ internal static class Program
                 }),
         };
 
-        var allPassed = fontsPassed && palettePassed && pickerPassed;
+        var allPassed = fontsPassed && palettePassed && pickerPassed && serverAddressPassed;
         var written = new List<string>();
         foreach (var scene in scenes)
         {
@@ -639,6 +772,14 @@ internal static class Program
         Console.WriteLine(allPassed
             ? $"结论：渲染校验通过，共导出 {written.Count} 张 PNG。"
             : "结论：渲染校验未通过，请检查上面的 [缺失] / 疑似空白 项。");
+
+        // 收尾：撤掉临时设置目录，别给这台机器留下垃圾
+        Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", null);
+
+        if (Directory.Exists(previewDataDir))
+        {
+            Directory.Delete(previewDataDir, recursive: true);
+        }
 
         return allPassed ? 0 : 1;
     }

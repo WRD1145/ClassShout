@@ -325,6 +325,88 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!-- ==================== 同一局域网：直接用，不需要账号 ==================== -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+                <TextBlock Classes="cardTitle" Text="手动连接" />
+                <TextBox Classes="outlined"
+                         Watermark="192.168.1.5:45900"
+                         Text="{Binding ManualAddress}" />
+                <Button Classes="block" Content="连接"
+                        Command="{Binding ConnectManualCommand}" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="教室端启动后，顶栏会显示它自己的地址，按那个填即可。" />
+              </StackPanel>
+            </md3:Md3Card>
+
+            <!--
+              服务器地址单独一张卡片，独立于登录与绑定。
+
+              它原本和「教室 UUID / 口令」挤在同一张卡里，而且把地址写进配置的唯一路径是
+              「绑定教室」—— 绑定又要求已登录，登录读的却正是那个还没写进去的地址。
+              新装的机器因此死锁：登录提示"请先填写服务器地址"（尽管地址框里刚填了），
+              而能让地址生效的那个按钮永远点不亮。
+
+              地址属于"我的账号在哪台服务器上"，层级高于"绑了哪间教室"，本就该是单独一步。
+            -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="中继服务器" Margin="0" />
+                  <Border Grid.Column="1" CornerRadius="9999" Padding="9,3"
+                          Background="{DynamicResource Md3.SecondaryContainer}">
+                    <TextBlock Classes="labelSmall"
+                               Foreground="{DynamicResource Md3.OnSecondaryContainer}"
+                               Text="{Binding ServerAddressPill}" />
+                  </Border>
+                </Grid>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="与教室不在同一网络时用这个：两端接到同一台中继服务器即可，地址由部署服务器的人提供。只用同一网段内的教室时不必配置，直接在上面「手动连接」里连。" />
+
+                <TextBox Classes="outlined dense"
+                         Watermark="https://relay.example.com 或 http://192.168.1.10:8080"
+                         Text="{Binding ServerUrl}" />
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                  <Button Grid.Column="0" Classes="block" Content="保存地址"
+                          IsEnabled="{Binding !IsServerAddressBusy}"
+                          Command="{Binding SaveServerAddressCommand}" />
+                  <Button Grid.Column="1" Classes="outlined block" Content="测试连接"
+                          IsEnabled="{Binding !IsServerAddressBusy}"
+                          Command="{Binding TestServerCommand}" />
+                </Grid>
+
+                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsServerAddressBusy}" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding ServerAddressStatus}" />
+
+                <Border IsVisible="{Binding HasServerAddressError}"
+                        Background="{DynamicResource Md3.ErrorContainer}"
+                        CornerRadius="10" Padding="10,8">
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnErrorContainer}"
+                             Text="{Binding ServerAddressError}" />
+                </Border>
+
+                <Border IsVisible="{Binding HasServerAddressNotice}"
+                        Background="{DynamicResource Md3.SecondaryContainer}"
+                        CornerRadius="10" Padding="10,8">
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSecondaryContainer}"
+                             Text="{Binding ServerAddressNotice}" />
+                </Border>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="换服务器等于换一整套账号与绑定关系，所以改地址会解除原有登录与教室绑定。" />
+              </StackPanel>
+            </md3:Md3Card>
+
             <!-- ==================== 账号 ==================== -->
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="12">
@@ -402,7 +484,7 @@
 
                   <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                              Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                             Text="登录只在使用「跨局域网」时需要；只连同一局域网内的教室不必登录。" />
+                             Text="登录只在使用「跨局域网」时需要，而且要先用上面的「中继服务器」配好地址；只连同一局域网内的教室不必登录。" />
                 </StackPanel>
               </StackPanel>
             </md3:Md3Card>
@@ -450,7 +532,7 @@
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="12">
                 <Grid ColumnDefinitions="*,Auto">
-                  <TextBlock Classes="cardTitle" Text="跨局域网（服务器）" Margin="0" />
+                  <TextBlock Classes="cardTitle" Text="绑定教室（跨局域网）" Margin="0" />
                   <Border Grid.Column="1" CornerRadius="9999" Padding="9,3"
                           Background="{DynamicResource Md3.SecondaryContainer}">
                     <TextBlock Classes="labelSmall"
@@ -461,11 +543,7 @@
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="与教室不在同一网络时用这个。向教室管理员索取 UUID 与口令，两端接同一台中继服务器即可。" />
-
-                <TextBox Classes="outlined dense"
-                         Watermark="https://relay.example.com 或 http://192.168.1.10:8080"
-                         Text="{Binding ServerUrl}" />
+                           Text="向教室管理员索取 UUID 与口令。服务器地址在上面那张「中继服务器」卡片里单独配置 —— 这里只填「哪间教室」。" />
 
                 <TextBox Classes="outlined dense"
                          Watermark="教室 UUID"
@@ -520,20 +598,6 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
                 </StackPanel>
-              </StackPanel>
-            </md3:Md3Card>
-
-            <md3:Md3Card Classes="outlined" CardPadding="14">
-              <StackPanel Spacing="12">
-                <TextBlock Classes="cardTitle" Text="手动连接" />
-                <TextBox Classes="outlined"
-                         Watermark="192.168.1.5:45900"
-                         Text="{Binding ManualAddress}" />
-                <Button Classes="block" Content="连接"
-                        Command="{Binding ConnectManualCommand}" />
-                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
-                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="教室端启动后，顶栏会显示它自己的地址，按那个填即可。" />
               </StackPanel>
             </md3:Md3Card>
 

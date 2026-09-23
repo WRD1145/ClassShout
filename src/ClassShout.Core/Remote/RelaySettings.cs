@@ -105,6 +105,17 @@ public static class LocalSettings
     {
         get
         {
+            // 允许用环境变量指定数据目录。两个用处：
+            //   · 自检可以在临时目录里跑，不碰使用者真实的 teacher.json / classroom.json；
+            //   · 便携安装（放 U 盘、放只读盘旁的可写目录）能自己决定数据放哪。
+            // 与中继服务器的 CLASSSHOUT_RELAY_STATE 是同一套思路。
+            var overridden = Environment.GetEnvironmentVariable("CLASSSHOUT_DATA_DIR");
+            if (!string.IsNullOrWhiteSpace(overridden))
+            {
+                System.IO.Directory.CreateDirectory(overridden);
+                return overridden;
+            }
+
             var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             if (string.IsNullOrEmpty(root))
             {
