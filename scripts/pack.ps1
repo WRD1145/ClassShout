@@ -79,9 +79,11 @@ try {
     Write-Host ''
     Write-Host "[Windows] 发布模式：$modeText" -ForegroundColor Yellow
 
+    # Framework 一列是必须的：教室端自 1.1.0 起是多目标（net10.0-windows;net10.0，
+    # 后者给 Linux 用），不显式指定框架时 dotnet publish 会以 NETSDK1129 直接拒绝。
     $windowsProjects = @(
-        @{ Name = '教室端';        Project = 'src\ClassShout.Classroom\ClassShout.Classroom.csproj' }
-        @{ Name = '教师端桌面头';  Project = 'src\ClassShout.Teacher.Desktop\ClassShout.Teacher.Desktop.csproj' }
+        @{ Name = '教室端';        Project = 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'; Framework = 'net10.0-windows' }
+        @{ Name = '教师端桌面头';  Project = 'src\ClassShout.Teacher.Desktop\ClassShout.Teacher.Desktop.csproj'; Framework = $null }
     )
 
     # 单文件发布参数：
@@ -104,7 +106,13 @@ try {
 
     foreach ($item in $windowsProjects) {
         Write-Host "  正在发布 $($item.Name)…"
-        & dotnet publish $item.Project @publishArgs -o $windowsOut --nologo -v q
+
+        $args = $publishArgs
+        if ($item.Framework) {
+            $args = @('-f', $item.Framework) + $publishArgs
+        }
+
+        & dotnet publish $item.Project @args -o $windowsOut --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "$($item.Name) 发布失败（退出码 $LASTEXITCODE）"
         }
