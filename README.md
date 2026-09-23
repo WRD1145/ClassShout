@@ -934,8 +934,8 @@ dotnet run --project src\ClassShout.RelayServer -- --urls "http://0.0.0.0:8080"
 | 两处都显示 | 两条通道各显示一份 |
 
 ClassIsland 那一侧需要一个联动插件，**单独一个仓库**：
-[WRD1145/ClassShoutCiPlugin](https://github.com/WRD1145/ClassShoutCiPlugin)（MIT）。
-它要求 ClassIsland **2.1.1.1 或更高**。
+[WRD1145/ClassShoutCiPlugin](https://github.com/WRD1145/ClassShoutCiPlugin)（GPL v3）。
+它适用于 ClassIsland **2.1.0.1 或更高**（附件是 `.cipx`，放到 ClassIsland 数据目录的 `Plugins` 下即可）。
 
 投递走本机回环地址 `127.0.0.1:45902`，只绑回环 —— 同网段其它机器连不上。
 插件没装、ClassIsland 没运行时投递会失败，但**不影响喊话本身**：
