@@ -148,6 +148,17 @@ internal static class Program
                 () => new TeacherView { DataContext = new TeacherShellViewModel() }, 430, 900,
                 isDark => isDark ? Combine(CommonDark, TeacherExtraDark) : Combine(CommonLight, TeacherExtraLight)),
 
+            // 教师端「设备」页：服务器绑定、账号、以及语音转文字的密钥自填都在这里。
+            // 单独一个场景是因为它和首页内容完全不同，而配置类界面最容易排版走样。
+            new("teacher-devices",
+                () =>
+                {
+                    var vm = new TeacherShellViewModel();
+                    vm.NavigateDevicesCommand.Execute(null);
+                    return new TeacherView { DataContext = vm };
+                }, 430, 1400,
+                _ => null),
+
             // 教室端窗口自带尺寸，这里传 0 表示用窗口自己的
             new("classroom",
                 () => new ClassroomWindow { DataContext = new ClassroomViewModel() }, 0, 0,

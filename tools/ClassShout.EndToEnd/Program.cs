@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Text;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.Http.Json;
@@ -174,6 +175,9 @@ internal static class Program
 
         // ---------- 3e. 教室端的设置锁 ----------
         AssertSettingsLock();
+
+        // ---------- 3f. 语音转文字客户端 ----------
+        await AssertSttClientAsync();
 
         // ---------- 4. 语音流 ----------
         var format = AudioFormat.Default;
@@ -814,6 +818,164 @@ internal static class Program
         var isMp3 = audio.Length >= 3 && audio[0] == 0xFF && (audio[1] & 0xE0) == 0xE0;
         Check("返回的是 MP3（帧同步头正确）", isMp3,
             audio.Length >= 3 ? $"前 3 字节 {audio[0]:X2} {audio[1]:X2} {audio[2]:X2}" : "数据太短");
+    }
+
+    /// <summary>
+    /// 语音转文字客户端：请求形状与响应解析。
+    ///
+    /// 不依赖真的 API 密钥 —— 起一个只用 TcpListener 的本地桩服务，
+    /// 把请求原样收下来再断言。这样"multipart 字段名对不对、鉴权头有没有、
+    /// WAV 头在不在、返回的 {"text":...} 有没有正确解出来"这些
+    /// 真正容易写错的地方都被覆盖到了，而且完全确定。
+    ///
+    /// 刻意不用 HttpListener：它在 Windows 上要预先注册 URL ACL，
+    /// 非管理员跑不起来，而回归脚本不该要求提权。
+    /// </summary>
+    private static async Task AssertSttClientAsync()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        const string expected = "同学们请安静";
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            var stream = client.GetStream();
+
+            // 先读到头部结束，再按 Content-Length 读完 body
+            var buffer = new byte[64 * 1024];
+            var collected = new MemoryStream();
+            var headerEnd = -1;
+
+            while (headerEnd < 0)
+            {
+                var read = await stream.ReadAsync(buffer);
+                if (read <= 0) { break; }
+                collected.Write(buffer, 0, read);
+                headerEnd = FindHeaderEnd(collected.ToArray());
+            }
+
+            var head = Encoding.ASCII.GetString(collected.ToArray(), 0, Math.Max(headerEnd, 0));
+            var contentLength = 0;
+            foreach (var line in head.Split("\r\n"))
+            {
+                if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                {
+                    int.TryParse(line[15..].Trim(), out contentLength);
+                }
+            }
+
+            while (collected.Length < headerEnd + 4 + contentLength)
+            {
+                var read = await stream.ReadAsync(buffer);
+                if (read <= 0) { break; }
+                collected.Write(buffer, 0, read);
+            }
+
+            var body = "{\"text\":\"" + expected + "\"}";
+            var response = "HTTP/1.1 200 OK\r\n"
+                         + "Content-Type: application/json\r\n"
+                         + $"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\n"
+                         + "Connection: close\r\n\r\n" + body;
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(response));
+
+            return collected.ToArray();
+        });
+
+        const int sampleCount = 16000; // 1 秒 16 kHz 单声道 16 bit
+        var pcm = new byte[sampleCount * 2];
+        for (var i = 0; i < pcm.Length; i++)
+        {
+            pcm[i] = (byte)(i % 251);
+        }
+
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        var client2 = new SttClient(http);
+
+        var settings = new SttSettings
+        {
+            Enabled = true,
+            BaseUrl = $"http://127.0.0.1:{port}/v1",
+            ApiKey = "test-key-123",
+            Model = "whisper-1",
+            Language = "zh",
+        };
+
+        var result = await client2.TranscribeAsync(pcm, AudioFormat.Default, settings);
+        var raw = await server;
+        listener.Stop();
+
+        // 在**原始字节**上搜 ASCII，而不是把整个请求按 UTF-8 解码。
+        // 请求体里有二进制 WAV 数据，整体解码会遇到非法的多字节序列，
+        // 解码器替换它们时可能连后面的字节一起吃掉 ——
+        // 于是"name=\"model\" 明明在请求里"却断言不出来（这个坑我踩过一次）。
+        bool Has(string needle) => ContainsAscii(raw, needle);
+
+        Check("转写请求成功并解析出文字", result.Ok && result.Text == expected,
+            result.Ok ? $"识别结果={result.Text}" : result.Error ?? "失败");
+
+        Check("请求打到 /v1/audio/transcriptions", Has("POST /v1/audio/transcriptions"),
+            "POST /v1/audio/transcriptions");
+
+        Check("带上 Bearer 鉴权头", Has("Bearer test-key-123"), "Authorization 头存在");
+
+        // 字段名不带引号也合法：.NET 只在名字含特殊字符时才给 Content-Disposition
+        // 的 name 加引号，所以这里两种形式都要认 —— 要断言的是"字段在不在"，
+        // 而不是某个库的引号习惯。
+        Check("multipart 里含 model 与 language 字段",
+            (Has("name=model") || Has("name=\"model\""))
+            && Has("whisper-1")
+            && (Has("name=language") || Has("name=\"language\"")),
+            "model=whisper-1，language=zh");
+
+        Check("上传的音频带正确的 WAV 头",
+            Has("RIFF") && Has("WAVE") && Has("audio/wav"),
+            "RIFF/WAVE 与 audio/wav 都在请求里");
+
+        Check("未配置密钥时给出可读的提示而不是抛异常",
+            !(await client2.TranscribeAsync(pcm, AudioFormat.Default,
+                new SttSettings { Enabled = true, ApiKey = null })).Ok,
+            "缺密钥时返回失败结果");
+    }
+
+    /// <summary>在字节数组里找一段 ASCII 子串。二进制体不能按 UTF-8 解码后再搜。</summary>
+    private static bool ContainsAscii(byte[] data, string text)
+    {
+        var needle = Encoding.ASCII.GetBytes(text);
+
+        for (var i = 0; i + needle.Length <= data.Length; i++)
+        {
+            var matched = true;
+            for (var j = 0; j < needle.Length; j++)
+            {
+                if (data[i + j] != needle[j])
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (matched)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int FindHeaderEnd(byte[] data)
+    {
+        for (var i = 3; i < data.Length; i++)
+        {
+            if (data[i - 3] == 13 && data[i - 2] == 10 && data[i - 1] == 13 && data[i] == 10)
+            {
+                return i - 3;
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using ClassShout.Core.Audio;
 using System.Collections.ObjectModel;
 using System.Net;
 using Avalonia.Threading;
@@ -62,6 +63,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     private readonly ClassroomDiscovery _discovery = new();
     private readonly ShoutTransportRouter _transport = new();
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
+    private readonly SttSettings _sttSettings;
     private readonly TeacherRelaySettings _relaySettings;
 
     private readonly AccountClient _account;
@@ -80,6 +82,19 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         Text = new TextShoutViewModel(_transport);
         Voice = new VoiceShoutViewModel(_transport);
+
+        // 语音转文字：密钥由老师自己填、存在本机。
+        // 转写结果直接填进文字页 —— 老师能先看一眼、改两个字再发，
+        // 而教室里那一遍仍然走语音（不是把转写当成朗读内容重复念一遍）。
+        _sttSettings = LocalSettings.LoadStt();
+        Voice.Transcriber = new SttClient(_http);
+        Voice.TranscriberSettings = () => _sttSettings;
+        Voice.Transcribed += text => Post(() =>
+        {
+            Text.Text = text;
+            AddLog($"语音已转写：{text}");
+            OnPropertyChanged(nameof(SttStatus));
+        });
 
         _channel.Log += message => Post(() => AddLog(message));
         _channel.ConnectionChanged += connected => Post(() => OnConnectionChanged(connected));
@@ -960,6 +975,106 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             }
         });
     }
+
+    // ======================== 语音转文字（密钥自填） ========================
+
+    /// <summary>是否启用语音转文字。</summary>
+    public bool SttEnabled
+    {
+        get => _sttSettings.Enabled;
+        set
+        {
+            if (_sttSettings.Enabled == value)
+            {
+                return;
+            }
+
+            _sttSettings.Enabled = value;
+            LocalSettings.SaveStt(_sttSettings);
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SttStatus));
+
+            AddLog(value ? "已启用语音转文字。" : "已关闭语音转文字。");
+        }
+    }
+
+    /// <summary>接口地址。默认 OpenAI，也可填任何兼容 /v1/audio/transcriptions 的服务。</summary>
+    public string SttBaseUrl
+    {
+        get => _sttSettings.BaseUrl;
+        set
+        {
+            if (_sttSettings.BaseUrl == value)
+            {
+                return;
+            }
+
+            _sttSettings.BaseUrl = value;
+            LocalSettings.SaveStt(_sttSettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SttStatus));
+        }
+    }
+
+    /// <summary>密钥。只存本机，日志里不出现。</summary>
+    public string SttApiKey
+    {
+        get => _sttSettings.ApiKey ?? string.Empty;
+        set
+        {
+            if (_sttSettings.ApiKey == value)
+            {
+                return;
+            }
+
+            _sttSettings.ApiKey = value;
+            LocalSettings.SaveStt(_sttSettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SttStatus));
+        }
+    }
+
+    public string SttModel
+    {
+        get => _sttSettings.Model;
+        set
+        {
+            if (_sttSettings.Model == value)
+            {
+                return;
+            }
+
+            _sttSettings.Model = value;
+            LocalSettings.SaveStt(_sttSettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SttStatus));
+        }
+    }
+
+    public string SttLanguage
+    {
+        get => _sttSettings.Language ?? string.Empty;
+        set
+        {
+            if (_sttSettings.Language == value)
+            {
+                return;
+            }
+
+            _sttSettings.Language = value;
+            LocalSettings.SaveStt(_sttSettings);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>配置状态一行说明，直接显示给老师看。</summary>
+    public string SttStatus => _sttSettings switch
+    {
+        { Enabled: false } => "未启用",
+        { ApiKey: null or "" } => "已开启，但还没填密钥",
+        _ => $"已启用 · {_sttSettings.Model}",
+    };
 
     /// <summary>规范化服务器地址：允许只填 host:port，自动补 http:// 并去掉末尾斜杠。</summary>
     private static bool TryNormalizeServerUrl(string input, out string normalized, out string? error)

@@ -168,4 +168,8 @@ public static class LocalSettings
     public static ClassroomSpeechSettings LoadSpeech() => Load("classroom-speech.json", static () => new ClassroomSpeechSettings());
 
     public static bool SaveSpeech(ClassroomSpeechSettings settings) => Save("classroom-speech.json", settings);
+
+    public static SttSettings LoadStt() => Load("teacher-stt.json", static () => new SttSettings());
+
+    public static bool SaveStt(SttSettings settings) => Save("teacher-stt.json", settings);
 }

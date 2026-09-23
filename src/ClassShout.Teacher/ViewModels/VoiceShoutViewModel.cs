@@ -35,6 +35,18 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
     /// 取决于"教室端是不是已经进入播放状态了"，而不是"用户点的是发送还是取消"。
     /// </summary>
     private bool _audioSessionOpen;
+
+    /// <summary>
+    /// 本次录音的 PCM 副本，用于结束后转写。
+    ///
+    /// 单独攒一份而不是改造发送队列：发送那条路要求"低延迟、尽快发出去"，
+    /// 而转写要的是"完整一段"。两者的生命周期不同，混在一起会让发送逻辑背上
+    /// 一个只在特定设置下才需要的缓冲。
+    /// </summary>
+    private readonly MemoryStream _transcribeBuffer = new();
+
+    /// <summary>转写缓冲的上限。超过就不再攒：课堂喊话本来就短，而这段数据要整段上传。</summary>
+    private const int TranscribeBufferLimitBytes = 16000 * 2 * 120;
     private Channel<byte[]>? _audioQueue;
     private Task? _pumpTask;
     private CancellationTokenSource? _cts;
@@ -163,6 +175,8 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
 
         await CleanupAsync(closeChannel: true).ConfigureAwait(true);
 
+        await TranscribeAsync().ConfigureAwait(true);
+
         // 只在真的发出去过的时候记：中途取消不该出现在"我喊过什么"里。
         // 语音没法存下内容，留一句说明就够 —— 让老师记起"那会儿喊了一句"。
         if (wasSent && seconds >= 1)
@@ -186,6 +200,12 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         StopTimer();
         IsRecording = false;
         Level = 0;
+
+        lock (_transcribeBuffer)
+        {
+            _transcribeBuffer.SetLength(0);
+        }
+
         await CleanupAsync(closeChannel: true).ConfigureAwait(true);
     }
 
@@ -194,6 +214,15 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         // 采集线程上执行：只做入队，不做任何阻塞操作
         var copy = pcm.ToArray();
         _audioQueue?.Writer.TryWrite(copy);
+
+        // 转写缓冲也在这里顺手攒。加锁是因为读它的是另一条线程（停止时）。
+        lock (_transcribeBuffer)
+        {
+            if (_transcribeBuffer.Length + copy.Length <= TranscribeBufferLimitBytes)
+            {
+                _transcribeBuffer.Write(copy, 0, copy.Length);
+            }
+        }
     }
 
     private void OnLevelChanged(object? sender, float value) => Post(() => Level = value);
@@ -352,6 +381,61 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         IsRecording = false;
         Level = 0;
         _ = CleanupAsync(closeChannel: false);
+    }
+
+    /// <summary>转写完成后抛出识别出的文字。由外壳接过去填进文字页。</summary>
+    public event Action<string>? Transcribed;
+
+    /// <summary>转写客户端。为 null 表示不做转写（未配置）。由外壳注入。</summary>
+    public SttClient? Transcriber { get; set; }
+
+    /// <summary>读取当前转写配置。设置随时可能被改，所以每次读而不是缓存。</summary>
+    public Func<SttSettings>? TranscriberSettings { get; set; }
+
+    /// <summary>
+    /// 把这次的录音转成文字。
+    ///
+    /// 失败不弹错、不改界面状态：喊话本身已经发出去了，转写只是附加品。
+    /// 为了一个"没听清"弹窗打断老师，比不显示文字更糟；
+    /// 失败原因写进错误提示那一行，想看的人能看到。
+    /// </summary>
+    private async Task TranscribeAsync()
+    {
+        if (Transcriber is null || TranscriberSettings is null)
+        {
+            return;
+        }
+
+        var settings = TranscriberSettings();
+        if (!settings.IsUsable)
+        {
+            return;
+        }
+
+        byte[] pcm;
+        lock (_transcribeBuffer)
+        {
+            pcm = _transcribeBuffer.ToArray();
+            _transcribeBuffer.SetLength(0);
+        }
+
+        if (pcm.Length < 16000)   // 不足半秒，转不出有意义的内容
+        {
+            return;
+        }
+
+        var result = await Transcriber
+            .TranscribeAsync(pcm, new AudioFormat(16000, 1, 16), settings)
+            .ConfigureAwait(true);
+
+        if (result is { Ok: true, Text: not null })
+        {
+            Transcribed?.Invoke(result.Text);
+        }
+        else
+        {
+            ErrorMessage = result.Error;
+        }
     }
 
     /// <summary>平台通知"应用进入后台"时要走的那条路（见 TeacherPlatform.Backgrounded）。</summary>
