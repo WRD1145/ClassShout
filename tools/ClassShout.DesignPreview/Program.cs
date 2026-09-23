@@ -10,6 +10,8 @@ using ClassShout.Teacher.ViewModels;
 using FluentAvalonia.Styling;
 // 两个应用各有一个 MainWindow，这里用别名区分，避免类型名冲突
 using ClassroomWindow = ClassShout.Classroom.Views.MainWindow;
+using ClassroomSettings = ClassShout.Classroom.Views.SettingsWindow;
+using ClassroomPin = ClassShout.Classroom.Views.PinPromptWindow;
 using TeacherView = ClassShout.Teacher.Views.MainView;
 
 namespace ClassShout.DesignPreview;
@@ -150,6 +152,20 @@ internal static class Program
             new("classroom",
                 () => new ClassroomWindow { DataContext = new ClassroomViewModel() }, 0, 0,
                 isDark => isDark ? Combine(CommonDark, ClassroomExtraDark) : Combine(CommonLight, ClassroomExtraLight)),
+
+            // 教室端设置窗口。设置项从主界面搬出来之后，主界面只留大字区，
+            // 所以必须单独渲染一次确认它自己站得住 ——
+            // 不做像素判据（内容以文字与控件为主，颜色占比判据不适用），
+            // 但"能构造、能布局、能出帧"本身就是有效断言：
+            // XAML 结构写坏、绑定指向不存在的属性、控件主题缺失都会在这里炸。
+            new("classroom-settings",
+                () => new ClassroomSettings { DataContext = new ClassroomViewModel() }, 0, 0,
+                _ => null),
+
+            // 进入设置前的 PIN 提示窗。同样只验能不能渲染出来。
+            new("classroom-pin-prompt",
+                () => new ClassroomPin(), 0, 0,
+                _ => null),
 
             // 字体回退诊断：用来排查真机上中文变方块的问题。
             // 这一页不做自动校验（Expectations 返回 null）——

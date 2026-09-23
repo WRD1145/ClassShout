@@ -347,6 +347,76 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnVolumeChanged(int value) => NotifyTeachers();
 
+    // ======================== 设置口令（可选的本机 PIN） ========================
+
+    /// <summary>用户刚把开关拨到"开"，但还没输入 PIN。</summary>
+    private bool _settingsLockPending;
+
+    /// <summary>
+    /// 是否要求进入设置前输入 PIN。
+    ///
+    /// 打开开关时不能直接启用：没有 PIN 的锁等于没锁。
+    /// 这里只记下意愿，等用户在下面输入并保存 PIN 之后才真正生效 ——
+    /// 所以读的时候要把"待生效"也算上，否则开关会自己弹回去。
+    /// </summary>
+    public bool SettingsLockEnabled
+    {
+        get => SettingsLock.IsEnabled || _settingsLockPending;
+        set
+        {
+            if (value == SettingsLockEnabled)
+            {
+                return;
+            }
+
+            if (value)
+            {
+                _settingsLockPending = true;
+                SettingsLockError = $"请输入一个 {SettingsLock.MinPinLength}~32 位数字 PIN，然后点「保存 PIN」。";
+            }
+            else
+            {
+                SettingsLock.Disable();
+                _settingsLockPending = false;
+                NewPin = string.Empty;
+                SettingsLockError = string.Empty;
+            }
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SettingsLockHint));
+        }
+    }
+
+    [ObservableProperty]
+    private string _newPin = string.Empty;
+
+    [ObservableProperty]
+    private string _settingsLockError = string.Empty;
+
+    /// <summary>设置窗口标题下那行说明：这道锁现在是开着还是关着。</summary>
+    public string SettingsLockHint => SettingsLock.IsEnabled
+        ? "已开启设置口令 · 关闭本窗口后重新上锁"
+        : "设置口令未开启";
+
+    [RelayCommand]
+    private void SavePin()
+    {
+        var (ok, error) = SettingsLock.SetPin(NewPin);
+
+        if (!ok)
+        {
+            SettingsLockError = error ?? "PIN 未生效。";
+            return;
+        }
+
+        _settingsLockPending = false;
+        NewPin = string.Empty;
+        SettingsLockError = "PIN 已保存，设置口令已开启。下次进入设置时需要输入它。";
+
+        OnPropertyChanged(nameof(SettingsLockEnabled));
+        OnPropertyChanged(nameof(SettingsLockHint));
+    }
+
     // ======================== 生命周期 ========================
 
     /// <summary>启动监听。端口被占用时抛 <see cref="System.Net.Sockets.SocketException"/>。</summary>

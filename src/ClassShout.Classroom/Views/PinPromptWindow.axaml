@@ -1,0 +1,40 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:md3="using:ClassShout.Design.Controls"
+        x:Class="ClassShout.Classroom.Views.PinPromptWindow"
+        Title="输入设置口令"
+        Width="380" Height="260"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Md3.Surface}">
+
+  <Grid RowDefinitions="Auto,*,Auto">
+
+    <Border Grid.Row="0" Background="{DynamicResource Md3.SurfaceContainer}" Padding="20,14">
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <Border Width="36" Height="36" CornerRadius="11"
+                Background="{DynamicResource Md3.PrimaryContainer}">
+          <md3:Md3Icon Kind="Lock" Size="20" Classes="onPrimaryContainer" />
+        </Border>
+        <TextBlock Classes="titleMedium" Text="需要口令" VerticalAlignment="Center" />
+      </StackPanel>
+    </Border>
+
+    <StackPanel Grid.Row="1" Margin="20,16" Spacing="10">
+      <TextBlock Classes="bodyMedium" TextWrapping="Wrap"
+                 Text="这台教室的设置已加锁。请输入 PIN 后继续 —— 验证一次即可，关掉设置窗口后会重新上锁。" />
+      <TextBox x:Name="PinInput" Classes="outlined dense" PasswordChar="●"
+               Watermark="PIN" MaxLength="32" />
+      <TextBlock x:Name="ErrorText" Classes="bodySmall" TextWrapping="Wrap"
+                 Foreground="{DynamicResource Md3.Error}" IsVisible="False" />
+    </StackPanel>
+
+    <Border Grid.Row="2" Background="{DynamicResource Md3.SurfaceContainerLow}" Padding="20,12">
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Classes="outlined" Content="取消" Click="OnCancelClick" />
+        <Button Classes="primary" Content="确定" Click="OnConfirmClick" />
+      </StackPanel>
+    </Border>
+
+  </Grid>
+</Window>

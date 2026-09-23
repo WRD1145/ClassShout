@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
+using ClassShout.Classroom.Services;
 using ClassShout.Classroom.ViewModels;
 
 namespace ClassShout.Classroom.Views;
@@ -9,6 +10,7 @@ namespace ClassShout.Classroom.Views;
 public partial class MainWindow : Window
 {
     private ClassroomViewModel? _subscribed;
+    private SettingsWindow? _settingsWindow;
 
     public MainWindow()
     {
@@ -54,6 +56,48 @@ public partial class MainWindow : Window
 
     private static string Shorten(string text)
         => text.Length <= 24 ? text : text[..24] + "…";
+
+    /// <summary>
+    /// 打开设置窗口。启用设置口令时先验一次 PIN。
+    ///
+    /// 1. 没启用 PIN —— 直接开；
+    /// 2. 已启用且本次尚未验证 —— 弹 PIN 提示窗，验过才开；
+    /// 3. 已经开着 —— 把它提到前面，而不是再开一个。
+    ///
+    /// 关掉设置窗口时会重新上锁：验证一次是"这一次进入"的通行证，
+    /// 不是"这台机器永久免验"。用户要的是改设置时不必逐项验，而不是验过就永远放行。
+    /// </summary>
+    private async void OnOpenSettings(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_settingsWindow is { IsVisible: true } existing)
+        {
+            existing.Activate();
+            return;
+        }
+
+        if (!SettingsAccess.IsUnlocked)
+        {
+            var prompt = new PinPromptWindow();
+            var passed = await prompt.ShowDialog<bool>(this);
+
+            if (!passed)
+            {
+                return;
+            }
+
+            SettingsAccess.Unlock();
+        }
+
+        var window = new SettingsWindow { DataContext = DataContext };
+        window.Closed += (_, _) =>
+        {
+            SettingsAccess.Lock();
+            _settingsWindow = null;
+        };
+
+        _settingsWindow = window;
+        window.Show(this);
+    }
 
     /// <summary>
     /// 切换亮色 / 暗色主题。
