@@ -10,6 +10,7 @@ using ClassShout.Core.Net;
 using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
 using ClassShout.RelayServer;
+using ClassShout.Teacher.Services;
 
 namespace ClassShout.EndToEnd;
 
@@ -178,6 +179,9 @@ internal static class Program
 
         // ---------- 3f. 语音转文字客户端 ----------
         await AssertSttClientAsync();
+
+        // ---------- 3g. 发送队列 ----------
+        await AssertShoutQueueAsync();
 
         // ---------- 4. 语音流 ----------
         var format = AudioFormat.Default;
@@ -957,6 +961,77 @@ internal static class Program
             !(await client2.TranscribeAsync(pcm, AudioFormat.Default,
                 new SttSettings { Enabled = true, ApiKey = null })).Ok,
             "缺密钥时返回失败结果");
+    }
+
+    /// <summary>
+    /// 发送队列：按入队先后一条一条发，位置问得准，失败不阻塞。
+    ///
+    /// "按发出时间排队"这条需求的核心就是顺序，所以断言直接盯住顺序本身，
+    /// 以及界面要显示的那个"前面还有几个"。全确定性，不依赖网络。
+    /// </summary>
+    private static async Task AssertShoutQueueAsync()
+    {
+        using var queue = new ShoutQueue();
+
+        var started = new List<string>();
+        var finished = new List<string>();
+        var positions = new Dictionary<string, int>();
+
+        var firstGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        queue.Sent += (text, ok) => finished.Add(text + (ok ? "" : "(失败)"));
+
+        // 票据先声明再在闭包里用：闭包是稍后才执行的，那时赋值已经完成。
+        long firstTicket = 0;
+        long secondTicket = 0;
+        long thirdTicket = 0;
+
+        // 第一条故意卡住，好让后面两条在队列里等着，从而问得到位置
+        firstTicket = queue.Enqueue("第一条", async _ =>
+        {
+            started.Add("第一条");
+            positions["第一条"] = queue.PositionOf(firstTicket);
+            await firstGate.Task;
+            return true;
+        });
+
+        secondTicket = queue.Enqueue("第二条", _ =>
+        {
+            started.Add("第二条");
+            positions["第二条"] = queue.PositionOf(secondTicket);
+            return Task.FromResult(true);
+        });
+
+        thirdTicket = queue.Enqueue("第三条", _ =>
+        {
+            started.Add("第三条");
+            // 这一条故意失败，用来验证失败不会卡住队列
+            return Task.FromResult(false);
+        });
+
+        // 入队后立刻问位置：第二条前面有 1 条（第一条在发），第三条前面有 2 条
+        var secondAheadWhileQueued = queue.PositionOf(secondTicket);
+        var thirdAheadWhileQueued = queue.PositionOf(thirdTicket);
+
+        Check("排队位置问得准（前面还有几个）",
+            secondAheadWhileQueued == 1 && thirdAheadWhileQueued == 2,
+            $"第二条前面 {secondAheadWhileQueued} 条，第三条前面 {thirdAheadWhileQueued} 条");
+
+        // 放行第一条，等队列跑完
+        firstGate.SetResult();
+        await WaitUntilAsync(() => finished.Count == 3, TimeSpan.FromSeconds(10));
+
+        Check("严格按发出时间先入先出",
+            started.SequenceEqual(["第一条", "第二条", "第三条"]),
+            string.Join(" → ", started));
+
+        Check("轮到自己时前面就已经没人了",
+            positions.GetValueOrDefault("第一条") == 0,
+            $"第一条开始发送时前面 {positions.GetValueOrDefault("第一条")} 条");
+
+        Check("一条失败不会卡住后面的", finished.Count == 3, string.Join("、", finished));
+
+        Check("队列发空之后计数归零", queue.PendingCount == 0, $"{queue.PendingCount} 条");
     }
 
     /// <summary>在字节数组里找一段 ASCII 子串。二进制体不能按 UTF-8 解码后再搜。</summary>

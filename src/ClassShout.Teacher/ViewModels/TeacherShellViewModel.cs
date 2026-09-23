@@ -64,6 +64,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     private readonly ShoutTransportRouter _transport = new();
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
     private readonly SttSettings _sttSettings;
+    private readonly ShoutQueue _shoutQueue = new();
     private readonly TeacherRelaySettings _relaySettings;
 
     private readonly AccountClient _account;
@@ -80,7 +81,15 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 默认走局域网；连上服务器并绑定后再切过去
         _transport.Active = _channel;
 
-        Text = new TextShoutViewModel(_transport);
+        Text = new TextShoutViewModel(_transport)
+        {
+            // 队列在外壳这一层建：文字页与语音页共享同一个"正在发什么"的顺序，
+            // 各自排各自的会打乱先后。
+            Queue = _shoutQueue,
+        };
+
+        _shoutQueue.Changed += () => Post(Text.RefreshQueueStatus);
+        _shoutQueue.Sent += (text, ok) => Post(() => Text.OnQueueSent(text, ok));
         Voice = new VoiceShoutViewModel(_transport);
 
         // 语音转文字：密钥由老师自己填、存在本机。
@@ -726,6 +735,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
                 IsClassroomMuted = false;
                 Voice.ResetOnDisconnect();
             }
+
             else
             {
                 // 回落到中继之后这条链路是通的，IsConnected 必须跟着回来。
@@ -738,6 +748,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             }
 
             NotifyLinkChanged();
+
+            // 断线时把还没发出去的喊话丢掉：留着它们会在重连后突然一起涌向教室，
+            // 那时老师早就忘了自己喊过什么，教室里却一连接着念好几条旧内容。
+            _shoutQueue.Clear();
+            Text.RefreshQueueStatus();
         }
     }
 

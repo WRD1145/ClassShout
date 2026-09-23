@@ -129,36 +129,89 @@ public partial class TextShoutViewModel : ObservableObject
 
     public bool CanSend => IsConnected && !IsSending && !string.IsNullOrWhiteSpace(Text);
 
+    // ======================== 发送队列 ========================
+
+    /// <summary>发送队列。由外壳注入 —— 队列要在页面之间共享，不能每个页面各排各的。</summary>
+    public ShoutQueue? Queue { get; set; }
+
+    private long _myTicket;
+
+    [ObservableProperty]
+    private string _queueStatus = string.Empty;
+
+    /// <summary>自己这条是不是还在排队（前面有人）。界面据此把提示显示得醒目一点。</summary>
+    [ObservableProperty]
+    private bool _isQueued;
+
+    /// <summary>
+    /// 刷新"前面还有几个"。
+    ///
+    /// 每次都重新问队列，而不是在入队时把数字记下来自己减 ——
+    /// 队列是共享的，别的页面也会往里放东西，自己维护计数迟早对不上。
+    /// </summary>
+    public void RefreshQueueStatus()
+    {
+        if (Queue is null)
+        {
+            QueueStatus = string.Empty;
+            IsQueued = false;
+            return;
+        }
+
+        var ahead = Queue.PositionOf(_myTicket);
+        var pending = Queue.PendingCount;
+
+        IsQueued = ahead > 0;
+
+        QueueStatus = ahead > 0
+            ? $"排队中 · 前面还有 {ahead} 条"
+            : pending > 0
+                ? $"队列中还有 {pending} 条（本页已发出）"
+                : string.Empty;
+    }
+
     public bool HasText => !string.IsNullOrWhiteSpace(Text);
 
     partial void OnTextChanged(string value) => OnPropertyChanged(nameof(HasText));
 
     [RelayCommand(CanExecute = nameof(CanSend))]
-    private async Task SendAsync()
+    private void Send()
+    {
+        var text = Text;
+
+        // 参数在入队时就固定下来：这条喊话用的是"点发送那一刻"的语速与音量，
+        // 而不是轮到它发送时界面上的值 —— 老师排了三条又去调了音量，
+        // 前面那两条不该跟着变。
+        var rate = Rate;
+        var volume = Volume;
+        var interrupt = Interrupt;
+
+        var sent = text.Trim();
+
+        if (Queue is null)
+        {
+            // 没有队列（理论上不该发生）时退回直接发，至少不至于点了没反应
+            _ = SendDirectAsync(sent, rate, volume, interrupt);
+            Text = string.Empty;
+            return;
+        }
+
+        _myTicket = Queue.Enqueue(sent, ct => _channel.SendTextAsync(sent, rate, volume, voiceName: null, interrupt, ct));
+
+        // 立刻清空输入框：排队的意义就是让老师可以连着喊好几条
+        Text = string.Empty;
+        RefreshQueueStatus();
+    }
+
+    private async Task SendDirectAsync(string text, int rate, int volume, bool interrupt)
     {
         IsSending = true;
 
         try
         {
-            var sent = Text;
-            var ok = await _channel.SendTextAsync(sent, Rate, Volume, voiceName: null, Interrupt);
-            if (ok)
+            if (await _channel.SendTextAsync(text, rate, volume, voiceName: null, interrupt))
             {
-                // 记一条本机历史。放在"发送成功"之后而不是点击时：
-                // 没发出去的喊话不该出现在"我喊过什么"里。
-                var updated = ShoutHistoryStore.Record(sent, isVoice: false);
-
-                RecentShouts.Clear();
-                foreach (var record in updated)
-                {
-                    RecentShouts.Add(new ShoutRecordItem(record));
-                }
-
-                OnPropertyChanged(nameof(HasHistory));
-                OnPropertyChanged(nameof(HistoryHintText));
-
-                // 发送成功就清空输入框，方便连续喊话
-                Text = string.Empty;
+                RecordHistory(text);
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.Sockets.SocketException)
@@ -169,6 +222,33 @@ public partial class TextShoutViewModel : ObservableObject
         {
             IsSending = false;
         }
+    }
+
+    /// <summary>队列报"这条发出去了"时调用。历史只记真的发出去的。</summary>
+    internal void OnQueueSent(string text, bool ok)
+    {
+        RefreshQueueStatus();
+
+        if (ok)
+        {
+            RecordHistory(text);
+        }
+    }
+
+    private void RecordHistory(string text)
+    {
+        // 记一条本机历史。放在"发送成功"之后而不是点击时：
+        // 没发出去的喊话不该出现在"我喊过什么"里。
+        var updated = ShoutHistoryStore.Record(text, isVoice: false);
+
+        RecentShouts.Clear();
+        foreach (var record in updated)
+        {
+            RecentShouts.Add(new ShoutRecordItem(record));
+        }
+
+        OnPropertyChanged(nameof(HasHistory));
+        OnPropertyChanged(nameof(HistoryHintText));
     }
 
     [RelayCommand]

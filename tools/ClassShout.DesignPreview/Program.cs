@@ -148,6 +148,23 @@ internal static class Program
                 () => new TeacherView { DataContext = new TeacherShellViewModel() }, 430, 900,
                 isDark => isDark ? Combine(CommonDark, TeacherExtraDark) : Combine(CommonLight, TeacherExtraLight)),
 
+            // 教师端文字页 + 排队提示。刻意真的往队列里塞两条卡住的喊话，
+            // 好让"排队中"那块显示出来 —— {x:Static StringConverters.IsNotNullOrEmpty}
+            // 这类转换器是**运行时**解析的，编译通过不代表能用，必须真渲染一次。
+            new("teacher-text-queue",
+                () =>
+                {
+                    var vm = new TeacherShellViewModel();
+                    var blocker = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    vm.Text.Queue?.Enqueue("第一条（占位，用于让队列非空）", _ => blocker.Task);
+                    vm.Text.Queue?.Enqueue("第二条（占位，用于让队列非空）", _ => blocker.Task);
+                    vm.Text.RefreshQueueStatus();
+
+                    return new TeacherView { DataContext = vm };
+                }, 430, 900,
+                _ => null),
+
             // 教师端「设备」页：服务器绑定、账号、以及语音转文字的密钥自填都在这里。
             // 单独一个场景是因为它和首页内容完全不同，而配置类界面最容易排版走样。
             new("teacher-devices",
