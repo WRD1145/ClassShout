@@ -165,6 +165,9 @@ internal static class Program
         // ---------- 3d. 本机喊话记录的条数上限 ----------
         AssertShoutHistoryCap();
 
+        // ---------- 3e. 教室端的设置锁 ----------
+        AssertSettingsLock();
+
         // ---------- 4. 语音流 ----------
         var format = AudioFormat.Default;
         const int chunkCount = 40;
@@ -770,6 +773,55 @@ internal static class Program
                 ? $"共 {delivered.Count} 条，序号连续"
                 : $"期望 {expected.Count} 条，实际 {delivered.Count} 条");
     }
+    /// <summary>
+    /// 教室端的设置锁：可选、默认关闭、只认数字、不以明文落盘。
+    ///
+    /// 会临时改写本机的 settings-lock.json，所以先把原文件收好、跑完还回去 ——
+    /// 端到端工具跑在开发机上，不能把使用者自己设的 PIN 弄丢。
+    /// </summary>
+    private static void AssertSettingsLock()
+    {
+        var path = Path.Combine(LocalSettings.Directory, "settings-lock.json");
+        var hadFile = File.Exists(path);
+        var backup = hadFile ? File.ReadAllText(path) : null;
+
+        try
+        {
+            SettingsLock.Disable();
+            Check("设置锁默认关闭时不拦人", SettingsLock.Verify("0000"),
+                "关闭状态下任意输入都放行 —— 这是可选功能，关着的时候不该拦人");
+
+            Check("过短的 PIN 被拒", !SettingsLock.IsWellFormed("123", out _),
+                $"至少 {SettingsLock.MinPinLength} 位");
+            Check("含字母的 PIN 被拒", !SettingsLock.IsWellFormed("12a4", out _),
+                "只允许数字：教室电脑多半是触屏或数字键盘");
+
+            var (setOk, setError) = SettingsLock.SetPin("2468");
+            Check("设置 PIN 成功", setOk, setError ?? "已启用");
+            Check("启用后正确 PIN 通过", SettingsLock.Verify("2468"), "2468");
+            Check("启用后错误 PIN 被拒", !SettingsLock.Verify("2469"), "2469 被拒");
+            Check("启用后空 PIN 被拒", !SettingsLock.Verify(string.Empty), "空输入被拒");
+
+            var onDisk = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+            Check("PIN 不以明文落盘", !onDisk.Contains("2468"),
+                "文件里存的是 PBKDF2 派生值与随机盐");
+
+            SettingsLock.Disable();
+            Check("关闭之后不再拦人", SettingsLock.Verify("0000"), "已恢复为未启用");
+        }
+        finally
+        {
+            if (hadFile && backup is not null)
+            {
+                File.WriteAllText(path, backup);
+            }
+            else if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
     /// <summary>
     /// 本机喊话记录：最多留二十条，最新在前，最旧的被挤掉。
     ///
