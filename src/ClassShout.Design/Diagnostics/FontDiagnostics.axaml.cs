@@ -4,7 +4,7 @@ using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 
-namespace ClassShout.Teacher.Diagnostics;
+namespace ClassShout.Design.Diagnostics;
 
 /// <summary>
 /// 字体回退诊断页。

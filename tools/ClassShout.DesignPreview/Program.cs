@@ -753,7 +753,7 @@ internal static class Program
             // 它整页近乎纯白，用"主色占比 < 85%"的判据会误报，
             // 判断方式是直接看图里有没有方块。
             new("font-diagnostics",
-                () => new ClassShout.Teacher.Diagnostics.FontDiagnostics(), 1180, 460,
+                () => new ClassShout.Design.Diagnostics.FontDiagnostics(), 1180, 460,
                 _ => null),
 
             // 个性化（换主题色）的实际观感。

@@ -297,6 +297,22 @@
             </StackPanel>
 
             <StackPanel Spacing="6" IsEnabled="{Binding NotificationEnabled}">
+              <TextBlock Classes="bodyMedium" Text="提示方式" />
+              <ComboBox HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding ChannelOptions}"
+                        SelectedItem="{Binding SelectedChannel}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="svc:ShoutChannelOption">
+                    <TextBlock Text="{Binding Label}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="{Binding ChannelHint}" />
+            </StackPanel>
+
+            <StackPanel Spacing="6" IsEnabled="{Binding NotificationEnabled}">
               <TextBlock Classes="bodyMedium" Text="置顶档位" />
               <ComboBox x:Name="TopmostPicker"
                         HorizontalAlignment="Stretch"
@@ -420,6 +436,14 @@
             （给 ControlTheme 用的），x:Name 取同名会撞出 CS0108 警告。
           -->
           <md3:ThemePicker x:Name="Appearance" />
+        </md3:Md3Card>
+
+        <!--
+          「关于」：版本号、运行环境，以及藏在版本号后面的开发者模式。
+          在版本号上连点 10 次即可解锁（手势借自 ClassIsland，两边用同一套约定）。
+        -->
+        <md3:Md3Card Classes="outlined">
+          <md3:AboutPanel x:Name="About" />
         </md3:Md3Card>
       </StackPanel>
     </ScrollViewer>

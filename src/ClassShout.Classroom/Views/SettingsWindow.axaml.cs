@@ -29,6 +29,38 @@ public partial class SettingsWindow : Window
             theme.SelectedSeedHex = LocalSettings.LoadAppearance().SeedColor;
             theme.SelectionChanged += OnAppearanceChanged;
         }
+
+        var about = this.FindControl<AboutPanel>("About");
+        if (about is not null)
+        {
+            about.AppName = "ClassShout 教室端";
+            about.DiagnosticsProvider = BuildDiagnostics;
+        }
+    }
+
+    /// <summary>
+    /// 「复制诊断信息」的文本。
+    ///
+    /// 只放排障时一定会被问到的那几项，而且**不放任何凭据**：
+    /// 教室 UUID 是公开身份（控制台上就能看到），但口令与令牌一概不进这里 ——
+    /// 这份文本的用途是贴到别处给人看，写进去就等于泄露。
+    /// </summary>
+    private string BuildDiagnostics()
+    {
+        if (DataContext is not ViewModels.ClassroomViewModel vm)
+        {
+            return "（界面尚未挂上视图模型）";
+        }
+
+        var text = new System.Text.StringBuilder();
+        text.AppendLine($"教室名     ：{vm.ClassroomName}");
+        text.AppendLine($"本机地址   ：{vm.LocalAddressDisplay}");
+        text.AppendLine($"教室 UUID  ：{vm.RelayUuid}");
+        text.AppendLine($"服务器地址 ：{(string.IsNullOrWhiteSpace(vm.RelayServerUrl) ? "（未配置）" : vm.RelayServerUrl)}");
+        text.AppendLine($"服务器链路 ：{vm.RelayStatusText}");
+        text.AppendLine($"顶栏状态   ：{vm.TeacherCountText}");
+        text.AppendLine($"配置目录   ：{LocalSettings.Directory}");
+        return text.ToString();
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);

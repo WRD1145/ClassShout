@@ -187,4 +187,8 @@ public static class LocalSettings
     public static AppearanceSettings LoadAppearance() => Load("appearance.json", static () => new AppearanceSettings());
 
     public static bool SaveAppearance(AppearanceSettings settings) => Save("appearance.json", settings);
+
+    public static DeveloperSettings LoadDeveloper() => Load("developer.json", static () => new DeveloperSettings());
+
+    public static bool SaveDeveloper(DeveloperSettings settings) => Save("developer.json", settings);
 }

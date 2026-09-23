@@ -692,6 +692,14 @@
               <md3:ThemePicker x:Name="Appearance" />
             </md3:Md3Card>
 
+            <!--
+              「关于」：版本号、运行环境，以及藏在版本号后面的开发者模式。
+              在版本号上连点 10 次即可解锁（手势借自 ClassIsland）。
+            -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <md3:AboutPanel x:Name="About" />
+            </md3:Md3Card>
+
           </StackPanel>
         </ScrollViewer>
 

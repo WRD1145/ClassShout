@@ -1,6 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             x:Class="ClassShout.Teacher.Diagnostics.FontDiagnostics"
+             x:Class="ClassShout.Design.Diagnostics.FontDiagnostics"
              Background="{DynamicResource Md3.Surface}">
   <ScrollViewer>
     <StackPanel Margin="16" Spacing="12">

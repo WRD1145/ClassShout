@@ -13,15 +13,6 @@ namespace ClassShout.Teacher;
 /// </summary>
 public partial class App : Application
 {
-    /// <summary>
-    /// 排查字体问题时把这里改成 true，应用启动后会直接进入字体诊断矩阵页。
-    ///
-    /// 保留这个开关是因为中文字形问题**只在某些平台/设备上出现**：
-    /// 桌面渲染一切正常，Android 上却可能整片变方块。
-    /// 能在真机上直接跑诊断页，就不必靠"改代码、打包、安装、截图"反复试错。
-    /// </summary>
-    private const bool ShowFontDiagnostics = false;
-
     private TeacherShellViewModel? _viewModel;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
@@ -43,10 +34,14 @@ public partial class App : Application
                 break;
 
             case ISingleViewApplicationLifetime singleView:
-                // Android 头：没有窗口概念，直接给一个根视图
-                singleView.MainView = ShowFontDiagnostics
-                    ? new Diagnostics.FontDiagnostics()
-                    : new MainView { DataContext = _viewModel };
+                // Android 头：没有窗口概念，直接给一个根视图。
+                //
+                // 这里原本还有一个编译期开关 ShowFontDiagnostics，让应用启动后直接进字体矩阵页。
+                // 排查中文字形问题时确实需要它，但"改常量、重新打包、装机"本身就是障碍。
+                // 现在同一页由开发者模式在运行时打开（「关于」里连点版本号 10 次），
+                // 那个常量随之删除 —— 一个必须重打包才能用的诊断开关，
+                // 等于逼人在真机出问题的现场放弃诊断。
+                singleView.MainView = new MainView { DataContext = _viewModel };
                 break;
         }
 

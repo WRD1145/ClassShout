@@ -65,11 +65,43 @@ public sealed record TopmostOption(TopmostMode? Value, string Label, string? Una
     public double Opacity => IsAvailable ? 1.0 : 0.38;
 }
 
+/// <summary>
+/// 喊话提示的呈现方式。
+///
+/// 教室那台电脑上常常还挂着 ClassIsland（课表 / 打铃），学生一整天看的都是它。
+/// 于是"喊话提示显示在哪"就成了一个真实的选择：自己的弹窗、ClassIsland 的提醒，
+/// 或者两处都显示。
+/// </summary>
+public enum ShoutNotificationChannel
+{
+    /// <summary>只用 ClassShout 自带的弹窗（默认）。</summary>
+    ClassShout,
+
+    /// <summary>只交给 ClassIsland（需要装联动插件）。</summary>
+    ClassIsland,
+
+    /// <summary>两处都显示。</summary>
+    Both,
+}
+
+/// <summary>喊话提示方式的选项。</summary>
+/// <param name="Value">实际取值。</param>
+/// <param name="Label">界面显示文本。</param>
+public sealed record ShoutChannelOption(ShoutNotificationChannel Value, string Label);
+
 /// <summary>教室端弹窗与显示的配置。</summary>
 public sealed class ClassroomNotificationSettings
 {
     /// <summary>是否启用弹窗。</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// 喊话提示显示在哪里。
+    ///
+    /// 默认仍是 ClassShout 自己的弹窗：装没装 ClassIsland 都不影响这条路的可用性，
+    /// 而"默认就要装个插件"是不能接受的。
+    /// </summary>
+    public ShoutNotificationChannel Channel { get; set; } = ShoutNotificationChannel.ClassShout;
 
     /// <summary>弹窗出现的位置。</summary>
     public NotificationCorner Corner { get; set; } = NotificationCorner.TopRight;

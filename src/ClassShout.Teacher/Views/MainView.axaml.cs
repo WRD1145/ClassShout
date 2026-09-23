@@ -4,6 +4,7 @@ using Avalonia.Markup.Xaml;
 using ClassShout.Core.Remote;
 using ClassShout.Design.Controls;
 using ClassShout.Design.Theming;
+using ClassShout.Teacher.ViewModels;
 
 namespace ClassShout.Teacher.Views;
 
@@ -26,6 +27,37 @@ public partial class MainView : UserControl
             theme.SelectedSeedHex = LocalSettings.LoadAppearance().SeedColor;
             theme.SelectionChanged += OnAppearanceChanged;
         }
+
+        var about = this.FindControl<AboutPanel>("About");
+        if (about is not null)
+        {
+            about.AppName = "ClassShout 教师端";
+            about.DiagnosticsProvider = BuildDiagnostics;
+        }
+    }
+
+    /// <summary>
+    /// 「复制诊断信息」的文本。
+    ///
+    /// 只放排障时一定会被问到的几项，且**不放任何凭据**：
+    /// 服务器地址与绑定教室是排障必需的，但登录令牌一概不进这里 ——
+    /// 这份文本的用途是贴到别处给人看，写进去就等于泄露。
+    /// </summary>
+    private string BuildDiagnostics()
+    {
+        if (DataContext is not TeacherShellViewModel vm)
+        {
+            return "（界面尚未挂上视图模型）";
+        }
+
+        var text = new System.Text.StringBuilder();
+        text.AppendLine($"服务器地址 ：{(vm.IsServerConfigured ? vm.SavedServerUrl : "（未配置）")}");
+        text.AppendLine($"账号       ：{(vm.IsSignedIn ? vm.SignedInName : "未登录")}");
+        text.AppendLine($"绑定教室   ：{(vm.IsServerBound ? vm.ClassroomName : "未绑定")}");
+        text.AppendLine($"服务器状态 ：{vm.ServerStatusText}");
+        text.AppendLine($"链路       ：{vm.ActiveLinkText}");
+        text.AppendLine($"配置目录   ：{LocalSettings.Directory}");
+        return text.ToString();
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);

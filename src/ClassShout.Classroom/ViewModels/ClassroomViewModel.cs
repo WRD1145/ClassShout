@@ -79,6 +79,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     // —— 跨局域网中继 ——
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
+
+    /// <summary>把喊话投给本机 ClassIsland 联动插件用的投递器。</summary>
+    private readonly ClassIslandNotifier _classIslandNotifier;
     private readonly ClassroomRelaySettings _relaySettings;
     private ClassroomRelayClient? _relay;
 
@@ -170,11 +173,13 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 它内部持有 Avalonia 窗口，换线程创建会拿到 null 的 Dispatcher。
         _notificationSettings = ClassroomNotificationSettings.Load();
         _notificationPresenter = new NotificationPresenter(_notificationSettings);
+        _classIslandNotifier = new ClassIslandNotifier(_http);
 
         NotificationEnabled = _notificationSettings.Enabled;
         NotificationDuration = _notificationSettings.DurationSeconds;
         SelectedCorner = CornerOptions.FirstOrDefault(o => o.Value == _notificationSettings.Corner) ?? CornerOptions[1];
         SelectedTopmost = TopmostOptions.FirstOrDefault(o => o.Value == _notificationSettings.Topmost) ?? TopmostOptions[2];
+        SelectedChannel = ChannelOptions.FirstOrDefault(o => o.Value == _notificationSettings.Channel) ?? ChannelOptions[0];
 
         // 开机自启：状态以启动文件夹里的快捷方式为准，并顺手修正指向已失效的那一个 ——
         // 程序被移动或换目录之后，旧快捷方式指向不存在的路径，开机时会静默失败，
@@ -1372,6 +1377,32 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// <summary>启动文件夹的位置，直接写在界面上，方便运维自己去看。</summary>
     public string AutoStartLocation => StartupShortcut.StartupFolder;
 
+    /// <summary>喊话提示显示在哪里。</summary>
+    [ObservableProperty]
+    private ShoutChannelOption? _selectedChannel;
+
+    public IReadOnlyList<ShoutChannelOption> ChannelOptions { get; } =
+    [
+        new(ShoutNotificationChannel.ClassShout, "只看 ClassShout 弹窗"),
+        new(ShoutNotificationChannel.ClassIsland, "只看 ClassIsland 提醒"),
+        new(ShoutNotificationChannel.Both, "两处都显示"),
+    ];
+
+    /// <summary>
+    /// 选了带 ClassIsland 的方式但没有投递成功时给一句说明。
+    ///
+    /// 老师选了"ClassIsland 提醒"却什么都没看到，第一个疑问必然是"是不是坏了"——
+    /// 而最常见的原因只是没装插件。与其让他去猜，不如这里直接说清楚。
+    /// </summary>
+    public string ChannelHint => SelectedChannel?.Value switch
+    {
+        ShoutNotificationChannel.ClassIsland =>
+            "需要教室端装 ClassShout 的 ClassIsland 联动插件；没装的话喊话将不再有任何提示。",
+        ShoutNotificationChannel.Both =>
+            "需要装了联动插件才会在 ClassIsland 里显示；没装时仍会弹 ClassShout 自己的弹窗。",
+        _ => "喊话只在 ClassShout 自己的弹窗里显示。",
+    };
+
     public IReadOnlyList<CornerOption> CornerOptions { get; } =
     [
         new(NotificationCorner.TopLeft, "左上角"),
@@ -1456,6 +1487,18 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
 
         _notificationSettings.Corner = value.Value;
+        PersistNotificationSettings();
+    }
+
+    partial void OnSelectedChannelChanged(ShoutChannelOption? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        _notificationSettings.Channel = value.Value;
+        OnPropertyChanged(nameof(ChannelHint));
         PersistNotificationSettings();
     }
 
@@ -1564,7 +1607,39 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        _notificationPresenter.Show(new NotificationContent(sourceName, text, isVoice));
+        // 两条通道各自独立：一条不通不影响另一条。
+        // 教室那台电脑上常常同时挂着 ClassIsland，老师可以选只用自己的弹窗、
+        // 只用 ClassIsland 的提醒，或者两处都显示。
+        if (SelectedChannel?.Value is not ShoutNotificationChannel.ClassIsland)
+        {
+            _notificationPresenter.Show(new NotificationContent(sourceName, text, isVoice));
+        }
+
+        if (SelectedChannel?.Value is ShoutNotificationChannel.ClassIsland or ShoutNotificationChannel.Both)
+        {
+            _ = NotifyClassIslandAsync(sourceName, text, isVoice);
+        }
+    }
+
+    /// <summary>
+    /// 把喊话投给本机的 ClassIsland 联动插件。
+    ///
+    /// 刻意 fire-and-forget 且吞掉失败：插件没装、ClassIsland 没运行都是**正常情况**，
+    /// 而这条投递只是"顺便再通知一处"—— 它绝不能让喊话本身慢下来或失败。
+    /// 失败只在头几次和每 20 次记一条，免得教室端日志被刷满、真正的异常反而被埋掉。
+    /// </summary>
+    private async Task NotifyClassIslandAsync(string sourceName, string text, bool isVoice)
+    {
+        // 语音喊话没有文字，给它一句人看得懂的说明，否则 ClassIsland 那边会是一条空提醒。
+        var content = isVoice ? "正在语音喊话…" : text;
+
+        if (!await _classIslandNotifier.TryNotifyAsync(sourceName, content).ConfigureAwait(true))
+        {
+            if (_classIslandNotifier.ShouldLogFailure())
+            {
+                AddLog("提示", "投递到 ClassIsland 失败：可能没装联动插件，或 ClassIsland 没在运行。");
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()

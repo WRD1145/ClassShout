@@ -14,6 +14,14 @@
   </ItemGroup>
 
   <!--
+    设计系统需要读取本机设置（外观、开发者模式），因此引用 Core。
+    方向是单向的：Core 不引用 Design，不会成环。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClassShout.Core\ClassShout.Core.csproj" />
+  </ItemGroup>
+
+  <!--
     内置字体：HarmonyOS Sans SC（Regular + Medium）。
 
     为什么随程序集分发而不是用系统字体：
