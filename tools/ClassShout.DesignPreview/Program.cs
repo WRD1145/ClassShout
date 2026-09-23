@@ -715,6 +715,29 @@ internal static class Program
                 () => new ClassroomSettings { DataContext = new ClassroomViewModel(), Height = 2600 }, 0, 0,
                 _ => null),
 
+            // 语音转文字卡片展开的样子。
+            //
+            // 单独来一张的理由和上面的置顶档位一样：开关关着时，那几行输入框
+            // 根本不在画面里（IsVisible 绑在开关上），而它们恰恰是新写的 XAML ——
+            // 排版走样只有真渲染一次才看得出来。
+            // 这里的赋值会走 setter 顺手落盘，但这个工具全程用临时数据目录
+            // （见 previewDataDir），不会碰使用者真实的 classroom-stt.json。
+            new("classroom-stt",
+                () =>
+                {
+                    var vm = new ClassroomViewModel
+                    {
+                        SttEnabled = true,
+                        SttBaseUrl = "https://api.openai.com/v1",
+                        SttApiKey = "sk-example-not-a-real-key",
+                        SttModel = "whisper-1",
+                        SttLanguage = "zh",
+                    };
+
+                    return new ClassroomSettings { DataContext = vm, Height = 2600 };
+                }, 0, 0,
+                _ => null),
+
             // 进入设置前的 PIN 提示窗。同样只验能不能渲染出来。
             new("classroom-pin-prompt",
                 () => new ClassroomPin(), 0, 0,
