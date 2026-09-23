@@ -30,6 +30,12 @@ public sealed class NAudioRecorder : IAudioRecorder
     public event EventHandler<float>? LevelChanged;
 
     /// <summary>
+    /// 采集中途失败。桌面用 NAudio 的 DataAvailable，回调里抛出即意味着设备被拔掉
+    /// 或被独占，同样要让界面知道 —— 否则计时器还在走，而声音早就没了。
+    /// </summary>
+    public event EventHandler<string>? Failed;
+
+    /// <summary>
     /// 挑一个设备确实支持的格式。
     /// 采集格式会通过 audioStart 告诉教室端，教室端按同样的格式播放，
     /// 所以这里不强行要求 16 kHz —— 设备支持就用，不支持就用设备最高的采样率。
@@ -101,9 +107,13 @@ public sealed class NAudioRecorder : IAudioRecorder
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
     {
+        LevelChanged?.Invoke(this, 0f);
+
         if (e.Exception is not null)
         {
-            LevelChanged?.Invoke(this, 0f);
+            // 原来只把电平清零就算了，界面那边一无所知：
+            // 计时器继续走、按钮还写着"正在录音"，而麦克风早就停了。
+            Failed?.Invoke(this, $"麦克风已停止：{e.Exception.Message}");
         }
     }
 

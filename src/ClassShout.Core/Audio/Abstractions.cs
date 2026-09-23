@@ -12,6 +12,15 @@ public interface IAudioRecorder : IAsyncDisposable
     /// <summary>音量电平（0~1），用于界面上的波形/电平表。</summary>
     event EventHandler<float>? LevelChanged;
 
+    /// <summary>
+    /// 采集中途失败（设备被抢占、底层读取报错等）。
+    ///
+    /// 必须有这条通道：采集循环跑在后台线程上，出错时它只能自己退出。
+    /// 没有这个事件的话，界面会一直显示"正在录音"、计时器继续走，
+    /// 而实际上一个字节都没采到 —— 老师以为自己在喊话，教室里一片安静。
+    /// </summary>
+    event EventHandler<string>? Failed;
+
     /// <summary>开始采集，每段 PCM 通过 <paramref name="onData"/> 回调。</summary>
     Task StartAsync(Action<ReadOnlyMemory<byte>> onData, CancellationToken cancellationToken = default);
 

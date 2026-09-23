@@ -119,6 +119,7 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         {
             _recorder = TeacherPlatform.CreateAudioRecorder();
             _recorder.LevelChanged += OnLevelChanged;
+            _recorder.Failed += OnRecorderFailed;
 
             _cts = new CancellationTokenSource();
             _audioQueue = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(QueueCapacity)
@@ -186,6 +187,25 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
 
     private void OnLevelChanged(object? sender, float value) => Post(() => Level = value);
 
+    /// <summary>
+    /// 采集中途失败。
+    ///
+    /// 必须把它当成"这一路喊话结束了"来处理：界面要停止计时、按钮要恢复，
+    /// 而且要给教室端补一个 audioEnd —— 否则教室端会一直停在"语音喊话中"。
+    /// </summary>
+    private void OnRecorderFailed(object? sender, string message)
+    {
+        Post(() =>
+        {
+            ErrorMessage = message;
+
+            if (IsRecording)
+            {
+                _ = CancelAsync();
+            }
+        });
+    }
+
     private async Task PumpAsync(ChannelReader<byte[]> reader, CancellationToken cancellationToken)
     {
         try
@@ -251,6 +271,7 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         if (recorder is not null)
         {
             recorder.LevelChanged -= OnLevelChanged;
+            recorder.Failed -= OnRecorderFailed;
             try
             {
                 await recorder.StopAsync().ConfigureAwait(true);

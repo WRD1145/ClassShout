@@ -40,19 +40,43 @@ public sealed class TeacherClient : IAsyncDisposable
         await DisconnectAsync().ConfigureAwait(false);
 
         var client = new TcpClient(endpoint.AddressFamily) { NoDelay = true };
-        await client.ConnectAsync(endpoint, cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await client.ConnectAsync(endpoint, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // 连接失败必须把这个 TcpClient 释放掉。
+            //
+            // 它在成功之前不会被赋给 _client，于是 DisconnectAsync 也管不到它 ——
+            // 每次连接超时就漏一个 socket。用户在教室里反复点"连接"，
+            // 漏掉的句柄会一直堆着，直到本机可用端口被耗尽，
+            // 那时候连浏览器都打不开网页，而没人会想到是这里。
+            client.Dispose();
+            throw;
+        }
 
         _client = client;
         _stream = client.GetStream();
         _cts = new CancellationTokenSource();
         Endpoint = endpoint.ToString();
 
-        await SendAsync(new HelloMessage
+        try
         {
-            ClientId = Guid.NewGuid().ToString("N"),
-            ClientName = clientName,
-            ProtocolVersion = ShoutProtocol.Version,
-        }, cancellationToken).ConfigureAwait(false);
+            await SendAsync(new HelloMessage
+            {
+                ClientId = Guid.NewGuid().ToString("N"),
+                ClientName = clientName,
+                ProtocolVersion = ShoutProtocol.Version,
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // 握手发不出去：把这半条连接收干净，别留一个"看起来连着"的对象
+            await DisconnectAsync().ConfigureAwait(false);
+            throw;
+        }
 
         _receiveLoop = Task.Run(() => ReceiveLoopAsync(_stream, _cts.Token));
         Log?.Invoke($"已连接教室端 {endpoint}");

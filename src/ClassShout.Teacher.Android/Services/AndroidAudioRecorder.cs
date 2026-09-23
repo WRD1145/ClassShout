@@ -39,6 +39,9 @@ public sealed class AndroidAudioRecorder : IAudioRecorder
 
     public event EventHandler<float>? LevelChanged;
 
+    /// <inheritdoc />
+    public event EventHandler<string>? Failed;
+
     public Task StartAsync(Action<ReadOnlyMemory<byte>> onData, CancellationToken cancellationToken = default)
     {
         if (_record is not null)
@@ -87,12 +90,18 @@ public sealed class AndroidAudioRecorder : IAudioRecorder
         Action<ReadOnlyMemory<byte>> onData,
         CancellationToken cancellationToken)
     {
-        var buffer = new byte[chunkBytes];
-
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
+                // 每次读都换一块新缓冲，不复用同一块。
+                //
+                // 复用会把同一段内存反复交给 onData：当前那个消费方刚好立刻
+                // ToArray() 复制走了，所以没出过事；但这属于"契约上允许持有、
+                // 实际上一持有就被改写"，桌面实现也不是这么做的。
+                // 20 毫秒一片、每秒 50 次、每次 640 字节，这点分配可以忽略。
+                var buffer = new byte[chunkBytes];
+
                 // 阻塞式读取：读满一片或超时返回，跑在后台线程上不影响界面
                 var read = record.Read(buffer, 0, buffer.Length);
 
@@ -105,7 +114,12 @@ public sealed class AndroidAudioRecorder : IAudioRecorder
                 }
                 else if (read < 0)
                 {
-                    // 负数表示出错（如设备被抢占），退出循环而不是空转刷屏
+                    // 负数表示出错（如设备被抢占）。
+                    //
+                    // 原来这里直接 break 就走人了，界面那边毫不知情：
+                    // 计时器继续走、按钮还显示"正在录音"，而音频早就断了。
+                    // 老师对着手机喊半天，教室里一点声音都没有。
+                    Failed?.Invoke(this, "麦克风读取失败，录音已中断（可能被其他应用占用）。");
                     break;
                 }
                 else

@@ -301,6 +301,18 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         string progressMessage,
         string displayName)
     {
+        // 守卫放在这个唯一的汇合点上，而不是各个入口各写一遍。
+        //
+        // 原来只有"从扫描列表点进去"那条路有守卫，手动填地址那条没有：
+        // 手快连点两下，第二次会把第一次刚建立的连接断掉（下面那句 DisconnectAsync），
+        // 两条流程交替地往同一个 _channel 上写，最后到底连上没连上、
+        // 状态该显示什么，全看时序。放在这里就不必再担心以后新增入口时忘了加。
+        if (IsConnecting)
+        {
+            AddLog("已有连接正在进行，本次请求已忽略。");
+            return;
+        }
+
         IsConnecting = true;
         ErrorMessage = null;
 
@@ -699,6 +711,16 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
                 IsClassroomMuted = false;
                 Voice.ResetOnDisconnect();
             }
+            else
+            {
+                // 回落到中继之后这条链路是通的，IsConnected 必须跟着回来。
+                //
+                // 原来它就停在方法开头那句 IsConnected = false 上了：
+                // 老师从教室走到走廊（局域网断开），界面立刻显示"未连接"、
+                // 喊话按钮全部禁用 —— 而服务器那边其实还绑着，
+                // 喊话本来完全发得出去。用户看到的是"明明连上了服务器，却什么都按不动"。
+                IsConnected = _relayTransport.IsConnected;
+            }
 
             NotifyLinkChanged();
         }
@@ -910,6 +932,18 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     {
         Post(() =>
         {
+            // 中继不是当前链路时，它的状态事件一律不写界面。
+            //
+            // 老师可能一边绑着服务器上的 A 教室，一边走进 B 教室用局域网直连 ——
+            // 这时中继仍连着、仍在推 A 教室的静音/音量/上下线，
+            // 而那些消息会把界面改得和"正在喊话的那间教室"对不上：
+            // 明明对着 B 喊，显示的却是 A 的静音状态。
+            // 两条链路指向不同教室时，只有当前那条有资格说话。
+            if (!ReferenceEquals(_transport.Active, _relayTransport))
+            {
+                return;
+            }
+
             switch (envelope.Kind)
             {
                 case RelayKinds.Status:

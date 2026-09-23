@@ -24,6 +24,9 @@ public sealed class TeacherRelayClient : IAsyncDisposable
     private readonly TeacherRelaySettings _settings;
     private readonly Lock _audioLock = new();
 
+    /// <summary>是否已经给服务器发过 audioStart（也就是教室端是否已进入播放状态）。</summary>
+    private volatile bool _audioSessionOpen;
+
     private readonly List<byte> _audioBuffer = [];
     private CancellationTokenSource? _cts;
     private Task? _pollLoop;
@@ -194,16 +197,27 @@ public sealed class TeacherRelayClient : IAsyncDisposable
 
         ClearAudioBuffer();
 
+        // 发出去之后才记"会话已开"，与局域网那条链路同样的道理：
+        // 先记后发的话，一旦这次 POST 失败，通道就以为会话开着，
+        // 后面攒下来的裸 PCM 会被发到一个从没收到过 audioStart 的教室。
         await PostAsync(
             Url(string.Format(RelayPaths.TeacherAudioStart, _token)),
             JsonContent.Create(new AudioStartRequest(format.SampleRate, format.Channels, format.BitsPerSample), options: JsonOptions),
             cancellationToken).ConfigureAwait(false);
+
+        _audioSessionOpen = true;
     }
 
-    /// <summary>送入一段 PCM。会先攒在本地，达到 100 毫秒才真正发出去。</summary>
+    /// <summary>
+    /// 送入一段 PCM。会先攒在本地，达到 100 毫秒才真正发出去。
+    ///
+    /// 没有开着的会话就一片都不收：录音途中链路切换（局域网断开、回落到中继）时
+    /// 会走到这里，而这条中继链路从来没收到过 audioStart ——
+    /// 发过去只会让教室端收到一段没有采样率和声道数的裸字节。
+    /// </summary>
     public void AccumulateAudio(ReadOnlySpan<byte> pcm)
     {
-        if (_token is null || pcm.IsEmpty)
+        if (_token is null || pcm.IsEmpty || !_audioSessionOpen)
         {
             return;
         }
@@ -236,6 +250,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
 
         await FlushAudioAsync(cancellationToken).ConfigureAwait(false);
         ClearAudioBuffer();
+        _audioSessionOpen = false;
 
         await PostAsync(
             Url(string.Format(RelayPaths.TeacherAudioEnd, _token)),
@@ -292,8 +307,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
             {
-                SetConnected(false);
-                Log?.Invoke("会话已失效，请重新绑定教室。");
+                InvalidateBinding("会话已失效，请重新绑定教室。");
                 return false;
             }
 
@@ -305,6 +319,43 @@ public sealed class TeacherRelayClient : IAsyncDisposable
             Log?.Invoke($"发送失败：{ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// 令牌失效：把它真的清掉，让"已绑定"这件事跟着变成否。
+    ///
+    /// 原来这里只调用 SetConnected(false)，_token 留着不动 —— 而 IsBound 看的正是
+    /// _token，于是界面上依旧显示"已连接"、喊话按钮依然可点，
+    /// 每一次喊话都在 PostAsync 里被 401 悄悄丢掉，只留一行日志。
+    /// 老师看到的是"我按了、界面也正常"，教室里毫无动静：
+    /// 这比直接报错难查得多。令牌清掉之后界面会自己回到"未绑定"。
+    /// </summary>
+    private void InvalidateBinding(string reason)
+    {
+        _token = null;
+
+        lock (_audioLock)
+        {
+            _audioBuffer.Clear();
+        }
+
+        _audioSessionOpen = false;
+        SetConnected(false);
+
+        // 轮询循环靠 _token 工作，令牌没了就该停，否则它会一直空转打 401
+        try
+        {
+            _cts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 已经释放过
+        }
+
+        _pollLoop = null;
+        _audioFlusher = null;
+
+        Log?.Invoke(reason);
     }
 
     // ======================== 接收 ========================

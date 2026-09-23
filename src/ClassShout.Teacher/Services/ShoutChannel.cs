@@ -109,13 +109,37 @@ public sealed class ShoutChannel : IShoutTransport, IAsyncDisposable
             return;
         }
 
-        _audioSessionId = Guid.NewGuid().ToString("N");
-        await _client.SendAudioStartAsync(_audioSessionId, format, cancellationToken).ConfigureAwait(false);
+        // 先发再记。
+        //
+        // 原来是把新 id 赋给字段、然后才发 audioStart。发送失败（网络刚断、
+        // 对端拒绝）时字段已经写进去了，于是通道认为"会话开着"，
+        // 而教室端从来没见过这个 audioStart —— 后续的裸 PCM 会被发到一个
+        // 没有格式说明的对端，结尾还会补一个教室端不认识的 audioEnd。
+        // 而且这个脏状态没有任何地方会清，只能靠断开重连。
+        var id = Guid.NewGuid().ToString("N");
+        await _client.SendAudioStartAsync(id, format, cancellationToken).ConfigureAwait(false);
+
+        // 走到这里才说明教室端确实进入了播放状态
+        _audioSessionId = id;
     }
 
-    /// <summary>发送一段 PCM。</summary>
+    /// <summary>
+    /// 发送一段 PCM。
+    ///
+    /// 没有开着的会话就一片都不发。裸 PCM 必须挂在某一次 audioStart 之后才有意义 ——
+    /// 对端要靠它知道采样率、声道数和位深，否则收到的只是一段无法解释的字节。
+    /// 录音途中链路切换（局域网断开、回落到中继）时就会走到这里：
+    /// 新链路从来没收到过 audioStart，把 PCM 发过去等于往教室里灌噪声。
+    /// </summary>
     public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken cancellationToken = default)
-        => _client.SendAudioAsync(pcm, cancellationToken);
+    {
+        if (_audioSessionId is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return _client.SendAudioAsync(pcm, cancellationToken);
+    }
 
     /// <summary>结束语音喊话。</summary>
     public async Task EndAudioAsync(CancellationToken cancellationToken = default)
