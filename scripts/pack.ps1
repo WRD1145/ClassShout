@@ -297,16 +297,26 @@ try {
 
     # ---------- 校验清单 ----------
     #
-    # 名字用附件名、行格式用 sha256sum 能直接吃的「哈希 + 两空格 + 文件名」。
-    # 早先这里写的是构建目录里的相对路径（Windows 下还带反斜杠），
-    # 下载的人拿它跟手里的附件名对不上号，等于没有清单。
+    # 三个细节都是踩过的坑，缺一个这份清单就等于没有：
+    #   1. 名字用附件名 —— 早先写的是构建目录相对路径，跟下载到的文件名对不上号；
+    #   2. 行格式用 sha256sum 能直接吃的「哈希 + 两空格 + 文件名」；
+    #   3. 换行必须是 LF。清单在 Windows 上生成，默认会写成 CRLF，而 sha256sum
+    #      会把行尾的 \r 当成文件名的一部分，于是每个文件都"不存在"。配上
+    #      --ignore-missing 还会被静默跳过，最后只报一句「no file was verified」，
+    #      让人以为是下载坏了。服务端本来就部署在 Linux 上，这份清单必须在那儿能用。
     $manifestPath = Join-Path $releaseOut 'SHA256SUMS.txt'
-    Get-ChildItem $releaseOut -File |
+    $manifestLines = Get-ChildItem $releaseOut -File |
         Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
         Sort-Object Name |
         ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
-        } | Set-Content $manifestPath -Encoding UTF8
+        }
+
+    # 不带 BOM 的 UTF-8，行尾 LF（-NoNewline + 手动 join 才能保证不掺进 CR）
+    [System.IO.File]::WriteAllText(
+        $manifestPath,
+        (($manifestLines -join "`n") + "`n"),
+        (New-Object System.Text.UTF8Encoding($false)))
 
     Write-Host ''
     Write-Host '可发布资产（dist\release，附件名即文件名）：' -ForegroundColor Green
