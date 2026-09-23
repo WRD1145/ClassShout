@@ -55,6 +55,12 @@ public interface ISpeechSynthesizer : IDisposable
     /// <summary>是否正在朗读。</summary>
     bool IsSpeaking { get; }
 
+    /// <summary>朗读状态变化，参数为是否正在朗读。界面据此显示"正在朗读"。</summary>
+    event EventHandler<bool>? SpeakingChanged;
+
+    /// <summary>取第一个中文语音，用于首次启动时的默认值；一个都没有时返回 null。</summary>
+    string? GetDefaultChineseVoice();
+
     /// <summary>朗读一段文字。</summary>
     Task SpeakAsync(string text, SpeechRequestOptions options, CancellationToken cancellationToken = default);
 

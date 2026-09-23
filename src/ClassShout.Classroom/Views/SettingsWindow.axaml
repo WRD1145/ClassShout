@@ -3,6 +3,7 @@
         xmlns:md3="using:ClassShout.Design.Controls"
         xmlns:vm="using:ClassShout.Classroom.ViewModels"
         xmlns:svc="using:ClassShout.Classroom.Services"
+        xmlns:core="using:ClassShout.Core.Audio"
         x:Class="ClassShout.Classroom.Views.SettingsWindow"
         x:DataType="vm:ClassroomViewModel"
         Title="ClassShout 教室端 · 设置"
@@ -121,11 +122,55 @@
             </StackPanel>
 
             <StackPanel Spacing="6">
+              <TextBlock Classes="bodyMedium" Text="朗读引擎" />
+              <ComboBox HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding EngineOptions}"
+                        SelectedItem="{Binding SelectedEngine}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:SpeechEngineOption">
+                    <TextBlock Text="{Binding Label}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="在线语音更自然，但需要教室电脑能上外网；连不上时会自动回落到系统语音，不会不发声。" />
+            </StackPanel>
+
+            <!-- 系统语音：不在线引擎时才显示，免得两个音色列表同时摆着让人分不清哪个生效 -->
+            <StackPanel Spacing="6" IsVisible="{Binding !IsEdgeEngine}">
               <TextBlock Classes="bodyMedium" Text="系统语音" />
               <ComboBox HorizontalAlignment="Stretch"
                         ItemsSource="{Binding Voices}"
                         SelectedItem="{Binding SelectedVoice}" />
             </StackPanel>
+
+            <StackPanel Spacing="6" IsVisible="{Binding IsEdgeEngine}">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Classes="bodyMedium" Text="在线音色" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="text small" Content="刷新列表"
+                        Command="{Binding RefreshEdgeVoicesCommand}" />
+              </Grid>
+              <ComboBox HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding EdgeVoices}"
+                        SelectedItem="{Binding SelectedEdgeVoice}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="core:EdgeVoiceInfo">
+                    <TextBlock Text="{Binding Display}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         IsVisible="{Binding !EdgeVoices.Count}"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="还没拿到音色列表。点「刷新列表」试试；拉不到就说明这台机器连不上外网。" />
+            </StackPanel>
+
+            <Border Background="{DynamicResource Md3.SurfaceContainerHighest}"
+                    CornerRadius="8" Padding="10,8">
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Text="{Binding SpeechEngineStatus, StringFormat='当前实际在用：{0}'}" />
+            </Border>
 
             <Button Classes="tonal block" Command="{Binding TestSpeechCommand}">
               <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">

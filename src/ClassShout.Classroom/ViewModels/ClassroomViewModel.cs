@@ -46,7 +46,8 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly ClassroomServer _server;
     private readonly ClassroomAnnouncer _announcer;
-    private readonly WindowsSpeechSynthesizer _speech;
+    private readonly EdgeTtsSynthesizer _speech;
+    private readonly ClassroomSpeechSettings _speechSettings;
     private readonly NAudioLoopbackPlayer _player = new();
     private readonly Dictionary<string, TeacherSession> _sessions = [];
     private readonly Dictionary<string, int> _textCounts = [];
@@ -89,7 +90,14 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     {
         _server = new ClassroomServer(port);
         _announcer = new ClassroomAnnouncer(discoveryPort);
-        _speech = new WindowsSpeechSynthesizer();
+        // 系统语音始终建起来：它不依赖外网，是保底引擎，
+        // 也是 Edge 连不上时的回落目标。
+        _speechSettings = LocalSettings.LoadSpeech();
+        _speech = new EdgeTtsSynthesizer(new EdgeTtsClient(_http), new WindowsSpeechSynthesizer())
+        {
+            Engine = _speechSettings.Engine,
+            EdgeVoice = _speechSettings.EdgeVoice,
+        };
 
         // 读出本机身份：UUID 首次启动生成一次后永久保留，是这台教室在服务器上的身份
         _relaySettings = LocalSettings.LoadClassroom();
@@ -141,6 +149,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         {
             Voices.Add(voice);
         }
+
+        _selectedEngine = EngineOptions.FirstOrDefault(o => o.Value == _speechSettings.Engine) ?? EngineOptions[0];
+        _speech.Engine = _selectedEngine.Value;
 
         SelectedVoice = _speech.GetDefaultChineseVoice() ?? Voices.FirstOrDefault();
 
@@ -236,7 +247,121 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         ? "教师端与本机处于同一局域网时，打开应用即可自动搜索到本教室"
         : "教师端已连接，随时可以开始喊话";
 
+    /// <summary>系统语音的可选列表（SAPI）。</summary>
     public ObservableCollection<string> Voices { get; } = [];
+
+    /// <summary>在线引擎下可选的音色列表。</summary>
+    public ObservableCollection<EdgeVoiceInfo> EdgeVoices { get; } = [];
+
+    /// <summary>引擎下拉项。系统语音排在前面：它是保底选项。</summary>
+    public IReadOnlyList<SpeechEngineOption> EngineOptions { get; } =
+    [
+        new(SpeechEngine.System, "系统语音（离线可用）"),
+        new(SpeechEngine.Edge, "Edge 在线语音（更自然，需要外网）"),
+    ];
+
+    private SpeechEngineOption _selectedEngine = null!;
+
+    public SpeechEngineOption SelectedEngine
+    {
+        get => _selectedEngine;
+        set
+        {
+            if (value is null || ReferenceEquals(_selectedEngine, value))
+            {
+                return;
+            }
+
+            _selectedEngine = value;
+            _speech.Engine = value.Value;
+            _speechSettings.Engine = value.Value;
+            LocalSettings.SaveSpeech(_speechSettings);
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsEdgeEngine));
+            OnPropertyChanged(nameof(SpeechEngineStatus));
+
+            AddLog("朗读", value.Value == SpeechEngine.Edge
+                ? "已切换到 Edge 在线语音；连不上时会自动回落到系统语音。"
+                : "已切换到系统语音。");
+
+            if (value.Value == SpeechEngine.Edge && EdgeVoices.Count == 0)
+            {
+                _ = RefreshEdgeVoicesAsync();
+            }
+        }
+    }
+
+    /// <summary>当前是不是选了在线引擎。界面据此切换音色列表。</summary>
+    public bool IsEdgeEngine => _speech.Engine == SpeechEngine.Edge;
+
+    /// <summary>
+    /// 现在实际在用哪个引擎。
+    ///
+    /// 取的是合成器记下的结果，而不是"用户选了什么" ——
+    /// 用户选了 Edge 但外网不通时，界面必须显示"已回落到系统语音"，
+    /// 否则老师只会觉得"今天的音质怎么变差了"，而没有任何线索。
+    /// </summary>
+    public string SpeechEngineStatus => _speech.LastEngineText;
+
+    private EdgeVoiceInfo? _selectedEdgeVoice;
+
+    public EdgeVoiceInfo? SelectedEdgeVoice
+    {
+        get => _selectedEdgeVoice;
+        set
+        {
+            if (value is null || ReferenceEquals(_selectedEdgeVoice, value))
+            {
+                return;
+            }
+
+            _selectedEdgeVoice = value;
+            _speech.EdgeVoice = value.ShortName;
+            _speechSettings.EdgeVoice = value.ShortName;
+            LocalSettings.SaveSpeech(_speechSettings);
+
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>拉取在线音色列表。拉不到就说明这台机器连不上在线语音。</summary>
+    [RelayCommand]
+    private async Task RefreshEdgeVoicesAsync()
+    {
+        try
+        {
+            var voices = await _speech.GetEdgeVoicesAsync().ConfigureAwait(true);
+
+            if (voices.Count == 0)
+            {
+                AddLog("朗读", "拿不到在线音色列表 —— 这台机器可能连不上外网，将继续使用系统语音。");
+                OnPropertyChanged(nameof(SpeechEngineStatus));
+                return;
+            }
+
+            // 中文音色排前面：这是中文课堂，把英文音色列在最前面没有意义
+            var ordered = voices
+                .OrderByDescending(v => v.Locale.StartsWith("zh", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(v => v.Locale, StringComparer.Ordinal)
+                .ToList();
+
+            EdgeVoices.Clear();
+            foreach (var voice in ordered)
+            {
+                EdgeVoices.Add(voice);
+            }
+
+            SelectedEdgeVoice = EdgeVoices.FirstOrDefault(v => v.ShortName == _speechSettings.EdgeVoice)
+                                ?? EdgeVoices.FirstOrDefault();
+
+            AddLog("朗读", $"已载入 {EdgeVoices.Count} 个在线音色，当前：{SelectedEdgeVoice?.ShortName ?? "默认"}");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            AddLog("朗读", $"载入在线音色失败：{ex.Message}");
+        }
+    }
 
     public ObservableCollection<LogEntry> Logs { get; } = [];
 
@@ -588,6 +713,10 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                 CurrentText = string.Empty;
                 CurrentSpeaker = string.Empty;
                 AudioLevel = 0;
+
+                // 这一条读完才知道实际用的是哪个引擎（可能已经回落到系统语音），
+                // 所以状态显示要在这里刷新，而不是在开始朗读时。
+                OnPropertyChanged(nameof(SpeechEngineStatus));
             });
         }
         catch (Exception ex)

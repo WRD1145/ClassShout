@@ -53,6 +53,13 @@ internal static class Program
             return await RunRelayAsync(url, adminPassword);
         }
 
+        // Edge 在线语音：默认跳过，因为它依赖外网。
+        // 教室网经常是隔离的，把它做成默认项会让回归在正常环境里也失败。
+        if (args.Contains("--edge-tts", StringComparer.OrdinalIgnoreCase))
+        {
+            await CheckEdgeTtsAsync();
+        }
+
         // 纯进程内的并发不变量：不依赖网络，也不依赖中继服务器，
         // 所以只在局域网这条路径上跑一次，不必两个套件各跑一遍。
         await RunMessageQueueConcurrencyAsync();
@@ -773,6 +780,42 @@ internal static class Program
                 ? $"共 {delivered.Count} 条，序号连续"
                 : $"期望 {expected.Count} 条，实际 {delivered.Count} 条");
     }
+    /// <summary>
+    /// Edge 在线语音的联调。需要外网，所以只在显式加 --edge-tts 时跑。
+    ///
+    /// 验证三件事：能拿到音色列表（并且有中文音色）、能合成出音频、
+    /// 拿到的确实是 MP3（帧同步头 FF Ex）。
+    /// 中间任何一环出错都会表现为"教室端不发声"，而那是现场最难查的一类问题，
+    /// 所以宁可在这里断言清楚。
+    /// </summary>
+    private static async Task CheckEdgeTtsAsync()
+    {
+        Console.WriteLine();
+        Console.WriteLine("Edge 在线语音（需要外网）");
+
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(25) };
+        using var edge = new EdgeTtsClient(http);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var voices = await edge.GetVoicesAsync(timeout.Token);
+        var chinese = voices.Where(v => v.Locale.StartsWith("zh", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        Check("能拉到 Edge 音色列表", voices.Count > 0, $"共 {voices.Count} 个音色");
+        Check("列表里有中文音色", chinese.Count > 0,
+            chinese.Count > 0
+                ? $"中文音色 {chinese.Count} 个，例如 {chinese[0].ShortName}"
+                : "一个中文音色都没有");
+
+        var audio = await edge.SynthesizeAsync(
+            "同学们请安静，现在开始上课。", EdgeTtsClient.DefaultVoice, 0, 0, timeout.Token);
+
+        Check("Edge 合成返回了音频", audio.Length > 2000, $"{audio.Length} 字节");
+
+        var isMp3 = audio.Length >= 3 && audio[0] == 0xFF && (audio[1] & 0xE0) == 0xE0;
+        Check("返回的是 MP3（帧同步头正确）", isMp3,
+            audio.Length >= 3 ? $"前 3 字节 {audio[0]:X2} {audio[1]:X2} {audio[2]:X2}" : "数据太短");
+    }
+
     /// <summary>
     /// 教室端的设置锁：可选、默认关闭、只认数字、不以明文落盘。
     ///

@@ -158,8 +158,11 @@ internal static class Program
             // 不做像素判据（内容以文字与控件为主，颜色占比判据不适用），
             // 但"能构造、能布局、能出帧"本身就是有效断言：
             // XAML 结构写坏、绑定指向不存在的属性、控件主题缺失都会在这里炸。
+            // 高度特意调到整页可见：设置项会随着功能增加而变多，
+            // 若按窗口默认高度导出，导出图里永远只看得到头两张卡片，
+            // 审阅的人会以为后面没做。这里让它一屏看全。
             new("classroom-settings",
-                () => new ClassroomSettings { DataContext = new ClassroomViewModel() }, 0, 0,
+                () => new ClassroomSettings { DataContext = new ClassroomViewModel(), Height = 1500 }, 0, 0,
                 _ => null),
 
             // 进入设置前的 PIN 提示窗。同样只验能不能渲染出来。

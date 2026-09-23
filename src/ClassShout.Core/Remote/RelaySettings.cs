@@ -1,3 +1,4 @@
+using ClassShout.Core.Audio;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -163,4 +164,8 @@ public static class LocalSettings
     public static TeacherRelaySettings LoadTeacher() => Load("teacher.json", static () => new TeacherRelaySettings());
 
     public static bool SaveTeacher(TeacherRelaySettings settings) => Save("teacher.json", settings);
+
+    public static ClassroomSpeechSettings LoadSpeech() => Load("classroom-speech.json", static () => new ClassroomSpeechSettings());
+
+    public static bool SaveSpeech(ClassroomSpeechSettings settings) => Save("classroom-speech.json", settings);
 }
