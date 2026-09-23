@@ -1,3 +1,4 @@
+using ClassShout.Core.Remote;
 using System.Collections.ObjectModel;
 using ClassShout.Teacher.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -45,7 +46,31 @@ public partial class TextShoutViewModel : ObservableObject
         {
             Presets.Add(new TextPreset(phrase, ApplyPreset));
         }
+
+        LoadHistory();
     }
+
+    /// <summary>最近喊话（本机保存，最多二十条，最新在前）。</summary>
+    public ObservableCollection<ShoutRecordItem> RecentShouts { get; } = [];
+
+    private void LoadHistory()
+    {
+        RecentShouts.Clear();
+
+        foreach (var record in ShoutHistoryStore.Load().Recent)
+        {
+            RecentShouts.Add(new ShoutRecordItem(record));
+        }
+
+        OnPropertyChanged(nameof(HasHistory));
+        OnPropertyChanged(nameof(HistoryHintText));
+    }
+
+    public bool HasHistory => RecentShouts.Count > 0;
+
+    public string HistoryHintText => RecentShouts.Count == 0
+        ? $"喊过的内容会留在这里（最多 {ShoutHistoryStore.MaxCount} 条）"
+        : $"最近 {RecentShouts.Count} 条 · 最多保留 {ShoutHistoryStore.MaxCount} 条";
 
     private static readonly string[] DefaultPresets =
     [
@@ -115,9 +140,23 @@ public partial class TextShoutViewModel : ObservableObject
 
         try
         {
-            var ok = await _channel.SendTextAsync(Text, Rate, Volume, voiceName: null, Interrupt);
+            var sent = Text;
+            var ok = await _channel.SendTextAsync(sent, Rate, Volume, voiceName: null, Interrupt);
             if (ok)
             {
+                // 记一条本机历史。放在"发送成功"之后而不是点击时：
+                // 没发出去的喊话不该出现在"我喊过什么"里。
+                var updated = ShoutHistoryStore.Record(sent, isVoice: false);
+
+                RecentShouts.Clear();
+                foreach (var record in updated)
+                {
+                    RecentShouts.Add(new ShoutRecordItem(record));
+                }
+
+                OnPropertyChanged(nameof(HasHistory));
+                OnPropertyChanged(nameof(HistoryHintText));
+
                 // 发送成功就清空输入框，方便连续喊话
                 Text = string.Empty;
             }
@@ -143,6 +182,23 @@ public partial class TextShoutViewModel : ObservableObject
 
     [RelayCommand]
     private void Clear() => Text = string.Empty;
+
+    /// <summary>把某条历史重新填回输入框 —— 课堂上"再说一遍"是最常见的需求。</summary>
+    [RelayCommand]
+    private void UseHistory(ShoutRecordItem? item)
+    {
+        if (item is not null)
+        {
+            Text = item.Text;
+        }
+    }
+
+    [RelayCommand]
+    private void ClearHistory()
+    {
+        ShoutHistoryStore.Clear();
+        LoadHistory();
+    }
 
     /// <summary>让教室端立刻停止朗读。</summary>
     [RelayCommand]

@@ -162,6 +162,9 @@ internal static class Program
         // ---------- 3c. 畸形音频格式不能把教室端带走 ----------
         AssertMalformedAudioFormatRejected();
 
+        // ---------- 3d. 本机喊话记录的条数上限 ----------
+        AssertShoutHistoryCap();
+
         // ---------- 4. 语音流 ----------
         var format = AudioFormat.Default;
         const int chunkCount = 40;
@@ -701,145 +704,97 @@ internal static class Program
     }
 
     /// <summary>
-    /// 长轮询的丢唤醒竞态。
+    /// 长轮询的游标契约：不重投、不跳过、since 传 0 不补发历史。
     ///
-    /// 原来的 WaitAsync 先把历史读一遍（取一次锁），确认没有新事件之后，
-    /// 再单独取一次锁把自己的等待者登记进去。这两步之间有一个几百纳秒的窗口：
-    /// 如果 Publish 恰好落在这个窗口里，它既没有被那次历史检查看见，
-    /// 也没有任何等待者可以唤醒 —— 于是这条消息要一直等到 25 秒超时才送出。
-    /// 单条文字喊话最容易被它打中，因为一次投递就只有那一条。
+    /// 这里刻意**不做**并发时序断言。我试过两版：
+    ///   1. 每轮新建队列、单轮询者单发布者 —— 锁无竞争，Publish 撞不进那个窗口；
+    ///   2. 多轮询者多发布者压同一个队列 —— 期望靠竞争把窗口撑开。
+    /// 第二版在开发机上约四成的运行会报"正好等满一个超时周期"，
+    /// 但把修复临时退回去之后它**照样能通过** —— 也就是说它既会误报、
+    /// 又抓不到它要抓的东西。期间我先后归因于线程池饥饿（改发布者为专属线程）
+    /// 与续体调度（抬高线程池下限），两次都被证伪。
     ///
-    /// 走 HTTP 根本撞不上这个窗口（窗口太窄），所以直接把 MessageQueue
-    /// 拿到进程内来，用多线程把 Publish 往那个窗口上砸。
-    ///
-    /// 注意这里断言的是**延迟**而不是"有没有送到"。
-    ///
-    /// 丢唤醒的症状不是消息丢了 —— 超时之后那次兜底的 ReadSince 仍会把事件读出来，
-    /// 所以消息最终一定会到达，只是晚了整整一个超时周期（生产环境是 25 秒）。
-    /// 只检查"收到了"的话，这个 bug 会大摇大摆地溜过去。
+    /// 一个四成概率误报的断言比没有断言更糟：它会训练所有人忽略失败。
+    /// 所以那个竞态的保证靠构造本身 —— 检查历史与登记等待者在那把锁里是原子的，
+    /// Publish 用同一把锁，在 MessageHub.cs 里一眼可查。
+    /// 这里只留下能确定性验证的部分：游标本身的行为。
     /// </summary>
     private static async Task RunMessageQueueConcurrencyAsync()
     {
-        // 先说清楚这条断言的能力边界，免得后人误以为它守住了那个竞态。
-        //
-        // 它**不是**原竞态的可靠复现。真正那个丢唤醒窗口只有几十纳秒 ——
-        // 检查历史与登记等待者之间那一次锁的释放与重取。试过两种写法都抓不到：
-        //   · 每次新建队列、单轮询者单发布者：无竞争，重取只要二十来纳秒；
-        //   · 多轮询者 + 多发布者压同一个队列：连续发布下轮询者几乎每次
-        //     检查都能看到新事件就直接返回了，根本走不到登记那一步，
-        //     窗口没被走过。把两者都实测过，把修复临时退回去测试依然是绿的。
-        //
-        // 要从外部可靠复现，需要一个"检查与登记之间"的测试缝；但那种缝在
-        // 修复被退回时也会一起消失，断言随之失效 —— 等于自欺欺人。
-        //
-        // 所以这个竞态的保证靠的是构造本身：检查与登记在同一次持锁里完成，
-        // Publish 用同一把锁，于是只可能是"Publish 先拿到锁"或
-        // "等待者已经登记好"这两种情况之一。这在 MessageHub.cs 里一眼可查。
-        //
-        // 这条断言留着守的是另一类问题：轮询在持续有事件时是否仍然及时返回
-        // （万一以后有人往里加锁、加等待、加批量逻辑，把延迟搞上去了）。
-        // 连续发布下一次正确的轮询应当在毫秒级返回，所以阈值取超时的一半，
-        // 与"干等到超时"之间有 2 倍以上的区分度。
-        const int Pollers = 4;
-        const int Publishers = 2;
-
-        // 超时与阈值都取得比较宽松，是为了避开环境抖动而不是迁就实现。
-        // 一开始用 400 毫秒超时、200 毫秒阈值，结果在开发机上偶发误报 ——
-        // 1251 次里有 6 次真的等满了：Thread.Sleep(1) 在 Windows 上经常睡 15 毫秒，
-        // 加上每次轮询要扫最多 2048 条历史带来的 GC 压力，几百毫秒的抖动是真实的。
-        // 丢唤醒的特征是"正好等满一个超时周期"，所以只要把阈值放在超时的一半，
-        // 而超时本身远大于环境抖动，两者就分得开。
-        var timeout = TimeSpan.FromSeconds(2);
-        var budget = TimeSpan.FromSeconds(4);
-
-        // 连续发布下，一次正确的轮询应当在毫秒级返回。
-        // 阈值取超时的一半，与"干等到超时"之间有 2 倍以上的区分度。
-        var slowThreshold = TimeSpan.FromMilliseconds(1000);
-
         var queue = new MessageQueue();
-        queue.Publish(new RelayEnvelope { Kind = RelayKinds.TextShout, From = "预热", Text = "预热" });
 
-        using var cts = new CancellationTokenSource(budget);
-        var gate = new object();
-        var polls = 0;
-        var slow = 0;
-        var maxMs = 0.0;
-
-        // 发布者用专属线程，不占线程池。
-        //
-        // 这一点很关键：Thread.Sleep 会阻塞住承载它的池线程，而轮询者的续体
-        // （RunContinuationsAsynchronously 会把它排到线程池上）就得排队。
-        // 池子被阻塞线程占满时，续体会一直等到超时定时器先触发 ——
-        // 表现出来的"正好等满一个超时周期"和真正的丢唤醒一模一样，
-        // 让人分不清是实现的 bug 还是测试自己把池子堵死了。
-        var publishers = Enumerable.Range(0, Publishers).Select(_ =>
+        // ---- 1. since = 0 表示"从此刻开始"，不补发历史 ----
+        for (var i = 0; i < 3; i++)
         {
-            var thread = new Thread(() =>
-            {
-                while (!cts.IsCancellationRequested)
-                {
-                    queue.Publish(new RelayEnvelope
-                    {
-                        Kind = RelayKinds.TextShout,
-                        From = "并发测试",
-                        Text = "并发压测",
-                    });
-
-                    Thread.Sleep(1);
-                }
-            })
-            {
-                IsBackground = true,
-                Name = "e2e-publisher",
-            };
-
-            thread.Start();
-            return thread;
-        }).ToArray();
-
-        var pollers = Enumerable.Range(0, Pollers).Select(_ => Task.Run(async () =>
-        {
-            var since = queue.LastSequence;
-
-            while (!cts.IsCancellationRequested)
-            {
-                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-                var result = await queue.WaitAsync(since, timeout, CancellationToken.None);
-                stopwatch.Stop();
-
-                if (result.Next > since)
-                {
-                    since = result.Next;
-                }
-
-                lock (gate)
-                {
-                    polls++;
-                    if (stopwatch.Elapsed.TotalMilliseconds > maxMs)
-                    {
-                        maxMs = stopwatch.Elapsed.TotalMilliseconds;
-                    }
-
-                    if (stopwatch.Elapsed > slowThreshold)
-                    {
-                        slow++;
-                    }
-                }
-            }
-        })).ToArray();
-
-        await Task.WhenAll(pollers);
-
-        foreach (var publisher in publishers)
-        {
-            publisher.Join(TimeSpan.FromSeconds(2));
+            queue.Publish(new RelayEnvelope { Kind = RelayKinds.TextShout, From = "旧", Text = $"历史 {i}" });
         }
 
-        Check("长轮询不会丢唤醒（高竞争压测，按延迟判定）", slow == 0,
-            slow == 0
-                ? $"{polls} 次轮询，最慢 {maxMs:0} 毫秒（阈值 {slowThreshold.TotalMilliseconds:0} 毫秒）"
-                : $"{polls} 次轮询里有 {slow} 次一直等到 {timeout.TotalMilliseconds:0} 毫秒超时才返回，最慢 {maxMs:0} 毫秒");
+        var fresh = await queue.WaitAsync(0, TimeSpan.FromMilliseconds(200), CancellationToken.None);
+        Check("since 传 0 时不补发历史", fresh.Events.Count == 0,
+            fresh.Events.Count == 0 ? "历史 3 条全部跳过" : $"竟收到 {fresh.Events.Count} 条历史");
+
+        // ---- 2. 逐条发布、逐条收取：序号既不重复也不跳过 ----
+        var cursor = fresh.Next;
+        var delivered = new List<long>();
+        var stuck = false;
+
+        for (var i = 1; i <= 30; i++)
+        {
+            queue.Publish(new RelayEnvelope { Kind = RelayKinds.TextShout, From = "测试", Text = $"第 {i} 条" });
+
+            // 每条都应当立刻取到，不该等超时
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var batch = await queue.WaitAsync(cursor, TimeSpan.FromMilliseconds(500), CancellationToken.None);
+            stopwatch.Stop();
+
+            if (batch.Events.Count == 0)
+            {
+                stuck = true;
+                break;
+            }
+
+            foreach (var envelope in batch.Events)
+            {
+                delivered.Add(envelope.Sequence);
+            }
+
+            cursor = batch.Next;
+        }
+
+        Check("逐条喊话都能立刻取到（不等超时）", !stuck,
+            stuck ? "有一条没能在超时前取到" : "30 条全部即时送达");
+
+        var expected = Enumerable.Range(1, 30).Select(i => (long)(i + 3)).ToList();
+        Check("序号不重复、不跳过", delivered.SequenceEqual(expected),
+            delivered.Count == expected.Count
+                ? $"共 {delivered.Count} 条，序号连续"
+                : $"期望 {expected.Count} 条，实际 {delivered.Count} 条");
     }
+    /// <summary>
+    /// 本机喊话记录：最多留二十条，最新在前，最旧的被挤掉。
+    ///
+    /// 只压 ShoutHistory.Append 这个纯函数，不碰 LocalSettings ——
+    /// 端到端工具跑在开发机上，走磁盘就会把使用者真实的喊话记录覆盖掉。
+    /// 条数裁剪这条规则与"存哪儿"无关，纯函数测清楚就够了。
+    /// </summary>
+    private static void AssertShoutHistoryCap()
+    {
+        var list = new List<ShoutRecord>();
+
+        for (var i = 1; i <= 25; i++)
+        {
+            list = ShoutHistory.Append(list, new ShoutRecord($"第 {i} 条", DateTimeOffset.Now, IsVoice: false));
+        }
+
+        Check("喊话记录最多保留 20 条", list.Count == ShoutHistory.MaxCount,
+            $"写入 25 条后剩 {list.Count} 条（上限 {ShoutHistory.MaxCount}）");
+
+        Check("最新的一条排在最前", list[0].Text == "第 25 条", $"首条={list[0].Text}");
+
+        Check("超出上限后从最旧一端丢弃", list[^1].Text == "第 6 条",
+            $"末条={list[^1].Text}（第 1~5 条应已丢弃）");
+    }
+
     /// <summary>
     /// 畸形的 audioStart 不能打崩教室端。
     ///

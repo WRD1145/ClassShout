@@ -1,3 +1,4 @@
+using ClassShout.Core.Remote;
 using System.Threading.Channels;
 using Avalonia.Threading;
 using ClassShout.Core.Audio;
@@ -154,10 +155,20 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
     private async Task StopAndSendAsync()
     {
         StopTimer();
+        var seconds = _elapsedSeconds;
+        var wasSent = _audioSessionOpen;
+
         IsRecording = false;
         Level = 0;
 
         await CleanupAsync(closeChannel: true).ConfigureAwait(true);
+
+        // 只在真的发出去过的时候记：中途取消不该出现在"我喊过什么"里。
+        // 语音没法存下内容，留一句说明就够 —— 让老师记起"那会儿喊了一句"。
+        if (wasSent && seconds >= 1)
+        {
+            ShoutHistoryStore.Record($"（语音喊话 {seconds:0} 秒）", isVoice: true);
+        }
     }
 
     /// <summary>
