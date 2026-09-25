@@ -10,6 +10,9 @@ public enum FrameKind : byte
 
     /// <summary>负载是裸 PCM 音频分片。</summary>
     Audio = 2,
+
+    /// <summary>负载是图片字节流的一个分片（由 imageStart / imageEnd 界定首尾）。</summary>
+    Image = 3,
 }
 
 /// <summary>一个完整的传输帧。</summary>

@@ -59,6 +59,78 @@ public sealed class TextShoutMessage : ShoutMessage
 
     /// <summary>是否打断当前正在播放/朗读的内容。</summary>
     public bool Interrupt { get; set; } = true;
+
+    // —— 下面几项是 v1.6 新增的展示参数，全部可选 ——
+    //
+    // 它们都是"用字符串/负数表示没指定"，而不是给一套必填的枚举值：
+    // 旧教室端读不懂 unknow 字段会直接忽略，于是行为退回它自己的默认值，
+    // 而不是因为一个缺字段就整条喊话作废。
+
+    /// <summary>展示方式，取值见 <see cref="ShoutDisplayModes"/>；为空表示用教室端的默认值。</summary>
+    public string? Display { get; set; }
+
+    /// <summary>文字大小档位，取值见 <see cref="ShoutFontSizes"/>；为空表示用教室端的默认值。</summary>
+    public string? FontSize { get; set; }
+
+    /// <summary>
+    /// 停留时长（毫秒），取值见 <see cref="ShoutHoldDurations"/>。
+    /// <see cref="ShoutHoldDurations.Unspecified"/> 表示用教室端的默认值，
+    /// <see cref="ShoutHoldDurations.Forever"/> 表示常驻。
+    /// </summary>
+    public int HoldMs { get; set; } = ShoutHoldDurations.Unspecified;
+
+    /// <summary>是否让教室端朗读这条文字。默认朗读 —— 不勾是例外，不是常规。</summary>
+    public bool Speak { get; set; } = true;
+}
+
+/// <summary>
+/// 图片喊话开始。之后跟着若干 <see cref="FrameKind.Image"/> 帧，由 <see cref="ImageEndMessage"/> 收尾。
+///
+/// 为什么图片不像文字那样直接塞进 JSON：单帧上限是 1 MiB，而 base64 还要再膨胀三分之一，
+/// 一张手机照片必然超。所以走和音频一样的"先声明、再分片、最后收尾"那条路 ——
+/// 教室里那台电脑可以边收边拼，不必等一个几十兆的 JSON 解析完才开始有反应。
+/// </summary>
+public sealed class ImageStartMessage : ShoutMessage
+{
+    public const string TypeName = "imageStart";
+    public override string Type => TypeName;
+
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>随图片一起显示的文字说明，可为空（纯图片）。</summary>
+    public string Text { get; set; } = string.Empty;
+
+    /// <summary>图片的 MIME 类型，例如 image/jpeg、image/png。</summary>
+    public string ContentType { get; set; } = "image/jpeg";
+
+    /// <summary>图片总字节数。教室端用它预分配缓冲，也用来判断有没有收全。</summary>
+    public int TotalBytes { get; set; }
+
+    /// <summary>图片的像素尺寸，供教室端在图片到达之前就摆好版面。</summary>
+    public int Width { get; set; }
+
+    public int Height { get; set; }
+
+    /// <summary>展示方式，取值见 <see cref="ShoutDisplayModes"/>；为空表示用教室端的默认值。</summary>
+    public string? Display { get; set; }
+
+    /// <summary>说明文字的大小档位，取值见 <see cref="ShoutFontSizes"/>。</summary>
+    public string? FontSize { get; set; }
+
+    /// <summary>停留时长（毫秒），取值见 <see cref="ShoutHoldDurations"/>。</summary>
+    public int HoldMs { get; set; } = ShoutHoldDurations.Unspecified;
+
+    /// <summary>是否朗读随图的那句说明文字。纯图片时无意义。</summary>
+    public bool Speak { get; set; }
+}
+
+/// <summary>图片喊话结束。</summary>
+public sealed class ImageEndMessage : ShoutMessage
+{
+    public const string TypeName = "imageEnd";
+    public override string Type => TypeName;
+
+    public string Id { get; set; } = string.Empty;
 }
 
 /// <summary>语音喊话开始。之后跟着若干 <see cref="FrameKind.Audio"/> 帧。</summary>
@@ -119,6 +191,15 @@ public sealed class StatusMessage : ShoutMessage
 
     public bool Muted { get; set; }
     public int Volume { get; set; } = 100;
+
+    /// <summary>
+    /// 教室端支持的能力，取值见 <see cref="ClassroomCapabilities"/>。
+    ///
+    /// 教师端据此决定界面上哪些选项能用 —— 让一位老师选好字号、点了发送，
+    /// 结果对面那台旧教室端根本不认，比一开始就把选项禁掉并说明原因糟糕得多。
+    /// 旧教室端不发这个字段，教师端就按"只有基础能力"处理。
+    /// </summary>
+    public string[]? Capabilities { get; set; }
 }
 
 /// <summary>教师端主动断开。</summary>

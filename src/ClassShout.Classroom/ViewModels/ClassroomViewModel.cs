@@ -131,6 +131,18 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// <summary>字幕收起用的计时器。换一条喊话就把上一个取消掉。</summary>
     private CancellationTokenSource? _transcriptHide;
 
+    /// <summary>当前这条文字喊话什么时候从屏幕上收走。常驻或没有停留下限时为 null。</summary>
+    private CancellationTokenSource? _textClear;
+
+    /// <summary>
+    /// 当前这条喊话是不是"用弹窗显示"（而不是占满大字区）。
+    ///
+    /// 需要单独记一个标志，是因为朗读引擎会自己汇报"开始说了"，而那个事件
+    /// 习惯性地把 Stage 设成 SpeakingText —— 那正好会把大字区点亮，
+    /// 于是选了弹窗的人发现屏幕还是被一句话占满了。
+    /// </summary>
+    private bool _textHiddenInPopup;
+
     public ClassroomViewModel(int port = ShoutProtocol.DefaultTcpPort, int discoveryPort = ShoutProtocol.DefaultDiscoveryPort)
     {
         _server = new ClassroomServer(port);
@@ -191,9 +203,13 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             IsSpeaking = speaking;
             if (speaking)
             {
-                Stage = ClassroomStage.SpeakingText;
+                // 用弹窗展示的那条不该点亮大字区 —— 选了弹窗的人要的就是"别占屏"。
+                if (!_textHiddenInPopup)
+                {
+                    Stage = ClassroomStage.SpeakingText;
+                }
             }
-            else if (Stage == ClassroomStage.SpeakingText)
+            else if (Stage == ClassroomStage.SpeakingText && !_textHiddenInPopup)
             {
                 Stage = ClassroomStage.Idle;
             }
@@ -252,6 +268,25 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     [ObservableProperty]
     private string _currentSpeaker = string.Empty;
+
+    /// <summary>当前这条喊话的字号档位（见 <see cref="ShoutFontSizes"/>）。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CurrentTextFontSize))]
+    private string _currentFontSize = ShoutFontSizes.Default;
+
+    /// <summary>大字区正文的像素字号。档位到像素的映射由 Core 统一决定，两处界面共用。</summary>
+    public double CurrentTextFontSize => ShoutFontSizes.ToPixels(CurrentFontSize, popup: false);
+
+    /// <summary>
+    /// 教室端给"发送方没指定"准备的那套兜底值。
+    ///
+    /// 它来自设置窗口里的三项默认值；教师端每次喊话都能覆盖，
+    /// 所以这里只是兜底，不是限制。
+    /// </summary>
+    public ShoutDisplayDefaults DisplayDefaults => new(
+        _notificationSettings.DefaultDisplay,
+        _notificationSettings.DefaultFontSize,
+        _notificationSettings.DefaultHoldMs);
 
     [ObservableProperty]
     private string _statusText = "等待教师端连接";
@@ -781,6 +816,14 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             }
         }
 
+        // 发送方可以指定怎么显示、多大字、停多久、要不要读；没指定的用教室端的默认值。
+        var plan = ShoutDisplayPlan.Resolve(
+            message.Display,
+            message.FontSize,
+            message.HoldMs,
+            message.Speak,
+            DisplayDefaults);
+
         var ticket = ++_presentationTicket;
 
         // 一次只出一路声音：文字喊话要把正在播的语音停掉。
@@ -792,12 +835,92 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         CurrentSpeaker = sourceName;
         CurrentText = message.Text;
-        Stage = ClassroomStage.SpeakingText;
+        CurrentFontSize = plan.FontSize;
 
-        NotifyOnScreen(sourceName, message.Text, ShoutNoticeKind.Text);
+        // 弹窗模式下大字区不参与：屏幕上只在角落出现一张卡片。
+        // 这里仍然把说话人和文字填上，是为了教师端与日志能看到"最后一条是什么"，
+        // 而 Stage 留在 Idle —— 否则整块屏会被一句话占满，那正是选弹窗的人不想要的。
+        _textHiddenInPopup = plan.IsPopup;
+        Stage = plan.IsPopup ? ClassroomStage.Idle : ClassroomStage.SpeakingText;
 
-        _ = SpeakAsync(message, ticket);
+        NotifyOnScreen(sourceName, message.Text, ShoutNoticeKind.Text, plan);
+
+        if (plan.Speak)
+        {
+            _ = SpeakAsync(message, ticket, plan);
+        }
+        else
+        {
+            AddLog("文字", "本条不朗读，只显示。");
+        }
+
+        ScheduleTextClear(ticket, plan);
     }
+
+    /// <summary>
+    /// 到点把这条内容从屏幕上收走。
+    ///
+    /// 三种情况不动手：
+    ///   · 常驻（停留时长为 0）—— 那正是"别收走"的意思；
+    ///   · 已经不是最新那条（期间又来了新的喊话）；
+    ///   · 还在朗读 —— 朗读没完就清屏，教室里会出现"话还在说、字已经没了"。
+    ///     这时不清，交给朗读收尾那一步（见 <see cref="SpeakAsync"/>）。
+    /// </summary>
+    private void ScheduleTextClear(long ticket, ShoutDisplayPlan plan)
+    {
+        _textClear?.Cancel();
+        _textClear?.Dispose();
+        _textClear = null;
+
+        // 每开一条新的，先把上一条留下的"停留已经到点"标记清掉
+        _holdElapsedDuringSpeech = false;
+
+        if (plan.IsForever || plan.Hold is not { } hold)
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _textClear = cts;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(hold, cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            await PostAsync(() =>
+            {
+                if (cts.IsCancellationRequested || ticket != _presentationTicket)
+                {
+                    return;
+                }
+
+                // 还在朗读就先不动手：话还在说、字已经没了，教室里看着像出了故障。
+                // 但要把"停留已经到点"记下来，等朗读收尾时立刻清屏 —— 否则这条会一直留着。
+                if (IsSpeaking)
+                {
+                    _holdElapsedDuringSpeech = true;
+                    return;
+                }
+
+                if (Stage is ClassroomStage.SpeakingText)
+                {
+                    Stage = ClassroomStage.Idle;
+                    CurrentText = string.Empty;
+                    CurrentSpeaker = string.Empty;
+                }
+            });
+        });
+    }
+
+    /// <summary>停留时长已经在朗读期间到点了 —— 朗读一结束就该清屏，不再等。</summary>
+    private bool _holdElapsedDuringSpeech;
 
     /// <summary>停掉播放器并清掉语音归属。之所以连归属一起清，是因为清完才代表"这一路结束了"。</summary>
     private void StopAudioPlayback()
@@ -809,7 +932,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private async Task SpeakAsync(TextShoutMessage message, long ticket)
+    private async Task SpeakAsync(TextShoutMessage message, long ticket, ShoutDisplayPlan plan)
     {
         try
         {
@@ -836,10 +959,25 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                     return;
                 }
 
+                // 常驻：读完了也不收，一直留到下一句喊话。
+                if (plan.IsForever && !plan.IsPopup)
+                {
+                    OnPropertyChanged(nameof(SpeechEngineStatus));
+                    return;
+                }
+
+                // 停留时间还没到：让那个计时器去收，现在收了就等于停留时长没设。
+                if (!plan.IsPopup && plan.Hold is not null && !_holdElapsedDuringSpeech)
+                {
+                    OnPropertyChanged(nameof(SpeechEngineStatus));
+                    return;
+                }
+
                 Stage = ClassroomStage.Idle;
                 CurrentText = string.Empty;
                 CurrentSpeaker = string.Empty;
                 AudioLevel = 0;
+                _textHiddenInPopup = false;
 
                 // 这一条读完才知道实际用的是哪个引擎（可能已经回落到系统语音），
                 // 所以状态显示要在这里刷新，而不是在开始朗读时。
@@ -1211,8 +1349,15 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         CurrentSpeaker = "本机测试";
         CurrentText = text;
-        Stage = ClassroomStage.SpeakingText;
-        _ = SpeakAsync(new TextShoutMessage { Text = text, Rate = Rate, Volume = Volume }, ticket);
+
+        // 试听走的是教室端自己的默认展示参数：它是本机功能，没有"发送方"来指定。
+        var plan = ShoutDisplayPlan.Resolve(null, null, ShoutHoldDurations.Unspecified, speak: true, DisplayDefaults);
+
+        CurrentFontSize = plan.FontSize;
+        _textHiddenInPopup = plan.IsPopup;
+        Stage = plan.IsPopup ? ClassroomStage.Idle : ClassroomStage.SpeakingText;
+
+        _ = SpeakAsync(new TextShoutMessage { Text = text, Rate = Rate, Volume = Volume }, ticket, plan);
     }
 
     /// <summary>组装当前运行态，既用于握手回包，也用于主动推送。</summary>
@@ -1222,6 +1367,10 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         ClassroomName = ClassroomName,
         Muted = IsMuted,
         Volume = Volume,
+
+        // 顺带报一下本版本会哪些新能力（图片、展示参数）。
+        // 教师端拿它决定界面上的选项能不能用 —— 让人选好了却发不到对面，比一开始就禁掉糟得多。
+        Capabilities = ClassroomCapabilities.Current,
     };
 
     /// <summary>把最新的状态推给所有教师端，让教师端界面能实时反映教室端的静音、音量等。</summary>
@@ -1642,6 +1791,91 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         ? "不自动消失（点击关闭）"
         : $"{NotificationDuration} 秒后自动消失";
 
+    // ======================== 默认展示参数 ========================
+    //
+    // 这三项是"发送方没指定时用哪一档"。教师端每次喊话都能覆盖它们，
+    // 所以这里填的是兜底值 —— 平时怎么讲就怎么设，个别时候再单独调。
+
+    public IReadOnlyList<DisplayModeOption> DisplayOptions { get; } =
+    [
+        new(ShoutDisplayModes.Window, "窗口（占满大字区）"),
+        new(ShoutDisplayModes.Popup, "弹窗（屏幕边缘提示卡）"),
+    ];
+
+    public IReadOnlyList<FontSizeOption> FontSizeOptions { get; } =
+    [
+        new(ShoutFontSizes.Small, "小"),
+        new(ShoutFontSizes.Medium, "中"),
+        new(ShoutFontSizes.Large, "大"),
+        new(ShoutFontSizes.ExtraLarge, "特大"),
+    ];
+
+    public IReadOnlyList<HoldDurationOption> HoldOptions { get; } =
+    [
+        new(ShoutHoldDurations.TenSeconds, "10 秒"),
+        new(ShoutHoldDurations.TwentySeconds, "20 秒"),
+        new(ShoutHoldDurations.ThirtySeconds, "30 秒"),
+        new(ShoutHoldDurations.OneMinute, "1 分钟"),
+        new(ShoutHoldDurations.Forever, "常驻"),
+    ];
+
+    /// <summary>默认展示方式。改动即时落盘并影响下一条喊话。</summary>
+    public DisplayModeOption SelectedDefaultDisplay
+    {
+        get => DisplayOptions.FirstOrDefault(o => o.Value == _notificationSettings.DefaultDisplay) ?? DisplayOptions[0];
+        set
+        {
+            if (value is null || _notificationSettings.DefaultDisplay == value.Value)
+            {
+                return;
+            }
+
+            _notificationSettings.DefaultDisplay = value.Value;
+            _notificationSettings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplayDefaultsHint));
+        }
+    }
+
+    public FontSizeOption SelectedDefaultFontSize
+    {
+        get => FontSizeOptions.FirstOrDefault(o => o.Value == _notificationSettings.DefaultFontSize) ?? FontSizeOptions[1];
+        set
+        {
+            if (value is null || _notificationSettings.DefaultFontSize == value.Value)
+            {
+                return;
+            }
+
+            _notificationSettings.DefaultFontSize = value.Value;
+            _notificationSettings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplayDefaultsHint));
+        }
+    }
+
+    public HoldDurationOption SelectedDefaultHold
+    {
+        get => HoldOptions.FirstOrDefault(o => o.Value == _notificationSettings.DefaultHoldMs) ?? HoldOptions[1];
+        set
+        {
+            if (value is null || _notificationSettings.DefaultHoldMs == value.Value)
+            {
+                return;
+            }
+
+            _notificationSettings.DefaultHoldMs = value.Value;
+            _notificationSettings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplayDefaultsHint));
+        }
+    }
+
+    /// <summary>把三项默认值说成一句话，放在设置卡片顶上给人核对。</summary>
+    public string DisplayDefaultsHint =>
+        $"当前默认：{SelectedDefaultDisplay.Label} · {SelectedDefaultFontSize.Label}字 · "
+        + $"{HoldOptions.FirstOrDefault(o => o.Value == _notificationSettings.DefaultHoldMs)?.Label ?? "20 秒"}";
+
     /// <summary>
     /// 已开启自启、但快捷方式指向的不是当前这份程序时，改写它。
     ///
@@ -1921,7 +2155,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     };
 
     /// <summary>收到喊话时弹一条提示。</summary>
-    private void NotifyOnScreen(string sourceName, string text, ShoutNoticeKind kind)
+    private void NotifyOnScreen(string sourceName, string text, ShoutNoticeKind kind, ShoutDisplayPlan? plan = null)
     {
         if (!NotificationEnabled)
         {
@@ -1931,9 +2165,19 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 两条通道各自独立：一条不通不影响另一条。
         // 教室那台电脑上常常同时挂着 ClassIsland，老师可以选只用自己的弹窗、
         // 只用 ClassIsland 的提醒，或者两处都显示。
-        if (SelectedChannel?.Value is not ShoutNotificationChannel.ClassIsland)
+        //
+        // 发送方选了"只在大字区显示"时（Display=window），教室端自己的弹窗就不参与了 ——
+        // 那正是"窗口"和"弹窗"两个选项的区别。没带展示参数的老喊话（例如语音）
+        // 仍然按老规矩弹。
+        var showOwnPopup = plan is not { IsWindow: true };
+
+        if (showOwnPopup && SelectedChannel?.Value is not ShoutNotificationChannel.ClassIsland)
         {
-            _notificationPresenter.Show(new NotificationContent(sourceName, text, kind is ShoutNoticeKind.Voice));
+            _notificationPresenter.Show(new NotificationContent(sourceName, text, kind is ShoutNoticeKind.Voice)
+            {
+                FontSize = plan?.FontSize ?? ShoutFontSizes.Default,
+                HoldMs = plan?.HoldMs ?? ShoutHoldDurations.Unspecified,
+            });
         }
 
         NotifyClassIsland(sourceName, text, kind);

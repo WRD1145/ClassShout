@@ -129,8 +129,11 @@
             <TextBlock Classes="labelLarge" HorizontalAlignment="Center"
                        Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                        Text="{Binding SpeakerText, StringFormat='来自 {0}'}" />
+            <!-- 字号跟着喊话带过来的档位走（显式 FontSize 优先于 displaySmall 里的默认值）；
+                 可显示范围也一并放大：特大字按原来的 760×360 会被裁掉一大截。 -->
             <TextBlock Classes="displaySmall" TextAlignment="Center" TextWrapping="Wrap"
-                       MaxWidth="760" MaxHeight="360"
+                       MaxWidth="1180" MaxHeight="620"
+                       FontSize="{Binding CurrentTextFontSize}"
                        Text="{Binding CurrentText}" />
           </StackPanel>
 

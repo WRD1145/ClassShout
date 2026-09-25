@@ -75,6 +75,8 @@ public static class ShoutCodec
             {
                 HelloMessage.TypeName => root.Deserialize<HelloMessage>(JsonOptions),
                 TextShoutMessage.TypeName => root.Deserialize<TextShoutMessage>(JsonOptions),
+                ImageStartMessage.TypeName => root.Deserialize<ImageStartMessage>(JsonOptions),
+                ImageEndMessage.TypeName => root.Deserialize<ImageEndMessage>(JsonOptions),
                 AudioStartMessage.TypeName => root.Deserialize<AudioStartMessage>(JsonOptions),
                 AudioEndMessage.TypeName => root.Deserialize<AudioEndMessage>(JsonOptions),
                 StopMessage.TypeName => root.Deserialize<StopMessage>(JsonOptions),

@@ -57,8 +57,11 @@
                      Text="{Binding TimeText}" />
         </Grid>
 
+        <!-- 字号跟喊话带过来的档位走；显式 FontSize 优先于 bodyLarge 里的默认值。
+             MaxLines 也放宽一点：选了「特大」还只给四行的话，长句子会被截掉一半。 -->
         <TextBlock Classes="bodyLarge" TextWrapping="Wrap"
-                   MaxLines="4" TextTrimming="CharacterEllipsis"
+                   MaxLines="8" TextTrimming="CharacterEllipsis"
+                   FontSize="{Binding TextFontSize}"
                    Text="{Binding Text}" />
 
         <TextBlock Classes="bodySmall"

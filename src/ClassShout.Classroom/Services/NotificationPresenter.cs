@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using ClassShout.Classroom.Views;
+using ClassShout.Core.Protocol;
 
 namespace ClassShout.Classroom.Services;
 
@@ -25,6 +26,12 @@ public sealed class NotificationPresenter : IDisposable
     /// <summary>用户在弹窗上点了一下。</summary>
     public event Action? Dismissed;
 
+    /// <summary>当前这条弹窗要求的停留时长；无表示用教室端设置里的秒数。</summary>
+    private TimeSpan? _requestedHold;
+
+    /// <summary>当前这条是不是"常驻"（不自动消失，要点掉才算）。</summary>
+    private bool _isForever;
+
     /// <summary>显示一条提示。必须在 UI 线程调用。</summary>
     public void Show(NotificationContent content)
     {
@@ -36,6 +43,12 @@ public sealed class NotificationPresenter : IDisposable
         var window = EnsureWindow();
         window.DataContext = content;
         window.ApplySettings(_settings);
+
+        // 发送方可以指定这条停留多久（0 = 常驻，要点掉）。没指定才用教室端设置里的秒数。
+        _isForever = content.HoldMs == ShoutHoldDurations.Forever;
+        _requestedHold = ShoutHoldDurations.IsSpecified(content.HoldMs) && !_isForever
+            ? TimeSpan.FromMilliseconds(content.HoldMs)
+            : null;
 
         if (!window.IsVisible)
         {
@@ -117,13 +130,22 @@ public sealed class NotificationPresenter : IDisposable
         _hideTimer?.Stop();
         _hideTimer = null;
 
-        if (_settings.DurationSeconds <= 0)
+        // 常驻：不自动消失，需要用户点掉
+        if (_isForever)
         {
-            // 配置为 0 表示不自动消失，需要用户点掉
             return;
         }
 
-        _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_settings.DurationSeconds) };
+        // 这条自己指定了停留时长就用它，否则用设置里的秒数；两处都是"不自动消失"时就不装计时器。
+        var hold = _requestedHold
+                   ?? (_settings.DurationSeconds > 0 ? TimeSpan.FromSeconds(_settings.DurationSeconds) : null);
+
+        if (hold is not { } interval)
+        {
+            return;
+        }
+
+        _hideTimer = new DispatcherTimer { Interval = interval };
         _hideTimer.Tick += (_, _) => Hide();
         _hideTimer.Start();
     }

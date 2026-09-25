@@ -1,3 +1,4 @@
+using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
 
 namespace ClassShout.Classroom.Services;
@@ -89,6 +90,21 @@ public enum ShoutNotificationChannel
 /// <param name="Label">界面显示文本。</param>
 public sealed record ShoutChannelOption(ShoutNotificationChannel Value, string Label);
 
+/// <summary>默认展示方式的下拉项。</summary>
+/// <param name="Value">取值见 <see cref="ShoutDisplayModes"/>。</param>
+/// <param name="Label">界面显示文本。</param>
+public sealed record DisplayModeOption(string Value, string Label);
+
+/// <summary>默认字号的下拉项。</summary>
+/// <param name="Value">取值见 <see cref="ShoutFontSizes"/>。</param>
+/// <param name="Label">界面显示文本。</param>
+public sealed record FontSizeOption(string Value, string Label);
+
+/// <summary>默认停留时长的下拉项。</summary>
+/// <param name="Value">毫秒，见 <see cref="ShoutHoldDurations"/>。</param>
+/// <param name="Label">界面显示文本。</param>
+public sealed record HoldDurationOption(int Value, string Label);
+
 /// <summary>教室端弹窗与显示的配置。</summary>
 public sealed class ClassroomNotificationSettings
 {
@@ -108,6 +124,21 @@ public sealed class ClassroomNotificationSettings
 
     /// <summary>自动消失的秒数。0 表示不自动消失。</summary>
     public int DurationSeconds { get; set; } = 8;
+
+    /// <summary>
+    /// 喊话默认怎么展示。取值见 <see cref="ShoutDisplayModes"/>。
+    ///
+    /// 教师端每次喊话都能覆盖它 —— 班主任想让一句话占满整块屏（窗口），
+    /// 科任老师可能只想要一条角落提示（弹窗），两种都常见。
+    /// 所以这里存的是**兜底值**，不是限制。
+    /// </summary>
+    public string DefaultDisplay { get; set; } = ShoutDisplayModes.Window;
+
+    /// <summary>文字默认多大。取值见 <see cref="ShoutFontSizes"/>。</summary>
+    public string DefaultFontSize { get; set; } = ShoutFontSizes.Default;
+
+    /// <summary>默认停留多久（毫秒）。取值见 <see cref="ShoutHoldDurations"/>。</summary>
+    public int DefaultHoldMs { get; set; } = ShoutHoldDurations.Default;
 
     /// <summary>置顶档位。</summary>
     public TopmostMode Topmost { get; set; } = TopmostMode.Forced;

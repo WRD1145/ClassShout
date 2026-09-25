@@ -13,14 +13,16 @@ public sealed record ShoutRecord(string Text, DateTimeOffset SentAt, bool IsVoic
 ///
 /// 为什么留着它：课堂上喊错一句、或者想重复上一句口令都是常有的事，
 /// 而喊话是"说完就没了"的东西 —— 界面一换就再也找不回来。
-/// 最近二十条足够覆盖一节课的上下文，又不至于把磁盘当日志写。
+/// 一位老师一天七八节课、每节课发好几条，二十条常常撑不过上午，
+/// 所以上限提到 100 条：它才够跨过一整天的课，而这点体积（每条几十字节）
+/// 对磁盘来说仍然可以忽略。
 ///
 /// 刻意只留"说了什么、什么时候说的"：教室口令、登录令牌这类凭据一概不进这个文件。
 /// </summary>
 public sealed class ShoutHistory
 {
     /// <summary>最多保留多少条，超出从最旧一端丢弃。</summary>
-    public const int MaxCount = 20;
+    public const int MaxCount = 100;
 
     /// <summary>最近的喊话，最新的在前。</summary>
     public List<ShoutRecord> Recent { get; set; } = [];

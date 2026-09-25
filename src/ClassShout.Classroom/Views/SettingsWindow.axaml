@@ -339,6 +339,65 @@
           </StackPanel>
         </md3:Md3Card>
 
+        <!-- ==================== 喊话默认怎么显示 ==================== -->
+        <md3:Md3Card Classes="outlined">
+          <StackPanel Spacing="14">
+            <TextBlock Classes="cardTitle" Text="喊话默认怎么显示" />
+
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="这三项是「发送方没有特别指定时」用哪一档。老师每次喊话都能单独改，所以这里填的是平时最常用的那种。" />
+
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Text="{Binding DisplayDefaultsHint}" />
+
+            <StackPanel Spacing="6">
+              <TextBlock Classes="bodyMedium" Text="展示方式" />
+              <ComboBox HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding DisplayOptions}"
+                        SelectedItem="{Binding SelectedDefaultDisplay}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="svc:DisplayModeOption">
+                    <TextBlock Text="{Binding Label}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="「窗口」占满教室端的大字区；「弹窗」只在屏幕边缘出现一张提示卡，不占主界面。" />
+            </StackPanel>
+
+            <StackPanel Spacing="6">
+              <TextBlock Classes="bodyMedium" Text="文字大小" />
+              <ComboBox HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding FontSizeOptions}"
+                        SelectedItem="{Binding SelectedDefaultFontSize}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="svc:FontSizeOption">
+                    <TextBlock Text="{Binding Label}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+            </StackPanel>
+
+            <StackPanel Spacing="6">
+              <TextBlock Classes="bodyMedium" Text="停留时间" />
+              <ComboBox HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding HoldOptions}"
+                        SelectedItem="{Binding SelectedDefaultHold}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="svc:HoldDurationOption">
+                    <TextBlock Text="{Binding Label}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="到时间后内容自动从屏幕上收走。「常驻」表示一直留着，直到下一条喊话或有人手动停止。" />
+            </StackPanel>
+          </StackPanel>
+        </md3:Md3Card>
+
         <!-- ==================== 屏幕边缘弹窗 ==================== -->
         <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="14">

@@ -183,7 +183,10 @@ internal static class Program
         // ---------- 3g. 投给 ClassIsland 的那条通知 ----------
         await AssertClassIslandNoticeAsync();
 
-        // ---------- 3h. 发送队列 ----------
+        // ---------- 3h. 一次喊话的展示参数 ----------
+        AssertShoutDisplayPlan();
+
+        // ---------- 3i. 发送队列 ----------
         await AssertShoutQueueAsync();
 
         // ---------- 4. 语音流 ----------
@@ -1358,6 +1361,75 @@ internal static class Program
             : string.Empty;
     }
 
+    /// <summary>
+    /// 一次喊话最终生效的展示参数：发送方指定了什么就用什么，没指定（或给了非法值）用教室端默认。
+    ///
+    /// 这一段写错了不会有任何报错，只会在教室里显示得不对 ——
+    /// 而其中最容易错、后果也最难看的一条是"常驻（0）被当成没指定"：
+    /// 那会让设了常驻的喊话二十秒就消失，或者反过来让没设停留的喊话永远留在屏幕上。
+    /// </summary>
+    private static void AssertShoutDisplayPlan()
+    {
+        var defaults = ShoutDisplayDefaults.Standard;
+
+        var unspecified = ShoutDisplayPlan.Resolve(
+            null, null, ShoutHoldDurations.Unspecified, speak: true, defaults);
+
+        Check("什么都没指定时用教室端默认（窗口 / 中 / 20 秒）",
+            unspecified is
+            {
+                Display: ShoutDisplayModes.Window,
+                FontSize: ShoutFontSizes.Medium,
+                HoldMs: ShoutHoldDurations.TwentySeconds,
+            },
+            $"{unspecified.Display} / {unspecified.FontSize} / {unspecified.HoldMs}ms");
+
+        var popupBig = ShoutDisplayPlan.Resolve(
+            ShoutDisplayModes.Popup, ShoutFontSizes.ExtraLarge, ShoutHoldDurations.OneMinute, speak: false, defaults);
+
+        Check("指定了就按指定的来",
+            popupBig is
+            {
+                Display: ShoutDisplayModes.Popup,
+                FontSize: ShoutFontSizes.ExtraLarge,
+                HoldMs: ShoutHoldDurations.OneMinute,
+                Speak: false,
+            },
+            $"{popupBig.Display} / {popupBig.FontSize} / {popupBig.HoldMs}ms / 朗读={popupBig.Speak}");
+
+        Check("弹窗模式能识别出来（大字区不该被点亮）",
+            popupBig.IsPopup && !popupBig.IsWindow,
+            $"IsPopup={popupBig.IsPopup}");
+
+        var forever = ShoutDisplayPlan.Resolve(
+            ShoutDisplayModes.Window, ShoutFontSizes.Medium, ShoutHoldDurations.Forever, speak: true, defaults);
+
+        Check("常驻（0）不会被当成「没指定」",
+            forever.HoldMs == ShoutHoldDurations.Forever && forever.IsForever && forever.Hold is null,
+            $"HoldMs={forever.HoldMs}，"
+            + (forever.Hold is null ? "不自动消失" : $"会 {forever.Hold} 后消失"));
+
+        var bogus = ShoutDisplayPlan.Resolve("huge", "特大字", -5, speak: true, defaults);
+
+        Check("非法取值退回到安全默认",
+            bogus is
+            {
+                Display: ShoutDisplayModes.Window,
+                FontSize: ShoutFontSizes.Medium,
+                HoldMs: ShoutHoldDurations.TwentySeconds,
+            },
+            $"{bogus.Display} / {bogus.FontSize} / {bogus.HoldMs}ms");
+
+        // 同一档在两处界面用的像素字号必须差得开：弹窗只占屏幕一角，
+        // 用大字区的尺寸会直接溢出屏幕。
+        var popupPixels = ShoutFontSizes.ToPixels(ShoutFontSizes.ExtraLarge, popup: true);
+        var stagePixels = ShoutFontSizes.ToPixels(ShoutFontSizes.ExtraLarge, popup: false);
+
+        Check("特大字在弹窗里比在大字区小得多",
+            popupPixels < stagePixels / 2,
+            $"弹窗 {popupPixels}px，大字区 {stagePixels}px");
+    }
+
     /// <summary>在字节数组里找一段 ASCII 子串。二进制体不能按 UTF-8 解码后再搜。</summary>
     private static bool ContainsAscii(byte[] data, string text)
     {
@@ -1447,7 +1519,7 @@ internal static class Program
     }
 
     /// <summary>
-    /// 本机喊话记录：最多留二十条，最新在前，最旧的被挤掉。
+    /// 本机喊话记录：最多留一百条，最新在前，最旧的被挤掉。
     ///
     /// 只压 ShoutHistory.Append 这个纯函数，不碰 LocalSettings ——
     /// 端到端工具跑在开发机上，走磁盘就会把使用者真实的喊话记录覆盖掉。
@@ -1456,19 +1528,20 @@ internal static class Program
     private static void AssertShoutHistoryCap()
     {
         var list = new List<ShoutRecord>();
+        var total = ShoutHistory.MaxCount + 5;
 
-        for (var i = 1; i <= 25; i++)
+        for (var i = 1; i <= total; i++)
         {
             list = ShoutHistory.Append(list, new ShoutRecord($"第 {i} 条", DateTimeOffset.Now, IsVoice: false));
         }
 
-        Check("喊话记录最多保留 20 条", list.Count == ShoutHistory.MaxCount,
-            $"写入 25 条后剩 {list.Count} 条（上限 {ShoutHistory.MaxCount}）");
+        Check($"喊话记录最多保留 {ShoutHistory.MaxCount} 条", list.Count == ShoutHistory.MaxCount,
+            $"写入 {total} 条后剩 {list.Count} 条（上限 {ShoutHistory.MaxCount}）");
 
-        Check("最新的一条排在最前", list[0].Text == "第 25 条", $"首条={list[0].Text}");
+        Check("最新的一条排在最前", list[0].Text == $"第 {total} 条", $"首条={list[0].Text}");
 
-        Check("超出上限后从最旧一端丢弃", list[^1].Text == "第 6 条",
-            $"末条={list[^1].Text}（第 1~5 条应已丢弃）");
+        Check("超出上限后从最旧一端丢弃", list[^1].Text == $"第 {total - ShoutHistory.MaxCount + 1} 条",
+            $"末条={list[^1].Text}（更早的都该已丢弃）");
     }
 
     /// <summary>
