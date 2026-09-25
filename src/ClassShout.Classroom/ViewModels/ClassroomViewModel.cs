@@ -1640,6 +1640,13 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                         Rate = envelope.Rate,
                         Volume = envelope.Volume,
                         Interrupt = envelope.Interrupt,
+
+                        // 展示参数原样带过去。中继这条路上它们和服务器的其他字段一样
+                        // 只是转发，所以这里缺什么就用什么默认值。
+                        Display = envelope.Display,
+                        FontSize = envelope.FontSize,
+                        HoldMs = envelope.HoldMs,
+                        Speak = envelope.Speak,
                     });
                     break;
 
@@ -1796,31 +1803,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     // 这三项是"发送方没指定时用哪一档"。教师端每次喊话都能覆盖它们，
     // 所以这里填的是兜底值 —— 平时怎么讲就怎么设，个别时候再单独调。
 
-    public IReadOnlyList<DisplayModeOption> DisplayOptions { get; } =
-    [
-        new(ShoutDisplayModes.Window, "窗口（占满大字区）"),
-        new(ShoutDisplayModes.Popup, "弹窗（屏幕边缘提示卡）"),
-    ];
+    // 三组选项直接取自 Core：教师端选"这次怎么显示"、教室端选"默认怎么显示"，
+    // 两处的可选项必须完全一样，各写一份迟早对不上，而且不会报错。
+    public IReadOnlyList<ShoutDisplayOption> DisplayOptions => ShoutDisplayChoices.Displays;
 
-    public IReadOnlyList<FontSizeOption> FontSizeOptions { get; } =
-    [
-        new(ShoutFontSizes.Small, "小"),
-        new(ShoutFontSizes.Medium, "中"),
-        new(ShoutFontSizes.Large, "大"),
-        new(ShoutFontSizes.ExtraLarge, "特大"),
-    ];
+    public IReadOnlyList<ShoutFontSizeOption> FontSizeOptions => ShoutDisplayChoices.FontSizes;
 
-    public IReadOnlyList<HoldDurationOption> HoldOptions { get; } =
-    [
-        new(ShoutHoldDurations.TenSeconds, "10 秒"),
-        new(ShoutHoldDurations.TwentySeconds, "20 秒"),
-        new(ShoutHoldDurations.ThirtySeconds, "30 秒"),
-        new(ShoutHoldDurations.OneMinute, "1 分钟"),
-        new(ShoutHoldDurations.Forever, "常驻"),
-    ];
+    public IReadOnlyList<ShoutHoldOption> HoldOptions => ShoutDisplayChoices.Holds;
 
     /// <summary>默认展示方式。改动即时落盘并影响下一条喊话。</summary>
-    public DisplayModeOption SelectedDefaultDisplay
+    public ShoutDisplayOption SelectedDefaultDisplay
     {
         get => DisplayOptions.FirstOrDefault(o => o.Value == _notificationSettings.DefaultDisplay) ?? DisplayOptions[0];
         set
@@ -1837,7 +1829,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public FontSizeOption SelectedDefaultFontSize
+    public ShoutFontSizeOption SelectedDefaultFontSize
     {
         get => FontSizeOptions.FirstOrDefault(o => o.Value == _notificationSettings.DefaultFontSize) ?? FontSizeOptions[1];
         set
@@ -1854,7 +1846,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public HoldDurationOption SelectedDefaultHold
+    public ShoutHoldOption SelectedDefaultHold
     {
         get => HoldOptions.FirstOrDefault(o => o.Value == _notificationSettings.DefaultHoldMs) ?? HoldOptions[1];
         set

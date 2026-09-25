@@ -400,6 +400,13 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherText, "token"), (string token, Te
         Rate = request.Rate,
         Volume = request.Volume,
         Interrupt = request.Interrupt,
+
+        // 展示参数原样转发。服务器不解释它们 ——
+        // 照它们把内容画出来的是教室端，理解一遍只会多一处会过时的地方。
+        Display = request.Display,
+        FontSize = request.FontSize,
+        HoldMs = request.HoldMs,
+        Speak = request.Speak,
     });
 
     logger.LogInformation("{Teacher} → {Uuid}：文字喊话 {Length} 字",

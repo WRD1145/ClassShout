@@ -137,6 +137,54 @@ public static class ClassroomCapabilities
         => capabilities is not null && capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
 }
 
+/// <summary>展示方式的下拉项。</summary>
+/// <param name="Value">取值见 <see cref="ShoutDisplayModes"/>。</param>
+/// <param name="Label">界面显示文本。</param>
+public sealed record ShoutDisplayOption(string Value, string Label);
+
+/// <summary>字号档位的下拉项。</summary>
+/// <param name="Value">取值见 <see cref="ShoutFontSizes"/>。</param>
+/// <param name="Label">界面显示文本。</param>
+public sealed record ShoutFontSizeOption(string Value, string Label);
+
+/// <summary>停留时长的下拉项。</summary>
+/// <param name="Value">毫秒，见 <see cref="ShoutHoldDurations"/>。</param>
+/// <param name="Label">界面显示文本。</param>
+public sealed record ShoutHoldOption(int Value, string Label);
+
+/// <summary>
+/// 三组下拉项的清单。
+///
+/// 放在 Core 里由两端共用：教师端选的是"这次怎么显示"，教室端选的是"默认怎么显示"，
+/// 而这两处的可选项必须完全一样 —— 各写一份的话，迟早出现
+/// "教师端能选特大、教室端却没有这一档"这种对不上的情况，而且不会有任何报错。
+/// </summary>
+public static class ShoutDisplayChoices
+{
+    public static IReadOnlyList<ShoutDisplayOption> Displays { get; } =
+    [
+        new(ShoutDisplayModes.Window, "窗口（占满大字区）"),
+        new(ShoutDisplayModes.Popup, "弹窗（屏幕边缘提示卡）"),
+    ];
+
+    public static IReadOnlyList<ShoutFontSizeOption> FontSizes { get; } =
+    [
+        new(ShoutFontSizes.Small, "小"),
+        new(ShoutFontSizes.Medium, "中"),
+        new(ShoutFontSizes.Large, "大"),
+        new(ShoutFontSizes.ExtraLarge, "特大"),
+    ];
+
+    public static IReadOnlyList<ShoutHoldOption> Holds { get; } =
+    [
+        new(ShoutHoldDurations.TenSeconds, "10 秒"),
+        new(ShoutHoldDurations.TwentySeconds, "20 秒"),
+        new(ShoutHoldDurations.ThirtySeconds, "30 秒"),
+        new(ShoutHoldDurations.OneMinute, "1 分钟"),
+        new(ShoutHoldDurations.Forever, "常驻"),
+    ];
+}
+
 /// <summary>教室端为"发送方没指定"准备的那套兜底值。</summary>
 /// <param name="Display">默认展示方式。</param>
 /// <param name="FontSize">默认字号档位。</param>

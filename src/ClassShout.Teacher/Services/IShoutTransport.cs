@@ -1,4 +1,5 @@
 using ClassShout.Core.Audio;
+using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
 
 namespace ClassShout.Teacher.Services;
@@ -16,13 +17,15 @@ public interface IShoutTransport
     /// <summary>当前是否可用（已连上教室或已绑定服务器）。</summary>
     bool IsConnected { get; }
 
-    Task<bool> SendTextAsync(
-        string text,
-        int rate,
-        int volume,
-        string? voiceName,
-        bool interrupt,
-        CancellationToken cancellationToken = default);
+    /// <summary>
+    /// 发一条文字喊话。
+    ///
+    /// 参数用协议里的 <see cref="TextShoutMessage"/> 而不是一长串标量：
+    /// 这次要带上展示方式、字号、停留时长、是否朗读，加上原有的语速/音量/打断，
+    /// 摊开就是十个参数，而调用方每次都得照顺序填对。
+    /// 消息对象本身就是"一次喊话"的完整描述，两端也共用同一份定义。
+    /// </summary>
+    Task<bool> SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default);
 
     Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default);
 
@@ -46,14 +49,17 @@ public sealed class RelayShoutTransport : IShoutTransport
 
     public bool IsConnected => _client.IsBound;
 
-    public Task<bool> SendTextAsync(
-        string text,
-        int rate,
-        int volume,
-        string? voiceName,
-        bool interrupt,
-        CancellationToken cancellationToken = default)
-        => _client.SendTextAsync(text, rate, volume, interrupt, cancellationToken);
+    public Task<bool> SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default)
+        => _client.SendTextAsync(
+            message.Text,
+            message.Rate,
+            message.Volume,
+            message.Interrupt,
+            message.Display,
+            message.FontSize,
+            message.HoldMs,
+            message.Speak,
+            cancellationToken);
 
     public Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)
         => _client.SendAudioStartAsync(format, cancellationToken);
@@ -88,14 +94,8 @@ public sealed class ShoutTransportRouter : IShoutTransport
 
     public bool IsConnected => Active?.IsConnected ?? false;
 
-    public Task<bool> SendTextAsync(
-        string text,
-        int rate,
-        int volume,
-        string? voiceName,
-        bool interrupt,
-        CancellationToken cancellationToken = default)
-        => Active?.SendTextAsync(text, rate, volume, voiceName, interrupt, cancellationToken)
+    public Task<bool> SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default)
+        => Active?.SendTextAsync(message, cancellationToken)
            ?? Task.FromResult(false);
 
     public Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)

@@ -1,3 +1,5 @@
+using ClassShout.Core.Protocol;
+
 namespace ClassShout.Core.Remote;
 
 /// <summary>
@@ -114,7 +116,31 @@ public sealed record TeacherBindResponse(bool Ok, string? Token, string? Classro
 
 // ======================== 喊话内容 ========================
 
-public sealed record TextShoutRequest(string Text, int Rate, int Volume, bool Interrupt);
+/// <summary>
+/// 教师端经服务器发一条文字喊话。
+///
+/// 后面四项是展示参数（见 <see cref="ShoutDisplayModes"/> 等），全部可选：
+/// 不填就用教室端的默认值。它们是可空/负数而不是必填枚举，
+/// 这样"老教师端发来的请求"与"新教师端没选任何项"在服务器看来是同一种东西 ——
+/// 服务器不必理解这些字段，只负责原样转发。
+/// </summary>
+/// <param name="Text">喊话内容。</param>
+/// <param name="Rate">TTS 语速。</param>
+/// <param name="Volume">TTS 音量。</param>
+/// <param name="Interrupt">是否打断当前朗读。</param>
+/// <param name="Display">展示方式，取值见 <see cref="ShoutDisplayModes"/>。</param>
+/// <param name="FontSize">字号档位，取值见 <see cref="ShoutFontSizes"/>。</param>
+/// <param name="HoldMs">停留时长（毫秒），见 <see cref="ShoutHoldDurations"/>。</param>
+/// <param name="Speak">是否朗读。</param>
+public sealed record TextShoutRequest(
+    string Text,
+    int Rate,
+    int Volume,
+    bool Interrupt,
+    string? Display = null,
+    string? FontSize = null,
+    int HoldMs = ShoutHoldDurations.Unspecified,
+    bool Speak = true);
 
 public sealed record AudioStartRequest(int SampleRate, int Channels, int BitsPerSample);
 
@@ -243,6 +269,24 @@ public sealed class RelayEnvelope
     public int Rate { get; set; }
     public int Volume { get; set; } = 100;
     public bool Interrupt { get; set; } = true;
+
+    // —— 文字的展示参数（见 ShoutDisplayModes / ShoutFontSizes / ShoutHoldDurations）——
+    //
+    // 和上面几项一样只是原样转发：服务器不理解它们，也不该理解 ——
+    // 教室端才是唯一需要照着这些参数把内容画出来的地方。
+    public string? Display { get; set; }
+    public string? FontSize { get; set; }
+
+    /// <summary>停留时长（毫秒）。负数表示"没指定，用教室端默认值"。</summary>
+    public int HoldMs { get; set; } = ShoutHoldDurations.Unspecified;
+
+    /// <summary>
+    /// 是否朗读。
+    ///
+    /// 老教师端不发这个字段，而 System.Text.Json 对没出现的属性不动对象 ——
+    /// 初始值 true 会留着，所以旧客户端的喊话照旧朗读，不会被静默改成"只显示不发声"。
+    /// </summary>
+    public bool Speak { get; set; } = true;
 
     // —— 音频 ——
     /// <summary>

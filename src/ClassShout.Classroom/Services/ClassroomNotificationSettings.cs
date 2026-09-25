@@ -90,21 +90,6 @@ public enum ShoutNotificationChannel
 /// <param name="Label">界面显示文本。</param>
 public sealed record ShoutChannelOption(ShoutNotificationChannel Value, string Label);
 
-/// <summary>默认展示方式的下拉项。</summary>
-/// <param name="Value">取值见 <see cref="ShoutDisplayModes"/>。</param>
-/// <param name="Label">界面显示文本。</param>
-public sealed record DisplayModeOption(string Value, string Label);
-
-/// <summary>默认字号的下拉项。</summary>
-/// <param name="Value">取值见 <see cref="ShoutFontSizes"/>。</param>
-/// <param name="Label">界面显示文本。</param>
-public sealed record FontSizeOption(string Value, string Label);
-
-/// <summary>默认停留时长的下拉项。</summary>
-/// <param name="Value">毫秒，见 <see cref="ShoutHoldDurations"/>。</param>
-/// <param name="Label">界面显示文本。</param>
-public sealed record HoldDurationOption(int Value, string Label);
-
 /// <summary>教室端弹窗与显示的配置。</summary>
 public sealed class ClassroomNotificationSettings
 {

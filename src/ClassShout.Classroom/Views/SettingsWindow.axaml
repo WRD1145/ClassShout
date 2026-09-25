@@ -4,6 +4,7 @@
         xmlns:vm="using:ClassShout.Classroom.ViewModels"
         xmlns:svc="using:ClassShout.Classroom.Services"
         xmlns:core="using:ClassShout.Core.Audio"
+        xmlns:proto="using:ClassShout.Core.Protocol"
         x:Class="ClassShout.Classroom.Views.SettingsWindow"
         x:DataType="vm:ClassroomViewModel"
         Title="ClassShout 教室端 · 设置"
@@ -357,7 +358,7 @@
                         ItemsSource="{Binding DisplayOptions}"
                         SelectedItem="{Binding SelectedDefaultDisplay}">
                 <ComboBox.ItemTemplate>
-                  <DataTemplate x:DataType="svc:DisplayModeOption">
+                  <DataTemplate x:DataType="proto:ShoutDisplayOption">
                     <TextBlock Text="{Binding Label}" />
                   </DataTemplate>
                 </ComboBox.ItemTemplate>
@@ -373,7 +374,7 @@
                         ItemsSource="{Binding FontSizeOptions}"
                         SelectedItem="{Binding SelectedDefaultFontSize}">
                 <ComboBox.ItemTemplate>
-                  <DataTemplate x:DataType="svc:FontSizeOption">
+                  <DataTemplate x:DataType="proto:ShoutFontSizeOption">
                     <TextBlock Text="{Binding Label}" />
                   </DataTemplate>
                 </ComboBox.ItemTemplate>
@@ -386,7 +387,7 @@
                         ItemsSource="{Binding HoldOptions}"
                         SelectedItem="{Binding SelectedDefaultHold}">
                 <ComboBox.ItemTemplate>
-                  <DataTemplate x:DataType="svc:HoldDurationOption">
+                  <DataTemplate x:DataType="proto:ShoutHoldOption">
                     <TextBlock Text="{Binding Label}" />
                   </DataTemplate>
                 </ComboBox.ItemTemplate>

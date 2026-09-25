@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:md3="using:ClassShout.Design.Controls"
              xmlns:vm="using:ClassShout.Teacher.ViewModels"
+             xmlns:proto="using:ClassShout.Core.Protocol"
              x:Class="ClassShout.Teacher.Views.MainView"
              x:DataType="vm:TeacherShellViewModel"
              Background="{DynamicResource Md3.Surface}">
@@ -145,6 +146,72 @@
                   <Button Grid.Column="1" Classes="text small" Content="清空"
                           Command="{Binding Text.ClearCommand}" />
                 </Grid>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+                <TextBlock Classes="cardTitle" Text="这条怎么显示" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding Text.DisplaySummaryText}" />
+
+                <StackPanel Spacing="4">
+                  <TextBlock Classes="bodyMedium" Text="展示方式" />
+                  <ComboBox HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding Text.DisplayOptions}"
+                            SelectedItem="{Binding Text.SelectedDisplay}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="proto:ShoutDisplayOption">
+                        <TextBlock Text="{Binding Label}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                </StackPanel>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                  <StackPanel Spacing="4">
+                    <TextBlock Classes="bodyMedium" Text="文字大小" />
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Text.FontSizeOptions}"
+                              SelectedItem="{Binding Text.SelectedFontSize}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="proto:ShoutFontSizeOption">
+                          <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                  </StackPanel>
+
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock Classes="bodyMedium" Text="停留时间" />
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Text.HoldOptions}"
+                              SelectedItem="{Binding Text.SelectedHold}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="proto:ShoutHoldOption">
+                          <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                  </StackPanel>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="bodyMedium" Text="语音播报" />
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="关掉就只把字摆出来，不打断讲解" />
+                  </StackPanel>
+                  <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                                IsChecked="{Binding Text.Speak}" />
+                </Grid>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="这几个选项只影响这一条，选完会记住，下次打开还是它。教室端自己还有一套「没人指定时用哪一档」的默认值。" />
               </StackPanel>
             </md3:Md3Card>
 

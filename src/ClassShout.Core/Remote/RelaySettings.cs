@@ -253,4 +253,11 @@ public static class LocalSettings
     public static DeveloperSettings LoadDeveloper() => Load("developer.json", static () => new DeveloperSettings());
 
     public static bool SaveDeveloper(DeveloperSettings settings) => Save("developer.json", settings);
+
+    /// <summary>教师端上次用过的展示参数（展示方式 / 字号 / 停留时长 / 是否朗读）。</summary>
+    public static TeacherDisplaySettings LoadTeacherDisplay()
+        => Load("teacher-display.json", static () => new TeacherDisplaySettings());
+
+    public static bool SaveTeacherDisplay(TeacherDisplaySettings settings)
+        => Save("teacher-display.json", settings);
 }

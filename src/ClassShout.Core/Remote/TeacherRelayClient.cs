@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClassShout.Core.Audio;
+using ClassShout.Core.Protocol;
 
 namespace ClassShout.Core.Remote;
 
@@ -178,6 +179,10 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         int rate,
         int volume,
         bool interrupt,
+        string? display = null,
+        string? fontSize = null,
+        int holdMs = ShoutHoldDurations.Unspecified,
+        bool speak = true,
         CancellationToken cancellationToken = default)
     {
         if (_token is null || string.IsNullOrWhiteSpace(text))
@@ -187,7 +192,9 @@ public sealed class TeacherRelayClient : IAsyncDisposable
 
         return await PostAsync(
             Url(string.Format(RelayPaths.TeacherText, _token)),
-            JsonContent.Create(new TextShoutRequest(text.Trim(), rate, volume, interrupt), options: JsonOptions),
+            JsonContent.Create(
+                new TextShoutRequest(text.Trim(), rate, volume, interrupt, display, fontSize, holdMs, speak),
+                options: JsonOptions),
             cancellationToken).ConfigureAwait(false);
     }
 

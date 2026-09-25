@@ -1,3 +1,4 @@
+using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
 using System.Collections.ObjectModel;
 using ClassShout.Teacher.Services;
@@ -41,6 +42,10 @@ public partial class TextShoutViewModel : ObservableObject
     public TextShoutViewModel(IShoutTransport channel)
     {
         _channel = channel;
+
+        // 读进来就顺手规范化：这个文件是纯本机数据，可能被手改过或被旧版本写过，
+        // 而一个读不懂的档位会让界面上"什么都没有被选中"。
+        _displaySettings = LocalSettings.LoadTeacherDisplay().Normalized();
 
         foreach (var phrase in DefaultPresets)
         {
@@ -102,6 +107,93 @@ public partial class TextShoutViewModel : ObservableObject
     /// <summary>新喊话是否打断教室端当前正在朗读的内容。</summary>
     [ObservableProperty]
     private bool _interrupt = true;
+
+    // ======================== 展示参数 ========================
+    //
+    // 四项都是"这一次怎么显示"。上次用的那套存在本机，下次打开还是它 ——
+    // 讲评试卷时习惯用"特大字 + 常驻"的老师，不该每节课都重选一遍。
+
+    private readonly TeacherDisplaySettings _displaySettings;
+
+    public IReadOnlyList<ShoutDisplayOption> DisplayOptions => ShoutDisplayChoices.Displays;
+
+    public IReadOnlyList<ShoutFontSizeOption> FontSizeOptions => ShoutDisplayChoices.FontSizes;
+
+    public IReadOnlyList<ShoutHoldOption> HoldOptions => ShoutDisplayChoices.Holds;
+
+    public ShoutDisplayOption SelectedDisplay
+    {
+        get => DisplayOptions.FirstOrDefault(o => o.Value == _displaySettings.Display) ?? DisplayOptions[0];
+        set
+        {
+            if (value is null || _displaySettings.Display == value.Value)
+            {
+                return;
+            }
+
+            _displaySettings.Display = value.Value;
+            LocalSettings.SaveTeacherDisplay(_displaySettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplaySummaryText));
+        }
+    }
+
+    public ShoutFontSizeOption SelectedFontSize
+    {
+        get => FontSizeOptions.FirstOrDefault(o => o.Value == _displaySettings.FontSize) ?? FontSizeOptions[1];
+        set
+        {
+            if (value is null || _displaySettings.FontSize == value.Value)
+            {
+                return;
+            }
+
+            _displaySettings.FontSize = value.Value;
+            LocalSettings.SaveTeacherDisplay(_displaySettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplaySummaryText));
+        }
+    }
+
+    public ShoutHoldOption SelectedHold
+    {
+        get => HoldOptions.FirstOrDefault(o => o.Value == _displaySettings.HoldMs) ?? HoldOptions[1];
+        set
+        {
+            if (value is null || _displaySettings.HoldMs == value.Value)
+            {
+                return;
+            }
+
+            _displaySettings.HoldMs = value.Value;
+            LocalSettings.SaveTeacherDisplay(_displaySettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplaySummaryText));
+        }
+    }
+
+    /// <summary>这次要不要让教室端朗读。关掉就是"只把字摆出来"，适合上课时不想打断讲解的场合。</summary>
+    public bool Speak
+    {
+        get => _displaySettings.Speak;
+        set
+        {
+            if (_displaySettings.Speak == value)
+            {
+                return;
+            }
+
+            _displaySettings.Speak = value;
+            LocalSettings.SaveTeacherDisplay(_displaySettings);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplaySummaryText));
+        }
+    }
+
+    /// <summary>一句话说清这次会怎么显示，放在选项旁边给人核对。</summary>
+    public string DisplaySummaryText =>
+        $"{SelectedDisplay.Label} · {SelectedFontSize.Label}字 · {SelectedHold.Label}"
+        + (Speak ? " · 朗读" : " · 不朗读");
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
@@ -179,39 +271,47 @@ public partial class TextShoutViewModel : ObservableObject
     {
         var text = Text;
 
-        // 参数在入队时就固定下来：这条喊话用的是"点发送那一刻"的语速与音量，
-        // 而不是轮到它发送时界面上的值 —— 老师排了三条又去调了音量，
+        // 参数在入队时就固定下来：这条喊话用的是"点发送那一刻"的语速、音量与展示参数，
+        // 而不是轮到它发送时界面上的值 —— 老师排了三条又去调了字号，
         // 前面那两条不该跟着变。
-        var rate = Rate;
-        var volume = Volume;
-        var interrupt = Interrupt;
+        var message = new TextShoutMessage
+        {
+            Text = text.Trim(),
+            Rate = Rate,
+            Volume = Volume,
+            Interrupt = Interrupt,
+            Display = SelectedDisplay?.Value,
+            FontSize = SelectedFontSize?.Value,
+            HoldMs = SelectedHold?.Value ?? ShoutHoldDurations.Unspecified,
+            Speak = Speak,
+        };
 
         var sent = text.Trim();
 
         if (Queue is null)
         {
             // 没有队列（理论上不该发生）时退回直接发，至少不至于点了没反应
-            _ = SendDirectAsync(sent, rate, volume, interrupt);
+            _ = SendDirectAsync(message);
             Text = string.Empty;
             return;
         }
 
-        _myTicket = Queue.Enqueue(sent, ct => _channel.SendTextAsync(sent, rate, volume, voiceName: null, interrupt, ct));
+        _myTicket = Queue.Enqueue(sent, ct => _channel.SendTextAsync(message, ct));
 
         // 立刻清空输入框：排队的意义就是让老师可以连着喊好几条
         Text = string.Empty;
         RefreshQueueStatus();
     }
 
-    private async Task SendDirectAsync(string text, int rate, int volume, bool interrupt)
+    private async Task SendDirectAsync(TextShoutMessage message)
     {
         IsSending = true;
 
         try
         {
-            if (await _channel.SendTextAsync(text, rate, volume, voiceName: null, interrupt))
+            if (await _channel.SendTextAsync(message))
             {
-                RecordHistory(text);
+                RecordHistory(message.Text);
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.Sockets.SocketException)

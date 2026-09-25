@@ -76,27 +76,18 @@ public sealed class ShoutChannel : IShoutTransport, IAsyncDisposable
     }
 
     /// <summary>发送文字喊话（教室端用系统 TTS 朗读）。</summary>
-    public async Task<bool> SendTextAsync(
-        string text,
-        int rate,
-        int volume,
-        string? voiceName,
-        bool interrupt,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default)
     {
-        if (!_client.IsConnected || string.IsNullOrWhiteSpace(text))
+        if (!_client.IsConnected || string.IsNullOrWhiteSpace(message.Text))
         {
             return false;
         }
 
-        await _client.SendTextAsync(new TextShoutMessage
-        {
-            Text = text.Trim(),
-            Rate = rate,
-            Volume = volume,
-            VoiceName = voiceName,
-            Interrupt = interrupt,
-        }, cancellationToken).ConfigureAwait(false);
+        // 只补上去空白这一处，其余原样发出去 ——
+        // 展示参数是"这一条喊话"的属性，通道这层不该有自己的意见。
+        message.Text = message.Text.Trim();
+
+        await _client.SendTextAsync(message, cancellationToken).ConfigureAwait(false);
 
         return true;
     }
