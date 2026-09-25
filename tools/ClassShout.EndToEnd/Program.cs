@@ -233,7 +233,10 @@ internal static class Program
         // ---------- 3l. 组件式呼叫的拼装 ----------
         AssertCallComposer();
 
-        // ---------- 3m. 发送队列 ----------
+        // ---------- 3m. 常用语的自定义 ----------
+        AssertPhraseSettings();
+
+        // ---------- 3n. 发送队列 ----------
         await AssertShoutQueueAsync();
 
         // ---------- 4. 语音流 ----------
@@ -1656,6 +1659,72 @@ internal static class Program
         Check("空文本不会产出一份空名单",
             !RosterCsv.Parse("", "空").Ok && !RosterCsv.Parse(null, "空").Ok,
             "两次都返回了失败");
+    }
+
+    /// <summary>
+    /// 常用语（文字页上点一下即填的那几句）。
+    ///
+    /// 这份列表由老师自己维护，所以真正要守住的是"保存时怎么收拾他写的东西"：
+    /// 空白串、手滑写重的、超长的、写太多的，都得在落盘前收敛掉，
+    /// 否则界面上出现一条点不动的空按钮，或者下次打开发现少了几条又不知道为什么。
+    ///
+    /// 而"删光了不自动补回默认"是刻意的：那是老师明确表达过的意思。
+    /// </summary>
+    private static void AssertPhraseSettings()
+    {
+        var normalized = new TeacherPhraseSettings
+        {
+            Phrases =
+            [
+                "  同学们请安静  ",
+                "",
+                "   ",
+                "请注意看黑板",
+                "请注意看黑板",
+                new string('长', TeacherPhraseSettings.MaxLength + 10),
+                .. Enumerable.Range(1, TeacherPhraseSettings.MaxCount + 5).Select(i => $"第 {i} 条"),
+            ],
+        }.Normalized();
+
+        Check("常用语：首尾空白被去掉",
+            normalized.Phrases[0] == "同学们请安静",
+            $"首条=「{normalized.Phrases[0]}」");
+
+        Check("常用语：空条目被丢掉（不会留下点不动的空按钮）",
+            normalized.Phrases.All(p => p.Trim().Length > 0),
+            $"共 {normalized.Phrases.Count} 条，无空条目");
+
+        Check("常用语：写重了的只留一条",
+            normalized.Phrases.Count(p => p == "请注意看黑板") == 1,
+            $"「请注意看黑板」出现 {normalized.Phrases.Count(p => p == "请注意看黑板")} 次");
+
+        Check("常用语：超出上限的截断到上限",
+            normalized.Phrases.Count == TeacherPhraseSettings.MaxCount,
+            $"{normalized.Phrases.Count} 条（上限 {TeacherPhraseSettings.MaxCount}）");
+
+        Check("常用语：留下的是靠前的那几条",
+            normalized.Phrases[1] == "请注意看黑板" && normalized.Phrases[3] == "第 1 条",
+            $"第 2、4 条是「{normalized.Phrases[1]}」「{normalized.Phrases[3]}」");
+
+        var tooLong = new TeacherPhraseSettings { Phrases = [new string('长', 200)] }.Normalized();
+        Check("常用语：超长的截断而不是整条丢掉",
+            tooLong.Phrases.Count == 1 && tooLong.Phrases[0].Length == TeacherPhraseSettings.MaxLength,
+            $"{tooLong.Phrases.Count} 条，长度 {tooLong.Phrases[0].Length}（上限 {TeacherPhraseSettings.MaxLength}）");
+
+        // 这条是刻意的设计：删光了就是删光了，下次启动不该又冒出来
+        var emptied = new TeacherPhraseSettings { Phrases = [] }.Normalized();
+        Check("常用语：删光了就保持为空（不偷偷补回默认）",
+            emptied.Phrases.Count == 0,
+            $"剩 {emptied.Phrases.Count} 条");
+
+        var fallback = TeacherPhraseSettings.WithDefaults().Normalized();
+        Check("常用语：出厂那几句本身是干净的（不多不少）",
+            fallback.Phrases.Count == TeacherPhraseSettings.Defaults().Count && fallback.Phrases.Count > 0,
+            $"共 {fallback.Phrases.Count} 条：{string.Join("、", fallback.Phrases)}");
+
+        Check("常用语：默认里没有重复",
+            fallback.Phrases.Distinct(StringComparer.Ordinal).Count() == fallback.Phrases.Count,
+            "没有重复项");
     }
 
     /// <summary>

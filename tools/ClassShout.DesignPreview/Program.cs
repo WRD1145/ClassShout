@@ -534,6 +534,51 @@ internal static class Program
     }
 
     /// <summary>
+    /// 教师端文字页，并先把三条常用语种进本机设置。
+    ///
+    /// 种完立刻把文件还原 —— 视图模型在构造时已经把内容读进内存，
+    /// 之后的渲染用的就是内存里那份，所以不必让渲染过程占着别人的真实设置文件。
+    /// 两个常用语场景（平时 / 编辑）共用它，保证两张图只差"进没进编辑态"这一个变量。
+    /// </summary>
+    private static Control CreatePhrasePage(bool editing)
+    {
+        var path = Path.Combine(LocalSettings.Directory, "teacher-phrases.json");
+        var had = File.Exists(path);
+        var backup = had ? File.ReadAllText(path) : null;
+
+        try
+        {
+            LocalSettings.SavePhrases(new TeacherPhraseSettings
+            {
+                Phrases = ["同学们请安静", "请翻到课本第 __ 页", "课代表把作业收上来"],
+            });
+
+            var vm = new TeacherShellViewModel();
+
+            if (editing)
+            {
+                vm.Text.BeginEditPresetsCommand.Execute(null);
+
+                // 新增一条空行：水位提示只有在空行上才看得到
+                vm.Text.AddPresetCommand.Execute(null);
+            }
+
+            return new TeacherView { DataContext = vm };
+        }
+        finally
+        {
+            if (had && backup is not null)
+            {
+                File.WriteAllText(path, backup);
+            }
+            else
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    /// <summary>
     /// 教师端"服务器地址"这条配置的断言。
     ///
     /// 锁的是一个具体的死锁：服务器地址原本和「教室 UUID / 口令」挤在同一张卡里，
@@ -1117,6 +1162,17 @@ internal static class Program
                     }
                 }, 430, 1700,
                 _ => null),
+
+            // 教师端文字页的「常用语」：平时（点一下填入）与编辑态各一张。
+            //
+            // 同一块地方的两种样子，是否显示绑的是 !IsEditingPresets 这种取反表达式 ——
+            // 编译通过不代表两个分支都画对了。两个场景共用同一份种子数据，
+            // 否则两张图没法互相对照。
+            new("teacher-phrases", () => CreatePhrasePage(editing: false), 430, 1400, _ => null),
+
+            // 编辑态：每一行变成输入框 + 删除按钮，并顺手加一条空的，
+            // 好看清"新增的那一行"长什么样（水位提示只在空行上才看得到）。
+            new("teacher-phrases-edit", () => CreatePhrasePage(editing: true), 430, 1400, _ => null),
 
             // 教室端窗口自带尺寸，这里传 0 表示用窗口自己的
             new("classroom",

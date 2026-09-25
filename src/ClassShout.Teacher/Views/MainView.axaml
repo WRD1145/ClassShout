@@ -328,7 +328,7 @@
                                          Text="{Binding Label}" />
                               <TextBox Grid.Column="1" Classes="outlined dense" Margin="8,0"
                                        IsVisible="{Binding IsText}"
-                                       Watermark="文字（空格、标点都写在这里）"
+                                       Watermark="文字"
                                        Text="{Binding Text}" />
                               <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
                                 <Button Classes="icon" Command="{Binding MoveLeftCommand}" ToolTip.Tip="左移">
@@ -691,9 +691,21 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!-- 常用语：默认给几句通用的，但每位老师的话不一样，所以能自己增删改 -->
             <StackPanel Spacing="10">
-              <TextBlock Classes="cardTitle" Text="常用语" />
-              <ItemsControl ItemsSource="{Binding Text.Presets}">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Classes="cardTitle" Text="常用语" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="text small" Content="编辑"
+                        IsVisible="{Binding !Text.IsEditingPresets}"
+                        Command="{Binding Text.BeginEditPresetsCommand}" />
+                <Button Grid.Column="1" Classes="tonal small" Content="完成"
+                        IsVisible="{Binding Text.IsEditingPresets}"
+                        Command="{Binding Text.FinishEditPresetsCommand}" />
+              </Grid>
+
+              <!-- 平时：点一下填进输入框 -->
+              <ItemsControl ItemsSource="{Binding Text.Presets}"
+                            IsVisible="{Binding !Text.IsEditingPresets}">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
                     <WrapPanel />
@@ -707,6 +719,54 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         IsVisible="{Binding !Text.IsEditingPresets}"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="这些话是通用的默认值。想换成自己天天说的那几句，点右上角「编辑」。" />
+
+              <!-- 编辑：每行一个输入框，改完点「完成」才落盘 -->
+              <StackPanel Spacing="8" IsVisible="{Binding Text.IsEditingPresets}">
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           IsVisible="{Binding Text.HasNoPresets}"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="一条都没有 —— 点「新增一条」，或者「恢复默认」拿回出厂那几句。" />
+
+                <ItemsControl ItemsSource="{Binding Text.Presets}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TextPreset">
+                      <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                        <TextBox Classes="outlined dense"
+                                 MaxLength="{x:Static remote:TeacherPhraseSettings.MaxLength}"
+                                 Watermark="常用语"
+                                 Text="{Binding Text}" />
+                        <Button Grid.Column="1" Classes="icon" Margin="4,0,0,0"
+                                Command="{Binding RemoveCommand}"
+                                ToolTip.Tip="删掉这一条">
+                          <md3:Md3Icon Kind="DeleteOutline" Size="18" />
+                        </Button>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Classes="tonal small" Content="新增一条"
+                          Command="{Binding Text.AddPresetCommand}" />
+                  <Button Classes="outlined small" Content="恢复默认"
+                          Command="{Binding Text.ResetPresetsCommand}" />
+                </StackPanel>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding Text.PresetLimitText}" />
+              </StackPanel>
+
+              <!-- 存好了 / 到上限了这类回执：不提示的话，"到底存没存"只能靠下次打开猜 -->
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         IsVisible="{Binding Text.PresetStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                         Foreground="{DynamicResource Md3.Primary}"
+                         Text="{Binding Text.PresetStatus}" />
             </StackPanel>
 
             <!-- 排队状态：连着发好几条时，老师需要知道"我这条前面还有几个" -->

@@ -14,20 +14,27 @@ namespace ClassShout.Teacher.ViewModels;
 /// 字符串列表在 XAML 模板里想调用父级视图模型的命令，得写
 /// <c>$parent[ItemsControl].((vm:TextShoutViewModel)DataContext).UsePresetCommand</c>
 /// 这类又长又容易写错的绑定。让每一项自带命令，模板里一行就够。
+///
+/// 内容是可观察的：编辑模式下每一行就是一个输入框，改的正是这里的 Text。
 /// </summary>
-public sealed class TextPreset
+public sealed partial class TextPreset : ObservableObject
 {
-    public TextPreset(string text, Action<string> apply)
+    public TextPreset(string text, Action<string> apply, Action<TextPreset> remove)
     {
-        Text = text;
-        ApplyCommand = new RelayCommand(() => apply(text));
+        _text = text;
+        ApplyCommand = new RelayCommand(() => apply(Text));
+        RemoveCommand = new RelayCommand(() => remove(this));
     }
 
     /// <summary>常用语内容。</summary>
-    public string Text { get; }
+    [ObservableProperty]
+    private string _text;
 
     /// <summary>点击后把内容填入输入框。</summary>
     public IRelayCommand ApplyCommand { get; }
+
+    /// <summary>编辑模式下删掉这一条。</summary>
+    public IRelayCommand RemoveCommand { get; }
 }
 
 /// <summary>
@@ -72,6 +79,9 @@ public partial class TextShoutViewModel : ObservableObject
 {
     private readonly IShoutTransport _channel;
 
+    /// <summary>这位老师的常用语（本机保存，见 <see cref="TeacherPhraseSettings"/>）。</summary>
+    private TeacherPhraseSettings _phraseSettings;
+
     public TextShoutViewModel(IShoutTransport channel)
     {
         _channel = channel;
@@ -80,10 +90,8 @@ public partial class TextShoutViewModel : ObservableObject
         // 而一个读不懂的档位会让界面上"什么都没有被选中"。
         _displaySettings = LocalSettings.LoadTeacherDisplay().Normalized();
 
-        foreach (var phrase in DefaultPresets)
-        {
-            Presets.Add(new TextPreset(phrase, ApplyPreset));
-        }
+        _phraseSettings = LocalSettings.LoadPhrases().Normalized();
+        BuildPresets();
 
         LoadHistory();
     }
@@ -190,19 +198,129 @@ public partial class TextShoutViewModel : ObservableObject
         ? $"喊过的内容会留在这里（最多 {ShoutHistoryStore.MaxCount} 条）"
         : $"最近 {RecentShouts.Count} 条 · 最多保留 {ShoutHistoryStore.MaxCount} 条";
 
-    private static readonly string[] DefaultPresets =
-    [
-        "同学们请安静",
-        "请注意看黑板",
-        "这道题我再讲一遍",
-        "请翻到课本第 __ 页",
-        "课代表把作业收上来",
-        "下课后请到办公室找我",
-        "距离下课还有十分钟",
-        "请把手机收起来",
-    ];
-
     private void ApplyPreset(string preset) => Text = preset;
+
+    // ======================== 常用语（可自定义） ========================
+
+    /// <summary>常用语：课堂上反复要说的话，点一下直接填入，避免每次手打。</summary>
+    public ObservableCollection<TextPreset> Presets { get; } = [];
+
+    /// <summary>是不是正在编辑常用语。编辑模式下每一行变成输入框，并出现增删按钮。</summary>
+    [ObservableProperty]
+    private bool _isEditingPresets;
+
+    /// <summary>编辑过程中的一句回执（存好了 / 存不下 / 到上限了）。</summary>
+    [ObservableProperty]
+    private string _presetStatus = string.Empty;
+
+    /// <summary>一条常用语都没有时，界面上得说一句，否则那一块就是空白。</summary>
+    public bool HasNoPresets => Presets.Count == 0;
+
+    /// <summary>
+    /// 编辑区的说明。
+    ///
+    /// 例子放在这里而不是每一行的水位提示里：输入框的浮动标签会一直挂在内容上方，
+    /// 一句长例子挂在每一行上会变成一片紫色小字，反而看不清自己写了什么。
+    /// </summary>
+    public string PresetLimitText =>
+        $"一句话一条，例如「请翻到课本第 __ 页」。最多 {TeacherPhraseSettings.MaxCount} 条，"
+        + $"每条 {TeacherPhraseSettings.MaxLength} 字以内。改完点「完成」保存。";
+
+    /// <summary>按当前设置重建列表。第一次进页面、恢复默认、保存后对齐都用它。</summary>
+    private void BuildPresets()
+    {
+        Presets.Clear();
+
+        foreach (var phrase in _phraseSettings.Phrases)
+        {
+            Presets.Add(new TextPreset(phrase, ApplyPreset, RemovePreset));
+        }
+
+        OnPropertyChanged(nameof(HasNoPresets));
+    }
+
+    [RelayCommand]
+    private void BeginEditPresets()
+    {
+        PresetStatus = string.Empty;
+        IsEditingPresets = true;
+    }
+
+    [RelayCommand]
+    private void FinishEditPresets()
+    {
+        // 存下去的是"规范化之后"的那一份，然后把界面也换成同一份 ——
+        // 界面显示的和真正落盘的不该是两个样子（去重、截断都发生在这里）。
+        var saved = PersistPresets(out var failure);
+        IsEditingPresets = false;
+
+        PresetStatus = saved
+            ? Presets.Count == 0
+                ? "已保存：常用语清空了。"
+                : $"已保存 {Presets.Count} 条常用语。"
+            : failure ?? "常用语没能存到本机。";
+    }
+
+    [RelayCommand]
+    private void AddPreset()
+    {
+        if (Presets.Count >= TeacherPhraseSettings.MaxCount)
+        {
+            PresetStatus = $"最多 {TeacherPhraseSettings.MaxCount} 条 —— 先删掉几条再加。";
+            return;
+        }
+
+        // 空行是"我还没填"，不是一条空常用语：保存时会被规范化丢掉，
+        // 所以这里不拦，但也不假装它已经是一条。
+        Presets.Insert(0, new TextPreset(string.Empty, ApplyPreset, RemovePreset));
+        PresetStatus = "填好内容，点「完成」保存。";
+        OnPropertyChanged(nameof(HasNoPresets));
+    }
+
+    [RelayCommand]
+    private void RemovePreset(TextPreset? preset)
+    {
+        if (preset is null)
+        {
+            return;
+        }
+
+        Presets.Remove(preset);
+        PresetStatus = "删掉了这一条，点「完成」保存。";
+        OnPropertyChanged(nameof(HasNoPresets));
+    }
+
+    [RelayCommand]
+    private void ResetPresets()
+    {
+        _phraseSettings = TeacherPhraseSettings.WithDefaults();
+        BuildPresets();
+        PresetStatus = $"已放回出厂的那 {Presets.Count} 条，点「完成」保存。";
+    }
+
+    /// <summary>
+    /// 把界面上的内容写回设置并落盘。
+    /// 返回是否真的存进了本机 —— 存不下要让老师知道，而不是下次打开发现白改了。
+    /// </summary>
+    private bool PersistPresets(out string? failure)
+    {
+        var normalized = new TeacherPhraseSettings
+        {
+            Phrases = [.. Presets.Select(p => p.Text)],
+        }.Normalized();
+
+        _phraseSettings = normalized;
+        BuildPresets();
+
+        if (LocalSettings.SavePhrases(normalized))
+        {
+            failure = null;
+            return true;
+        }
+
+        failure = "常用语没能存到本机 —— 这一次的改动只在本次运行里有效。";
+        return false;
+    }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
@@ -388,9 +506,7 @@ public partial class TextShoutViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
     private bool _isSending;
 
-    /// <summary>常用语：课堂上反复要说的话，点一下直接填入，避免每次手打。</summary>
-    public ObservableCollection<TextPreset> Presets { get; } = [];
-
+    /// <summary>输入框里有多少字。界面上顺手提示"建议 60 字以内"。</summary>
     public int CharacterCount => Text.Length;
 
     public string CharacterCountText => $"{CharacterCount} 字 / 建议 60 字以内";

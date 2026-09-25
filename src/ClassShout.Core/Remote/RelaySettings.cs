@@ -281,4 +281,11 @@ public static class LocalSettings
 
     public static bool SaveCalls(TeacherCallSettings settings)
         => Save("teacher-calls.json", settings);
+
+    /// <summary>文字页上那一排常用语（老师自己增删改）。</summary>
+    public static TeacherPhraseSettings LoadPhrases()
+        => Load("teacher-phrases.json", TeacherPhraseSettings.WithDefaults);
+
+    public static bool SavePhrases(TeacherPhraseSettings settings)
+        => Save("teacher-phrases.json", settings);
 }
