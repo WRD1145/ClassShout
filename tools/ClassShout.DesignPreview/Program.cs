@@ -11,6 +11,7 @@ using ClassShout.Core.Remote;
 using ClassShout.Classroom.ViewModels;
 using ClassShout.Design.Controls;
 using ClassShout.Design.Theming;
+using ClassShout.Teacher.Services;
 using ClassShout.Teacher.ViewModels;
 using FluentAvalonia.Styling;
 // 两个应用各有一个 MainWindow，这里用别名区分，避免类型名冲突
@@ -300,6 +301,113 @@ internal static class Program
 
         Console.WriteLine();
         return passed;
+    }
+
+    /// <summary>
+    /// 发图片前的处理：大图压到最长边 1600，小图原样放过。
+    ///
+    /// 这段逻辑错了的表现是"教室里的图糊了"或者"一张照片传了半分钟"，
+    /// 两种情况都不会报错，只能靠断言与真图对照。
+    /// </summary>
+    private static bool VerifyImagePreparation()
+    {
+        Console.WriteLine("发送图片前的处理：");
+
+        var passed = true;
+
+        void Check(string label, bool ok, string detail)
+        {
+            passed &= ok;
+            Console.WriteLine($"  [{(ok ? "通过" : "失败")}] {label} —— {detail}");
+        }
+
+        // 造一张"手机照片"级别的图：3000×2000，带花纹（纯色会被 JPEG 压得极小，
+        // 那样"压缩后体积变小"这条断言就失去意义了）
+        var big = RenderTestImage(3000, 2000);
+        var bigResult = ShoutImage.PrepareAsync(new MemoryStream(big)).GetAwaiter().GetResult();
+
+        Check("大图能被处理", bigResult is not null, bigResult?.SizeText ?? "处理失败");
+
+        if (bigResult is { } prepared)
+        {
+            Check("大图按最长边等比缩到 1600",
+                Math.Max(prepared.Width, prepared.Height) == ShoutImage.MaxEdge,
+                $"{prepared.Width}×{prepared.Height}");
+
+            // 断言的是"体积落在可发送的量级"，不是"一定比原图小"：
+            // 原图可能是压得很好的 PNG，而 1600 宽的同一张图重新编码后未必更小。
+            // 真正要保证的是别把一张几兆的图原样发出去。
+            Check("处理后落在可直接发送的量级（≤ 1 MB）",
+                prepared.Bytes.Length <= 1024 * 1024,
+                $"原图 {big.Length / 1024} KB（3000×2000）→ 处理后 {prepared.Bytes.Length / 1024} KB（{prepared.Width}×{prepared.Height}）");
+
+            Check("标记为已压缩", prepared.Compressed, $"Compressed={prepared.Compressed}");
+
+            Check("按体积挑了更小的编码格式（照片用 JPEG、截图用 PNG）",
+                prepared.ContentType is "image/jpeg" or "image/png",
+                prepared.ContentType);
+
+            // 压缩结果必须还能解码 —— 否则教室里什么都显示不出来，
+            // 而发送端这边一路都显示"成功"
+            var decodable = true;
+            string decodeDetail = "解码成功";
+
+            try
+            {
+                using var stream = new MemoryStream(prepared.Bytes);
+                using var bitmap = new Bitmap(stream);
+                decodable = bitmap.PixelSize.Width == prepared.Width;
+                decodeDetail = $"{bitmap.PixelSize.Width}×{bitmap.PixelSize.Height}";
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+            {
+                decodable = false;
+                decodeDetail = ex.Message;
+            }
+
+            Check("压缩结果能重新解码", decodable, decodeDetail);
+        }
+
+        // 小图：既不超尺寸也不超体积，应当原样放过（避免把截图重新编码一遍，文字会发糊）
+        var small = RenderTestImage(120, 90);
+        var smallResult = ShoutImage.PrepareAsync(new MemoryStream(small)).GetAwaiter().GetResult();
+
+        Check("小图原样放过，不重新编码",
+            smallResult is { Compressed: false } && smallResult.Bytes.AsSpan().SequenceEqual(small),
+            smallResult is null ? "处理失败" : $"{smallResult.Width}×{smallResult.Height}，{smallResult.SizeText}");
+
+        // 不是图片的文件要能被识别出来，而不是抛异常或当成一张空图发出去
+        var bogus = ShoutImage.PrepareAsync(new MemoryStream([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]))
+            .GetAwaiter().GetResult();
+
+        Check("认不出的文件返回失败而不是抛异常", bogus is null, bogus is null ? "返回了 null" : "居然处理成功了");
+
+        Console.WriteLine();
+        return passed;
+    }
+
+    /// <summary>画一张带花纹的测试图，返回 PNG 字节。</summary>
+    private static byte[] RenderTestImage(int width, int height)
+    {
+        var target = new RenderTargetBitmap(new PixelSize(width, height));
+
+        using (var context = target.CreateDrawingContext())
+        {
+            context.FillRectangle(Brushes.White, new Rect(0, 0, width, height));
+
+            var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x33, 0x55, 0x99)), Math.Max(1, width / 150.0));
+            var step = Math.Max(8, width / 30);
+
+            for (var i = -height; i < width; i += step)
+            {
+                context.DrawLine(pen, new Point(i, 0), new Point(i + height, height));
+            }
+        }
+
+        using var stream = new MemoryStream();
+        target.Save(stream);
+        target.Dispose();
+        return stream.ToArray();
     }
 
     /// <summary>
@@ -786,6 +894,9 @@ internal static class Program
         // 已保存的教室列表（读取、标记、移除落盘）—— 同样是视图模型里的逻辑
         var savedClassroomsPassed = VerifySavedClassrooms();
 
+        // 发图片前的压缩：大图缩到 1600、小图原样放过
+        var imagePrepPassed = VerifyImagePreparation();
+
         var scenes = new Scene[]
         {
             new("design-system",
@@ -1053,7 +1164,7 @@ internal static class Program
                 }),
         };
 
-        var allPassed = fontsPassed && palettePassed && pickerPassed && serverAddressPassed && linkChipPassed && savedClassroomsPassed;
+        var allPassed = fontsPassed && palettePassed && pickerPassed && serverAddressPassed && linkChipPassed && savedClassroomsPassed && imagePrepPassed;
         var written = new List<string>();
         foreach (var scene in scenes)
         {

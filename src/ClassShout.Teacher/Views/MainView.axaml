@@ -146,6 +146,34 @@
                   <Button Grid.Column="1" Classes="text small" Content="清空"
                           Command="{Binding Text.ClearCommand}" />
                 </Grid>
+
+                <!-- 随图一起喊。图片和文字是同一次喊话，所以它就挂在输入框这张卡里。 -->
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10"
+                        IsVisible="{Binding Text.HasImage}">
+                    <Border CornerRadius="10" ClipToBounds="True"
+                            Background="{DynamicResource Md3.SurfaceContainerHigh}">
+                      <Image Source="{Binding Text.ImagePreview}" Stretch="Uniform"
+                             Width="96" Height="96" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                      <TextBlock Classes="bodyMedium" Text="图片会随这条一起发出去" />
+                      <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                 Text="{Binding Text.ImageSizeText}" />
+                      <Button Classes="text small" HorizontalAlignment="Left"
+                              Content="移除图片"
+                              Command="{Binding Text.ClearImageCommand}" />
+                    </StackPanel>
+                  </Grid>
+
+                  <Button Classes="tonal block" Click="OnPickImageClick">
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                      <md3:Md3Icon Kind="ImagePlus" Size="18" />
+                      <TextBlock Text="选择图片" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </Button>
+                </StackPanel>
               </StackPanel>
             </md3:Md3Card>
 

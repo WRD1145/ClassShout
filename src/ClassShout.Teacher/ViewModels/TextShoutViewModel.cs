@@ -308,6 +308,78 @@ public partial class TextShoutViewModel : ObservableObject
         $"{SelectedDisplay.Label} · {SelectedFontSize.Label}字 · {SelectedHold.Label}"
         + (Speak ? " · 朗读" : " · 不朗读");
 
+    // ======================== 随图一起喊 ========================
+    //
+    // 图片和文字走的是同一条喊话、同一套展示参数：老师发一张"实验步骤"的照片
+    // 配一句"照着这个做"，两样东西要一起出现在教室里，而不是先后两条。
+
+    private PreparedImage? _preparedImage;
+
+    /// <summary>这次要随图发出去的图片；为空表示纯文字喊话。</summary>
+    public PreparedImage? PreparedImage
+    {
+        get => _preparedImage;
+        private set
+        {
+            _preparedImage = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasImage));
+            OnPropertyChanged(nameof(ImageSizeText));
+            SendCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>预览用的位图。界面直接绑它显示缩略图。</summary>
+    [ObservableProperty]
+    private Avalonia.Media.Imaging.Bitmap? _imagePreview;
+
+    public bool HasImage => PreparedImage is not null;
+
+    public string ImageSizeText => PreparedImage?.SizeText ?? string.Empty;
+
+    /// <summary>
+    /// 选好图片之后由界面调用（界面负责弹文件选择器，视图模型不碰 UI API）。
+    /// 返回失败原因；成功返回 null。
+    /// </summary>
+    public async Task<string?> AttachImageAsync(Stream source)
+    {
+        PreparedImage? prepared;
+        try
+        {
+            prepared = await ShoutImage.PrepareAsync(source).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"读不出这张图片：{ex.Message}";
+        }
+
+        if (prepared is null)
+        {
+            return "这个文件不是能识别的图片（支持 JPEG / PNG / WebP / GIF）。";
+        }
+
+        PreparedImage = prepared;
+
+        // 预览用压缩后的字节重建：老师看到的就是教室里会看到的那一张，
+        // 而不是"我选的图"和"发出去的图"长得不一样。
+        var previous = ImagePreview;
+        using (var stream = new MemoryStream(prepared.Bytes))
+        {
+            ImagePreview = new Avalonia.Media.Imaging.Bitmap(stream);
+        }
+
+        previous?.Dispose();
+        return null;
+    }
+
+    [RelayCommand]
+    private void ClearImage()
+    {
+        PreparedImage = null;
+        ImagePreview?.Dispose();
+        ImagePreview = null;
+    }
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
     private bool _isConnected;
@@ -332,7 +404,11 @@ public partial class TextShoutViewModel : ObservableObject
 
     public string VolumeText => $"{Volume}%";
 
-    public bool CanSend => IsConnected && !IsSending && !string.IsNullOrWhiteSpace(Text);
+    /// <summary>
+    /// 能不能发。带图时允许"没有文字"——一张照片本身就是内容，
+    /// 说明文字是可选的那部分。
+    /// </summary>
+    public bool CanSend => IsConnected && !IsSending && (!string.IsNullOrWhiteSpace(Text) || HasImage);
 
     // ======================== 发送队列 ========================
 
@@ -422,6 +498,38 @@ public partial class TextShoutViewModel : ObservableObject
     /// </summary>
     private async Task<bool> SendToTargetsAsync(TextShoutMessage message, CancellationToken cancellationToken)
     {
+        var image = PreparedImage;
+
+        // 带图的这一条：图片和文字是同一次喊话（同一条 display/hold 参数）。
+        // 多班发送这一版先只支持纯文字 —— 图片多发意味着同一张图对着每个班各传一遍，
+        // 流量是班级数的倍数，等真有老师这么用再加。
+        if (image is not null)
+        {
+            var ok = await _channel.SendImageAsync(
+                new ImageStartMessage
+                {
+                    Text = message.Text,
+                    ContentType = image.ContentType,
+                    Width = image.Width,
+                    Height = image.Height,
+                    Display = message.Display,
+                    FontSize = message.FontSize,
+                    HoldMs = message.HoldMs,
+                    Speak = message.Speak,
+                },
+                image.Bytes,
+                cancellationToken).ConfigureAwait(true);
+
+            if (ok)
+            {
+                // 发出去了就把图从输入区撤掉：不然老师接着打下一句时，
+                // 上一条的照片还挂在输入框上，一按发送又发了一遍。
+                Avalonia.Threading.Dispatcher.UIThread.Post(ClearImage);
+            }
+
+            return ok;
+        }
+
         var selected = Targets.Where(t => t.IsSelected).Select(t => t.Record).ToList();
 
         // 单目标（或没有多班发送器）时保持原样：这条路上有局域网直连优先的逻辑，
