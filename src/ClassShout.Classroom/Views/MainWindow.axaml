@@ -137,6 +137,29 @@
                        Text="{Binding CurrentText}" />
           </StackPanel>
 
+          <!-- 图片喊话。Stretch=Uniform 且给上下限：图片比例千奇百怪，
+               写死宽高会把它们拉变形，而完全不限制又会让一张竖图顶出屏幕。 -->
+          <StackPanel IsVisible="{Binding IsShowingImage}"
+                      VerticalAlignment="Center" HorizontalAlignment="Center"
+                      Spacing="16" Margin="48">
+            <Border Classes="chip" HorizontalAlignment="Center">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <md3:Md3Icon Kind="Image" Size="16" Classes="secondary" />
+                <TextBlock Classes="labelLarge" Text="图片喊话" />
+              </StackPanel>
+            </Border>
+            <TextBlock Classes="labelLarge" HorizontalAlignment="Center"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="{Binding SpeakerText, StringFormat='来自 {0}'}" />
+            <Image Source="{Binding CurrentImage}" Stretch="Uniform"
+                   MaxWidth="1080" MaxHeight="540" />
+            <TextBlock IsVisible="{Binding HasImageCaption}"
+                       TextAlignment="Center" TextWrapping="Wrap"
+                       MaxWidth="1180" MaxHeight="200"
+                       FontSize="{Binding CurrentTextFontSize}"
+                       Text="{Binding CurrentText}" />
+          </StackPanel>
+
           <!-- 语音播放中 -->
           <StackPanel IsVisible="{Binding IsPlayingAudio}"
                       VerticalAlignment="Center" HorizontalAlignment="Stretch"

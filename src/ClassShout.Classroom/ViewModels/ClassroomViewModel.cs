@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using ClassShout.Classroom.Services;
 using ClassShout.Core.Audio;
@@ -29,6 +30,9 @@ public enum ClassroomStage
     /// 界面上那句「正在朗读」会是在说谎，顶栏的状态也会一直停在"正在朗读"。
     /// </summary>
     ShowingTranscript,
+
+    /// <summary>正在显示一条图片喊话（可能带一句说明文字）。</summary>
+    ShowingImage,
 }
 
 /// <summary>一条运行日志。</summary>
@@ -493,6 +497,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     public bool IsPlayingAudio => Stage == ClassroomStage.PlayingAudio;
 
+    /// <summary>大字区现在显示的是不是一张图片。</summary>
+    public bool IsShowingImage => Stage == ClassroomStage.ShowingImage;
+
     /// <summary>大字区现在有没有字要显示。文字喊话与语音转写的字幕共用同一块区域。</summary>
     public bool ShowTextStage => Stage is ClassroomStage.SpeakingText or ClassroomStage.ShowingTranscript;
 
@@ -544,6 +551,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(IsIdle));
         OnPropertyChanged(nameof(IsSpeakingText));
         OnPropertyChanged(nameof(IsPlayingAudio));
+        OnPropertyChanged(nameof(IsShowingImage));
         OnPropertyChanged(nameof(ShowTextStage));
         OnPropertyChanged(nameof(StageChipText));
         OnPropertyChanged(nameof(ShouldMeterAudio));
@@ -554,6 +562,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             ClassroomStage.SpeakingText => "正在朗读文字喊话",
             ClassroomStage.PlayingAudio => "正在播放语音喊话",
             ClassroomStage.ShowingTranscript => "正在显示语音转写的文字",
+            ClassroomStage.ShowingImage => "正在显示图片喊话",
             _ => Teachers.Count == 0 ? "等待教师端连接" : "已就绪",
         };
     }
@@ -748,6 +757,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         session.TextShoutReceived += (_, message) => OnTextShout(session, message);
         session.AudioStarted += (_, message) => OnAudioStarted(session, message);
+        session.ImageStarted += (_, message) => OnImageStarted(session, message);
+        session.ImageChunkReceived += (_, payload) => OnImageChunk(LanOwnerKey(session), payload);
+        session.ImageEnded += (_, message) => OnImageEnded(session, message);
         session.AudioChunkReceived += (_, payload) => OnAudioChunk(LanOwnerKey(session), payload);
         session.AudioEnded += (_, message) => _ = OnAudioEndedAsync(message);
         session.StopRequested += (_, message) => Post(() => StopEverything($"教师端请求停止：{message.Reason}"));
@@ -909,11 +921,21 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                     return;
                 }
 
-                if (Stage is ClassroomStage.SpeakingText)
+                if (Stage is ClassroomStage.SpeakingText or ClassroomStage.ShowingImage)
                 {
+                    var wasImage = Stage == ClassroomStage.ShowingImage;
+
                     Stage = ClassroomStage.Idle;
                     CurrentText = string.Empty;
                     CurrentSpeaker = string.Empty;
+
+                    if (wasImage)
+                    {
+                        // 图片要显式释放：Bitmap 背后是 Skia 的位图，
+                        // 换下一张时不释放会一直占着内存 —— 教室端是常驻几周不重启的。
+                        CurrentImage?.Dispose();
+                        CurrentImage = null;
+                    }
                 }
             });
         });
@@ -930,6 +952,181 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             _audioOwner = null;
             _player.Stop();
         }
+    }
+
+    // ======================== 图片喊话 ========================
+
+    /// <summary>正在接收的那张图。</summary>
+    private readonly Lock _imageLock = new();
+    private MemoryStream? _imageBuffer;
+    private string? _imageId;
+    private string? _imageOwner;
+
+    /// <summary>这张图的声明部分（说明文字与展示参数）。它随 imageStart 到达，收尾时要用。</summary>
+    private ImageStartMessage? _imageStart;
+
+    /// <summary>大字区正在显示的那张图。为空表示当前不是图片喊话。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasImageCaption))]
+    private Bitmap? _currentImage;
+
+    /// <summary>这条图片喊话带没带说明文字。</summary>
+    public bool HasImageCaption => !string.IsNullOrWhiteSpace(CurrentText) && Stage == ClassroomStage.ShowingImage;
+
+    /// <summary>
+    /// 图片喊话开始（带说明文字与总字节数）。
+    ///
+    /// 中继链路上这条消息里带的是 <see cref="RelayEnvelope"/>，所以这里的重载
+    /// 由中继那边调用；两条链路最终都落到同一个 <c>PresentImage</c>。
+    /// </summary>
+    private void OnImageStarted(TeacherSession session, ImageStartMessage message)
+    {
+        // 声明里的大小直接决定我们分配多少内存，所以先卡上限、再照它开缓冲。
+        if (message.TotalBytes is <= 0 or > ShoutProtocol.MaxImageBytes)
+        {
+            Post(() => AddLog("图片",
+                $"「{session.ClientName}」发来的图片大小不合法（{message.TotalBytes} 字节），已忽略。"));
+            return;
+        }
+
+        lock (_imageLock)
+        {
+            _imageBuffer?.Dispose();
+            _imageBuffer = new MemoryStream(message.TotalBytes);
+            _imageId = message.Id;
+            _imageOwner = LanOwnerKey(session);
+            _imageStart = message;
+        }
+
+        Post(() => AddLog("图片", $"「{session.ClientName}」发来一张图片（{message.TotalBytes / 1024} KB）"));
+    }
+
+    private void OnImageChunk(string ownerKey, ReadOnlyMemory<byte> payload)
+    {
+        if (payload.IsEmpty)
+        {
+            return;
+        }
+
+        lock (_imageLock)
+        {
+            // 只收属于当前这张图的分片：上一个教师端还在路上的尾巴混进来，
+            // 拼出来的是一张花屏，而且不会有任何报错。
+            if (_imageBuffer is null || !string.Equals(_imageOwner, ownerKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (_imageBuffer.Length + payload.Length > ShoutProtocol.MaxImageBytes)
+            {
+                return;
+            }
+
+            _imageBuffer.Write(payload.Span);
+        }
+    }
+
+    private void OnImageEnded(TeacherSession session, ImageEndMessage message)
+    {
+        byte[]? bytes = null;
+        ImageStartMessage? start;
+
+        lock (_imageLock)
+        {
+            start = _imageStart;
+
+            if (_imageBuffer is not null &&
+                string.Equals(_imageId, message.Id, StringComparison.Ordinal) &&
+                string.Equals(_imageOwner, LanOwnerKey(session), StringComparison.Ordinal))
+            {
+                bytes = _imageBuffer.ToArray();
+                _imageBuffer.Dispose();
+                _imageBuffer = null;
+                _imageId = null;
+                _imageOwner = null;
+                _imageStart = null;
+            }
+        }
+
+        if (bytes is null || bytes.Length == 0 || start is null)
+        {
+            Post(() => AddLog("图片", "图片没有收全，已忽略。"));
+            return;
+        }
+
+        // 说明文字与展示参数来自 imageStart —— 它们不属于"结束"这条消息
+        Post(() => PresentImage(
+            session.ClientName,
+            bytes,
+            start.Display,
+            start.FontSize,
+            start.HoldMs,
+            start.Text,
+            start.Speak));
+    }
+
+    /// <summary>
+    /// 把收到的图片摆到教室里。
+    ///
+    /// 解码放在 UI 线程上做：<see cref="Bitmap"/> 背后是 Skia 的位图对象，
+    /// 而这个对象马上就要交给界面渲染 —— 在别的线程建、再跨线程交给控件，
+    /// 出问题的表现是偶发花屏或崩溃，而那种问题在教室里根本没法排查。
+    /// </summary>
+    private void PresentImage(
+        string sourceName,
+        byte[] bytes,
+        string? display,
+        string? fontSize,
+        int holdMs,
+        string? caption,
+        bool speak)
+    {
+        var plan = ShoutDisplayPlan.Resolve(display, fontSize, holdMs, speak, DisplayDefaults);
+
+        Bitmap bitmap;
+        try
+        {
+            using var stream = new MemoryStream(bytes);
+            bitmap = new Bitmap(stream);
+        }
+        catch (Exception ex)
+        {
+            // 解码失败只记日志：教室里那台机器上没人能处理"这张图坏了"这件事，
+            // 而弹一个错误框只会盖住正在讲的内容。
+            AddLog("图片", $"图片解码失败，已忽略：{ex.Message}");
+            return;
+        }
+
+        var ticket = ++_presentationTicket;
+
+        // 一次只出一路内容：图片来了就把正在读的、正在放的都停下来
+        _speech.Stop();
+        StopAudioPlayback();
+
+        CurrentImage?.Dispose();
+        CurrentImage = bitmap;
+
+        CurrentSpeaker = sourceName;
+        CurrentText = caption ?? string.Empty;
+        CurrentFontSize = plan.FontSize;
+
+        _textHiddenInPopup = plan.IsPopup;
+        Stage = plan.IsPopup ? ClassroomStage.Idle : ClassroomStage.ShowingImage;
+
+        NotifyOnScreen(
+            sourceName,
+            string.IsNullOrWhiteSpace(caption) ? "（图片）" : caption,
+            ShoutNoticeKind.Image,
+            plan,
+            bitmap);
+
+        // 朗读针对的是那句说明文字；没有文字就没什么可读的
+        if (plan.Speak && !string.IsNullOrWhiteSpace(caption))
+        {
+            _ = SpeakAsync(new TextShoutMessage { Text = caption, Rate = Rate, Volume = Volume }, ticket, plan);
+        }
+
+        ScheduleTextClear(ticket, plan);
     }
 
     private async Task SpeakAsync(TextShoutMessage message, long ticket, ShoutDisplayPlan plan)
@@ -1325,6 +1522,11 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         AudioLevel = 0;
         CurrentText = string.Empty;
         CurrentSpeaker = string.Empty;
+
+        // 图片也要清掉并释放，否则"停止"之后画面还留着上一张
+        CurrentImage?.Dispose();
+        CurrentImage = null;
+
         AddLog("系统", reason);
     }
 
@@ -1669,11 +1871,106 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                     _ = EndAudioAsync();
                     break;
 
+                case RelayKinds.ImageStart:
+                    OnRelayImageStart(envelope);
+                    break;
+
+                case RelayKinds.Image:
+                    if (!string.IsNullOrEmpty(envelope.ImageBase64))
+                    {
+                        OnImageChunk(RelayOwnerKey(envelope), Convert.FromBase64String(envelope.ImageBase64));
+                    }
+
+                    break;
+
+                case RelayKinds.ImageEnd:
+                    OnRelayImageEnd(envelope);
+                    break;
+
                 case RelayKinds.Stop:
                     StopEverything($"教师端请求停止：{envelope.Reason}");
                     break;
             }
         });
+    }
+
+    /// <summary>
+    /// 中继链路上的图片：声明与收尾。
+    ///
+    /// 分片本身走 <see cref="OnImageChunk"/>，与局域网共用同一套拼装逻辑 ——
+    /// "图片怎么攒起来"这件事不该因为走哪条链路而有两份实现。
+    /// </summary>
+    private void OnRelayImageStart(RelayEnvelope envelope)
+    {
+        var ownerKey = RelayOwnerKey(envelope);
+
+        if (envelope.ImageTotalBytes is <= 0 or > ShoutProtocol.MaxImageBytes)
+        {
+            Post(() => AddLog("图片", $"「{envelope.From}」发来的图片大小不合法，已忽略。"));
+            return;
+        }
+
+        lock (_imageLock)
+        {
+            _imageBuffer?.Dispose();
+            _imageBuffer = new MemoryStream(envelope.ImageTotalBytes);
+            _imageId = envelope.ImageId;
+            _imageOwner = ownerKey;
+            _imageStart = new ImageStartMessage
+            {
+                Id = envelope.ImageId ?? string.Empty,
+                Text = envelope.Text ?? string.Empty,
+                ContentType = envelope.ImageContentType ?? "image/jpeg",
+                TotalBytes = envelope.ImageTotalBytes,
+                Width = envelope.ImageWidth,
+                Height = envelope.ImageHeight,
+                Display = envelope.Display,
+                FontSize = envelope.FontSize,
+                HoldMs = envelope.HoldMs,
+                Speak = envelope.Speak,
+            };
+        }
+
+        AddLog("图片", $"「{envelope.From}」发来一张图片（{envelope.ImageTotalBytes / 1024} KB）");
+    }
+
+    private void OnRelayImageEnd(RelayEnvelope envelope)
+    {
+        var ownerKey = RelayOwnerKey(envelope);
+        byte[]? bytes = null;
+        ImageStartMessage? start;
+
+        lock (_imageLock)
+        {
+            start = _imageStart;
+
+            if (_imageBuffer is not null &&
+                string.Equals(_imageId, envelope.ImageId, StringComparison.Ordinal) &&
+                string.Equals(_imageOwner, ownerKey, StringComparison.Ordinal))
+            {
+                bytes = _imageBuffer.ToArray();
+                _imageBuffer.Dispose();
+                _imageBuffer = null;
+                _imageId = null;
+                _imageOwner = null;
+                _imageStart = null;
+            }
+        }
+
+        if (bytes is null || bytes.Length == 0 || start is null)
+        {
+            AddLog("图片", "图片没有收全，已忽略。");
+            return;
+        }
+
+        PresentImage(
+            envelope.From ?? "教师端",
+            bytes,
+            start.Display,
+            start.FontSize,
+            start.HoldMs,
+            start.Text,
+            start.Speak);
     }
 
     /// <summary>规范化并校验服务器地址。补全协议头，去掉末尾斜杠。</summary>
@@ -2147,7 +2444,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     };
 
     /// <summary>收到喊话时弹一条提示。</summary>
-    private void NotifyOnScreen(string sourceName, string text, ShoutNoticeKind kind, ShoutDisplayPlan? plan = null)
+    private void NotifyOnScreen(
+        string sourceName,
+        string text,
+        ShoutNoticeKind kind,
+        ShoutDisplayPlan? plan = null,
+        Bitmap? image = null)
     {
         if (!NotificationEnabled)
         {
@@ -2169,6 +2471,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             {
                 FontSize = plan?.FontSize ?? ShoutFontSizes.Default,
                 HoldMs = plan?.HoldMs ?? ShoutHoldDurations.Unspecified,
+                Image = image,
             });
         }
 

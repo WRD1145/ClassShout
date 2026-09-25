@@ -17,6 +17,32 @@ public static class ShoutProtocol
 
     /// <summary>单帧负载上限 1 MiB，用于防御异常长度导致的巨量分配。</summary>
     public const int MaxFrameLength = 1024 * 1024;
+
+    /// <summary>
+    /// 图片分片的默认大小（48 KiB）。
+    ///
+    /// 选它有两个约束：不能让单帧逼近 1 MiB 的上限（那会给对端一次巨大的分配），
+    /// 也要让中继那条路上 base64 之后仍低于服务器对单个请求体的限制。
+    /// 48 KiB 经 base64 是 64 KiB，两个条件都留着余量。
+    /// </summary>
+    public const int DefaultImageChunkSize = 48 * 1024;
+
+    /// <summary>
+    /// 经中继服务器时一片图片的字节数（10 KiB）。
+    ///
+    /// 服务器对单个请求体有 16 KiB 的上限，而 base64 会把体积放大三分之一：
+    /// 10 KiB 编码后约 13.3 KiB，留得住余量。直接用局域网那个 48 KiB，
+    /// 每一片都会被服务器以 413 拒掉 —— 而表现只是"图片发不出去"。
+    /// </summary>
+    public const int RelayImageChunkSize = 10 * 1024;
+
+    /// <summary>
+    /// 一张图片的大小上限（8 MiB）。
+    ///
+    /// 教师端在发之前会先压缩到远小于它，所以这个上限拦的是"故意/意外发来一张巨图"
+    /// 的情况 —— 教室端会照着 TotalBytes 预分配缓冲，不设上限就等于让对方决定我们分配多少内存。
+    /// </summary>
+    public const int MaxImageBytes = 8 * 1024 * 1024;
 }
 
 /// <summary>控制消息基类。JSON 中以 <c>type</c> 字段区分具体类型。</summary>

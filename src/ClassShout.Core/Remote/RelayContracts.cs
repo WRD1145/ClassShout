@@ -24,6 +24,12 @@ public static class RelayPaths
     public const string TeacherAudioStart = "/api/teachers/{0}/audio/start";
     public const string TeacherAudio = "/api/teachers/{0}/audio";
     public const string TeacherAudioEnd = "/api/teachers/{0}/audio/end";
+
+    // —— 图片喊话。和音频一样三段式：先声明、再分片、最后收尾 ——
+    public const string TeacherImageStart = "/api/teachers/{0}/image/start";
+    public const string TeacherImageChunk = "/api/teachers/{0}/image/chunk";
+    public const string TeacherImageEnd = "/api/teachers/{0}/image/end";
+
     public const string TeacherStop = "/api/teachers/{0}/stop";
     public const string TeacherUnbind = "/api/teachers/{0}";
 
@@ -74,6 +80,9 @@ public static class RelayKinds
     public const string AudioStart = "audioStart";
     public const string Audio = "audio";
     public const string AudioEnd = "audioEnd";
+    public const string ImageStart = "imageStart";
+    public const string Image = "image";
+    public const string ImageEnd = "imageEnd";
     public const string Stop = "stop";
     public const string Status = "status";
     public const string ClassroomOnline = "classroomOnline";
@@ -143,6 +152,37 @@ public sealed record TextShoutRequest(
     bool Speak = true);
 
 public sealed record AudioStartRequest(int SampleRate, int Channels, int BitsPerSample);
+
+/// <summary>
+/// 图片喊话的声明。之后跟着若干 <see cref="ImageChunkRequest"/>，由 image/end 收尾。
+/// </summary>
+/// <param name="Id">本次图片的标识，分片与收尾都要带上它。</param>
+/// <param name="TotalBytes">图片总字节数。</param>
+/// <param name="ContentType">MIME 类型。</param>
+/// <param name="Text">随图显示的说明文字。</param>
+/// <param name="Width">像素宽（0 表示未知）。</param>
+/// <param name="Height">像素高（0 表示未知）。</param>
+public sealed record ImageStartRequest(
+    string Id,
+    int TotalBytes,
+    string ContentType,
+    string? Text = null,
+    int Width = 0,
+    int Height = 0,
+    string? Display = null,
+    string? FontSize = null,
+    int HoldMs = ShoutHoldDurations.Unspecified,
+    bool Speak = false);
+
+/// <summary>
+/// 一片图片数据。
+///
+/// 走 base64 而不是二进制端点：这条线路上已经有音频在用同一个形状，
+/// 多一种消息形态只会让"服务器只是转发"这件事变得不清楚。
+/// </summary>
+/// <param name="Id">属于哪张图。</param>
+/// <param name="DataBase64">这一片的字节（base64）。</param>
+public sealed record ImageChunkRequest(string Id, string DataBase64);
 
 public sealed record ClassroomStatusRequest(bool Muted, int Volume, string State);
 
@@ -299,6 +339,24 @@ public sealed class RelayEnvelope
     public int SampleRate { get; set; } = 16000;
     public int Channels { get; set; } = 1;
     public int BitsPerSample { get; set; } = 16;
+
+    // —— 图片 ——
+    /// <summary>图片标识。分片与收尾靠它对上号。</summary>
+    public string? ImageId { get; set; }
+
+    /// <summary>图片总字节数（imageStart 上带）。</summary>
+    public int ImageTotalBytes { get; set; }
+
+    /// <summary>图片的 MIME 类型。</summary>
+    public string? ImageContentType { get; set; }
+
+    /// <summary>这一片图片数据（base64）。</summary>
+    public string? ImageBase64 { get; set; }
+
+    /// <summary>图片的像素尺寸，供教室端在图片到达之前就摆好版面。</summary>
+    public int ImageWidth { get; set; }
+
+    public int ImageHeight { get; set; }
 
     // —— 状态 ——
     public bool Muted { get; set; }

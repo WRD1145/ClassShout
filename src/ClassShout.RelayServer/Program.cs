@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Threading.RateLimiting;
+using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
 using ClassShout.RelayServer;
 using Microsoft.AspNetCore.Mvc;
@@ -516,6 +517,123 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherAudioEnd, "token"), (string token
 
     logger.LogInformation("{Teacher} → {Uuid}：语音结束，累计 {Bytes:N0} 字节",
         binding.TeacherName, binding.ClassroomUuid, binding.AudioBytes);
+
+    return Results.Ok(new { ok = true });
+});
+
+// ======================== 教师端：图片喊话 ========================
+//
+// 和音频一样三段式。这里刻意不复用音频那条路：两者的分片大小差一个数量级
+// （音频 3 KB、图片 10 KB），而服务器要按各自的形状设上限。
+
+app.MapPost(RelayPaths.Route(RelayPaths.TeacherImageStart, "token"), (string token, ImageStartRequest request) =>
+{
+    if (!sessions.TryGetTeacher(token, out var binding))
+    {
+        return Results.Unauthorized();
+    }
+
+    TouchTeacher(binding);
+
+    // 声明里的字节数是**教室端**照着分配缓冲的依据，所以先在这里卡一道上限：
+    // 不卡的话，持令牌者报一个 4 GB 的 TotalBytes 就能让每间教室都去申请一块巨型缓冲。
+    if (request.TotalBytes is <= 0 or > ShoutProtocol.MaxImageBytes)
+    {
+        return Results.Json(
+            new { error = $"图片大小不合法（{request.TotalBytes} 字节，上限 {ShoutProtocol.MaxImageBytes}）。" },
+            statusCode: StatusCodes.Status413PayloadTooLarge);
+    }
+
+    hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
+    {
+        Kind = RelayKinds.ImageStart,
+        From = binding.TeacherName,
+        ImageId = request.Id,
+        ImageTotalBytes = request.TotalBytes,
+        ImageContentType = request.ContentType,
+        ImageWidth = request.Width,
+        ImageHeight = request.Height,
+        Text = request.Text,
+        Display = request.Display,
+        FontSize = request.FontSize,
+        HoldMs = request.HoldMs,
+        Speak = request.Speak,
+    });
+
+    logger.LogInformation("{Teacher} → {Uuid}：图片开始，{Bytes:N0} 字节",
+        binding.TeacherName, binding.ClassroomUuid, request.TotalBytes);
+
+    return Results.Ok(new { ok = true });
+});
+
+app.MapPost(RelayPaths.Route(RelayPaths.TeacherImageChunk, "token"), async (string token, HttpRequest request) =>
+{
+    if (!sessions.TryGetTeacher(token, out var binding))
+    {
+        return Results.Unauthorized();
+    }
+
+    TouchTeacher(binding);
+
+    // 和音频分片同样的闸：base64 后的请求体不许超过 16 KB。
+    // 上限不是"少收点数据"的问题 —— 分片会整段进内存、再进广播历史，
+    // 不设限就等于让持令牌者决定服务器用多少内存。
+    if (request.ContentLength is > MaxAudioChunkBytes)
+    {
+        return Results.Json(
+            new { error = $"图片分片超过上限 {MaxAudioChunkBytes} 字节。" },
+            statusCode: StatusCodes.Status413PayloadTooLarge);
+    }
+
+    using var buffer = new MemoryStream();
+    var chunk = new byte[8 * 1024];
+    int read;
+    while ((read = await request.Body.ReadAsync(chunk)) > 0)
+    {
+        if (buffer.Length + read > MaxAudioChunkBytes)
+        {
+            return Results.Json(
+                new { error = $"图片分片超过上限 {MaxAudioChunkBytes} 字节。" },
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
+
+        buffer.Write(chunk, 0, read);
+    }
+
+    var body = System.Text.Json.JsonSerializer.Deserialize<ImageChunkRequest>(
+        buffer.ToArray(), System.Text.Json.JsonSerializerOptions.Web);
+
+    if (body is null || string.IsNullOrWhiteSpace(body.DataBase64))
+    {
+        return Results.BadRequest(new { error = "图片分片是空的。" });
+    }
+
+    hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
+    {
+        Kind = RelayKinds.Image,
+        From = binding.TeacherName,
+        ImageId = body.Id,
+        ImageBase64 = body.DataBase64,
+    });
+
+    return Results.Ok(new { ok = true, bytes = body.DataBase64.Length });
+});
+
+app.MapPost(RelayPaths.Route(RelayPaths.TeacherImageEnd, "token"), (string token, ImageChunkRequest request) =>
+{
+    if (!sessions.TryGetTeacher(token, out var binding))
+    {
+        return Results.Unauthorized();
+    }
+
+    TouchTeacher(binding);
+
+    hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
+    {
+        Kind = RelayKinds.ImageEnd,
+        From = binding.TeacherName,
+        ImageId = request.Id,
+    });
 
     return Results.Ok(new { ok = true });
 });

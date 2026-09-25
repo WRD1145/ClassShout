@@ -103,6 +103,9 @@ internal static class Program
         var audioEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var stopReceived = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var sessionReady = new TaskCompletionSource<TeacherSession>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var imageStarted = new TaskCompletionSource<ImageStartMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var imageEnded = new TaskCompletionSource<ImageEndMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var receivedImageParts = new List<byte[]>();
 
         server.SessionOpened += (_, session) =>
         {
@@ -111,6 +114,17 @@ internal static class Program
             session.AudioChunkReceived += (_, payload) => { lock (receivedChunks) { receivedChunks.Add(payload.ToArray()); } };
             session.AudioEnded += (_, _) => audioEnded.TrySetResult();
             session.StopRequested += (_, message) => stopReceived.TrySetResult(message.Reason);
+
+            session.ImageStarted += (_, message) => imageStarted.TrySetResult(message);
+            session.ImageChunkReceived += (_, payload) =>
+            {
+                lock (receivedImageParts)
+                {
+                    receivedImageParts.Add(payload.ToArray());
+                }
+            };
+            session.ImageEnded += (_, message) => imageEnded.TrySetResult(message);
+
             sessionReady.TrySetResult(session);
         };
 
@@ -251,6 +265,59 @@ internal static class Program
 
         Check("音频字节逐片完全一致（无错位、无乱序）", identical,
             $"{totalBytes} 字节，时长 {format.DurationMsOf(totalBytes)} 毫秒");
+
+        // ---------- 4b. 图片喊话 ----------
+        //
+        // 图片走的是"先声明、再分片、最后收尾"那条路，所以这里要压三件事：
+        // 声明里的字节数对不对、分片是不是按声明的大小切、以及拼回来是不是原图。
+        // 字节刻意用不可压缩的随机数据：用全 0 的话，"拼错了"也可能看起来是对的。
+        var imageBytes = new byte[150 * 1024];
+        for (var i = 0; i < imageBytes.Length; i++)
+        {
+            imageBytes[i] = (byte)((i * 31 + 7) % 251);
+        }
+
+        await client.SendImageAsync(
+            new ImageStartMessage { Text = "看这张图", FontSize = ShoutFontSizes.Large, HoldMs = ShoutHoldDurations.OneMinute },
+            imageBytes);
+
+        var imageEnd = await imageEnded.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var imageStart = await imageStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Check("教室端收到图片声明，并带上说明文字与总字节数",
+            imageStart.Text == "看这张图" && imageStart.TotalBytes == imageBytes.Length,
+            $"说明=「{imageStart.Text}」，声明 {imageStart.TotalBytes} 字节");
+
+        Check("图片的展示参数跟着声明一起到达",
+            imageStart.FontSize == ShoutFontSizes.Large && imageStart.HoldMs == ShoutHoldDurations.OneMinute,
+            $"字号={imageStart.FontSize}，停留={imageStart.HoldMs}ms");
+
+        byte[][] imageParts;
+        lock (receivedImageParts)
+        {
+            imageParts = receivedImageParts.ToArray();
+        }
+
+        var expectedParts = (imageBytes.Length + ShoutProtocol.DefaultImageChunkSize - 1) / ShoutProtocol.DefaultImageChunkSize;
+
+        Check("图片按声明的大小切片",
+            imageParts.Length == expectedParts,
+            $"发出 {imageBytes.Length} 字节，切成 {imageParts.Length} 片（期望 {expectedParts} 片）");
+
+        var joined = new byte[imageParts.Sum(p => p.Length)];
+        var offset = 0;
+        foreach (var part in imageParts)
+        {
+            part.CopyTo(joined, offset);
+            offset += part.Length;
+        }
+
+        Check("拼回来的图片与发出的一致",
+            joined.Length == imageBytes.Length && joined.AsSpan().SequenceEqual(imageBytes),
+            $"{joined.Length} 字节" + (joined.Length == imageBytes.Length ? "，逐字节相同" : "，长度不符"));
+
+        Check("图片的收尾消息带回同一个 id", imageEnd.Id == imageStart.Id,
+            $"id={(imageEnd.Id.Length > 8 ? imageEnd.Id[..8] + "…" : imageEnd.Id)}");
 
         // ---------- 5. 停止指令 ----------
         await client.SendStopAsync("端到端测试要求停止");
@@ -788,6 +855,85 @@ internal static class Program
             string.Join("、", multiResults.Select(r => r.Classroom.Name)));
 
         await broadcaster.ResetAsync();
+
+        // ---------- 8c. 中继链路上的图片 ----------
+        //
+        // 中继那条路的分片大小和局域网不一样（服务器对单个请求体有 16 KiB 上限，
+        // base64 还要再放大三分之一），所以必须单独压一遍：
+        // 直接用局域网那个分片大小的话，每一片都会被服务器以 413 拒掉，
+        // 而表现只是"图片发不出去"，不会告诉你是分片太大。
+        var relayImage = new byte[64 * 1024];
+        for (var i = 0; i < relayImage.Length; i++)
+        {
+            relayImage[i] = (byte)((i * 17 + 3) % 253);
+        }
+
+        var relayImageStart = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var relayImageEnd = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var relayImageParts = new List<byte[]>();
+
+        classroom.ShoutReceived += envelope =>
+        {
+            switch (envelope.Kind)
+            {
+                case RelayKinds.ImageStart:
+                    relayImageStart.TrySetResult(envelope);
+                    break;
+
+                case RelayKinds.Image when envelope.ImageBase64 is not null:
+                    lock (relayImageParts)
+                    {
+                        relayImageParts.Add(Convert.FromBase64String(envelope.ImageBase64));
+                    }
+
+                    break;
+
+                case RelayKinds.ImageEnd:
+                    relayImageEnd.TrySetResult(envelope);
+                    break;
+            }
+        };
+
+        var relayImageOk = await teacher.SendImageAsync(
+            new ImageStartMessage { Text = "这是中继发来的图", FontSize = ShoutFontSizes.Medium },
+            relayImage);
+
+        var relayStart = await relayImageStart.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await relayImageEnd.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Check("中继链路的图片发送成功", relayImageOk, relayImageOk ? "已发出" : "发送失败");
+
+        Check("中继链路的图片声明带回字节数",
+            relayStart.ImageTotalBytes == relayImage.Length,
+            $"声明 {relayStart.ImageTotalBytes} 字节，实际 {relayImage.Length} 字节");
+
+        byte[][] relayParts;
+        lock (relayImageParts)
+        {
+            relayParts = relayImageParts.ToArray();
+        }
+
+        var relayExpectedParts = (relayImage.Length + ShoutProtocol.RelayImageChunkSize - 1) / ShoutProtocol.RelayImageChunkSize;
+
+        Check("中继链路的图片按服务器允许的分片大小切片",
+            relayParts.Length == relayExpectedParts,
+            $"{relayImage.Length} 字节切成 {relayParts.Length} 片（期望 {relayExpectedParts} 片，每片 {ShoutProtocol.RelayImageChunkSize / 1024} KB）");
+
+        var relayJoined = new byte[relayParts.Sum(p => p.Length)];
+        var relayOffset = 0;
+        foreach (var part in relayParts)
+        {
+            part.CopyTo(relayJoined, relayOffset);
+            relayOffset += part.Length;
+        }
+
+        Check("中继链路上拼回来的图片与发出的一致",
+            relayJoined.AsSpan().SequenceEqual(relayImage),
+            $"{relayJoined.Length} 字节");
+
+        Check("中继链路的图片带上了说明文字",
+            relayStart.Text == "这是中继发来的图",
+            relayStart.Text ?? "(没有说明)");
 
         // ---------- 9. 服务端安全加固 ----------
         //

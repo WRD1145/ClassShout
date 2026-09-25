@@ -43,6 +43,15 @@ public sealed class TeacherSession
     /// <summary>语音流结束。</summary>
     public event EventHandler<AudioEndMessage>? AudioEnded;
 
+    /// <summary>图片喊话开始（带说明文字与总字节数）。</summary>
+    public event EventHandler<ImageStartMessage>? ImageStarted;
+
+    /// <summary>收到一段图片字节。</summary>
+    public event EventHandler<ReadOnlyMemory<byte>>? ImageChunkReceived;
+
+    /// <summary>图片喊话结束。</summary>
+    public event EventHandler<ImageEndMessage>? ImageEnded;
+
     /// <summary>对方要求停止播放。</summary>
     public event EventHandler<StopMessage>? StopRequested;
 
@@ -86,9 +95,12 @@ public sealed class TeacherSession
                     case FrameKind.Audio:
                         AudioChunkReceived?.Invoke(this, frame.Value.Payload);
                         break;
+
+                    case FrameKind.Image:
+                        ImageChunkReceived?.Invoke(this, frame.Value.Payload);
+                        break;
                 }
-            }
-        }
+            }        }
         catch (OperationCanceledException)
         {
             closeReason = "连接已关闭";
@@ -152,6 +164,14 @@ public sealed class TeacherSession
 
             case AudioEndMessage end:
                 AudioEnded?.Invoke(this, end);
+                break;
+
+            case ImageStartMessage imageStart:
+                ImageStarted?.Invoke(this, imageStart);
+                break;
+
+            case ImageEndMessage imageEnd:
+                ImageEnded?.Invoke(this, imageEnd);
                 break;
 
             case StopMessage stop:

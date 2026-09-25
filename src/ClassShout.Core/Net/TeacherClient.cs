@@ -181,6 +181,57 @@ public sealed class TeacherClient : IAsyncDisposable
     public Task SendAudioEndAsync(string id, CancellationToken cancellationToken = default)
         => SendAsync(new AudioEndMessage { Id = id }, cancellationToken);
 
+    /// <summary>发送一段图片字节。图片本身走 <see cref="FrameKind.Image"/> 帧，与控制消息分开。</summary>
+    private async Task SendImageChunkAsync(ReadOnlyMemory<byte> chunk, CancellationToken cancellationToken)
+    {
+        var stream = _stream;
+        if (stream is null || chunk.IsEmpty)
+        {
+            return;
+        }
+
+        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await FrameProtocol.WriteAsync(stream, FrameKind.Image, chunk, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 发一条图片喊话：先声明（带大小与说明文字），再切成片，最后收尾。
+    ///
+    /// 分片而不是整张塞进一条 JSON：单帧上限 1 MiB，而 base64 还要再膨胀三分之一，
+    /// 一张手机照片必然超；而且教室里那台电脑可以边收边拼，
+    /// 不必等一个几十兆的 JSON 解析完才开始有反应。
+    /// </summary>
+    /// <param name="message">图片喊话的说明部分。</param>
+    /// <param name="image">图片原始字节。</param>
+    /// <param name="chunkSize">每片多少字节。默认 48 KiB。</param>
+    /// <param name="cancellationToken">取消标记。</param>
+    public async Task SendImageAsync(
+        ImageStartMessage message,
+        ReadOnlyMemory<byte> image,
+        int chunkSize = ShoutProtocol.DefaultImageChunkSize,
+        CancellationToken cancellationToken = default)
+    {
+        message.Id = string.IsNullOrEmpty(message.Id) ? Guid.NewGuid().ToString("N") : message.Id;
+        message.TotalBytes = image.Length;
+
+        await SendAsync(message, cancellationToken).ConfigureAwait(false);
+
+        for (var offset = 0; offset < image.Length; offset += chunkSize)
+        {
+            var length = Math.Min(chunkSize, image.Length - offset);
+            await SendImageChunkAsync(image.Slice(offset, length), cancellationToken).ConfigureAwait(false);
+        }
+
+        await SendAsync(new ImageEndMessage { Id = message.Id }, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>要求教室端停止当前播放/朗读。</summary>
     public Task SendStopAsync(string reason = "教师端中止", CancellationToken cancellationToken = default)
         => SendAsync(new StopMessage { Reason = reason }, cancellationToken);

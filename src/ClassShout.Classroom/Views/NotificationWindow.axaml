@@ -57,8 +57,13 @@
                      Text="{Binding TimeText}" />
         </Grid>
 
-        <!-- 字号跟喊话带过来的档位走；显式 FontSize 优先于 bodyLarge 里的默认值。
-             MaxLines 也放宽一点：选了「特大」还只给四行的话，长句子会被截掉一半。 -->
+        <!-- 图片喊话：图在上、说明在下。弹窗只占屏幕一角，所以图也要限高，
+             否则一张竖图会把卡片撑到屏幕外面去。 -->
+        <Image IsVisible="{Binding HasImage}"
+               Source="{Binding Image}"
+               Stretch="Uniform" MaxHeight="220"
+               HorizontalAlignment="Left" />
+
         <TextBlock Classes="bodyLarge" TextWrapping="Wrap"
                    MaxLines="8" TextTrimming="CharacterEllipsis"
                    FontSize="{Binding TextFontSize}"

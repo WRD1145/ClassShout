@@ -27,6 +27,18 @@ public interface IShoutTransport
     /// </summary>
     Task<bool> SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// 发一张图片（先声明、再分片、最后收尾）。
+    ///
+    /// 两条链路的分片大小不一样：局域网 48 KiB，中继 10 KiB ——
+    /// 服务器对单个请求体有 16 KiB 的上限，而 base64 会再放大三分之一。
+    /// 这件事由各自的实现决定，调用方只管把整张图交出去。
+    /// </summary>
+    Task<bool> SendImageAsync(
+        ImageStartMessage message,
+        ReadOnlyMemory<byte> image,
+        CancellationToken cancellationToken = default);
+
     Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default);
 
     Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken cancellationToken = default);
@@ -60,6 +72,12 @@ public sealed class RelayShoutTransport : IShoutTransport
             message.HoldMs,
             message.Speak,
             cancellationToken);
+
+    public Task<bool> SendImageAsync(
+        ImageStartMessage message,
+        ReadOnlyMemory<byte> image,
+        CancellationToken cancellationToken = default)
+        => _client.SendImageAsync(message, image, cancellationToken);
 
     public Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)
         => _client.SendAudioStartAsync(format, cancellationToken);
@@ -96,6 +114,13 @@ public sealed class ShoutTransportRouter : IShoutTransport
 
     public Task<bool> SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default)
         => Active?.SendTextAsync(message, cancellationToken)
+           ?? Task.FromResult(false);
+
+    public Task<bool> SendImageAsync(
+        ImageStartMessage message,
+        ReadOnlyMemory<byte> image,
+        CancellationToken cancellationToken = default)
+        => Active?.SendImageAsync(message, image, cancellationToken)
            ?? Task.FromResult(false);
 
     public Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)

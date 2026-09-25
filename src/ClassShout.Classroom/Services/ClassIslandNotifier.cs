@@ -20,6 +20,9 @@ public enum ShoutNoticeKind
 
     /// <summary>语音喊话的转写结果，内容就是识别出来的字。</summary>
     VoiceTranscript,
+
+    /// <summary>图片喊话，内容是随图的那句说明（没有说明时是一句占位）。</summary>
+    Image,
 }
 
 /// <summary>
@@ -53,6 +56,7 @@ public static class ClassIslandNotice
     {
         ShoutNoticeKind.Voice => "voice",
         ShoutNoticeKind.VoiceTranscript => "voiceTranscript",
+        ShoutNoticeKind.Image => "image",
         _ => "text",
     };
 }

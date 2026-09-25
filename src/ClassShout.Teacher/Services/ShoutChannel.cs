@@ -92,6 +92,24 @@ public sealed class ShoutChannel : IShoutTransport, IAsyncDisposable
         return true;
     }
 
+    /// <summary>发一张图片。局域网这条链路上分片可以大一些。</summary>
+    public async Task<bool> SendImageAsync(
+        ImageStartMessage message,
+        ReadOnlyMemory<byte> image,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_client.IsConnected || image.IsEmpty)
+        {
+            return false;
+        }
+
+        await _client
+            .SendImageAsync(message, image, ShoutProtocol.DefaultImageChunkSize, cancellationToken)
+            .ConfigureAwait(false);
+
+        return true;
+    }
+
     /// <summary>开始一次语音喊话。</summary>
     public async Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)
     {

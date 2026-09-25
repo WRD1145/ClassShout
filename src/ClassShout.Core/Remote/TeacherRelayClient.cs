@@ -295,6 +295,74 @@ public sealed class TeacherRelayClient : IAsyncDisposable
             ? Task.CompletedTask
             : PostAsync(Url(string.Format(RelayPaths.TeacherStop, _token)), content: null, cancellationToken);
 
+    /// <summary>
+    /// 经服务器发一张图片：先声明、再分片、最后收尾。
+    ///
+    /// 分片大小用 <see cref="ShoutProtocol.RelayImageChunkSize"/> 而不是局域网那个 48 KiB：
+    /// 服务器对单个请求体有 16 KiB 的上限，而 base64 会把体积放大三分之一 ——
+    /// 直接沿用局域网的分片大小，每一片都会被服务器以 413 拒掉，
+    /// 而表现只是"图片发不出去"，不会告诉你是分片太大。
+    /// </summary>
+    public async Task<bool> SendImageAsync(
+        ImageStartMessage message,
+        ReadOnlyMemory<byte> image,
+        CancellationToken cancellationToken = default)
+    {
+        if (_token is null || image.IsEmpty)
+        {
+            return false;
+        }
+
+        message.Id = string.IsNullOrEmpty(message.Id) ? Guid.NewGuid().ToString("N") : message.Id;
+
+        var started = await PostAsync(
+            Url(string.Format(RelayPaths.TeacherImageStart, _token)),
+            JsonContent.Create(
+                new ImageStartRequest(
+                    message.Id,
+                    image.Length,
+                    message.ContentType,
+                    message.Text,
+                    message.Width,
+                    message.Height,
+                    message.Display,
+                    message.FontSize,
+                    message.HoldMs,
+                    message.Speak),
+                options: JsonOptions),
+            cancellationToken).ConfigureAwait(false);
+
+        if (!started)
+        {
+            return false;
+        }
+
+        for (var offset = 0; offset < image.Length; offset += ShoutProtocol.RelayImageChunkSize)
+        {
+            var length = Math.Min(ShoutProtocol.RelayImageChunkSize, image.Length - offset);
+            var payload = Convert.ToBase64String(image.Span.Slice(offset, length));
+
+            var sent = await PostAsync(
+                Url(string.Format(RelayPaths.TeacherImageChunk, _token)),
+                JsonContent.Create(new ImageChunkRequest(message.Id, payload), options: JsonOptions),
+                cancellationToken).ConfigureAwait(false);
+
+            if (!sent)
+            {
+                // 中途失败就明确报错，不发 imageEnd：
+                // 教室端看到收尾消息才会去拼装，不发收尾它只是把这片缓冲丢掉，
+                // 而不是把一张残缺的图显示出来。
+                Log?.Invoke($"图片发送中断（第 {offset / ShoutProtocol.RelayImageChunkSize + 1} 片）。");
+                return false;
+            }
+        }
+
+        return await PostAsync(
+            Url(string.Format(RelayPaths.TeacherImageEnd, _token)),
+            JsonContent.Create(new ImageChunkRequest(message.Id, string.Empty), options: JsonOptions),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task FlushAudioAsync(CancellationToken cancellationToken)
     {
         byte[] payload;
