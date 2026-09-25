@@ -419,6 +419,118 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         return ok ? (true, "定时喊话已发出。") : (false, "定时喊话没能发出（当前没有可用的链路）。");
     }
 
+    // ======================== 分享链接一键绑定 ========================
+
+    /// <summary>用户粘贴进来的分享链接（或令牌）。</summary>
+    [ObservableProperty]
+    private string _shareLinkInput = string.Empty;
+
+    [ObservableProperty]
+    private string _shareError = string.Empty;
+
+    public bool HasShareError => !string.IsNullOrWhiteSpace(ShareError);
+
+    partial void OnShareErrorChanged(string value) => OnPropertyChanged(nameof(HasShareError));
+
+    /// <summary>
+    /// 用一条分享链接把自己绑定到那几个班。
+    ///
+    /// 兑现的动作发生在服务器上（把这几间授权给当前账号），教师端只是发起请求，
+    /// 然后把结果放进"已保存的教室" —— 于是老师接下来要做的还是熟悉的那一步：
+    /// 在列表里点一下。这里不直接替他切换绑定，是因为链接里可能有好几个班，
+    /// 而这节课要喊哪一间只有他知道。
+    /// </summary>
+    [RelayCommand]
+    private async Task ClaimShareAsync()
+    {
+        ShareError = string.Empty;
+
+        var input = ShareLinkInput?.Trim() ?? string.Empty;
+        if (input.Length == 0)
+        {
+            ShareError = "请把管理员给你的分享链接粘进来。";
+            return;
+        }
+
+        var token = ShareLink.TryExtractToken(input, out var serverFromLink);
+
+        if (token is null)
+        {
+            ShareError = "这看起来不是一条分享链接。完整链接形如 https://你的服务器/share/xxxx。";
+            return;
+        }
+
+        if (!IsSignedIn)
+        {
+            ShareError = "请先在上面的账号卡片里登录，再使用分享链接 —— 这样服务器才知道这几个班给了谁。";
+            return;
+        }
+
+        // 链接里带的服务器地址优先于本机配置：分享来自哪台服务器，就该去哪台兑现。
+        var server = serverFromLink ?? SavedServerUrl;
+
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            ShareError = "这条链接里没有服务器地址，请先在上面那张「中继服务器」卡片里填好地址。";
+            return;
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post, $"{server.TrimEnd('/')}{string.Format(RelayPaths.ShareClaim, token)}");
+
+            request.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, _relaySettings.AuthToken);
+
+            using var response = await _http.SendAsync(request).ConfigureAwait(true);
+            var result = await response.Content
+                .ReadFromJsonAsync<ShareClaimResponse>(RelayJsonOptions.Value)
+                .ConfigureAwait(true);
+
+            if (result is not { Ok: true })
+            {
+                ShareError = result?.Error ?? $"兑现失败（HTTP {(int)response.StatusCode}）。";
+                return;
+            }
+
+            // 服务器已经把这几个班授权给账号了；这里把它们记进"已保存的教室"，
+            // 口令为空 —— 它们靠的是管理员授权，不需要口令。
+            var added = 0;
+
+            foreach (var classroom in result.Classrooms ?? [])
+            {
+                TeacherRelaySettings.Remember(_relaySettings.RecentClassrooms, new BoundClassroom(
+                    classroom.Uuid,
+                    classroom.Name,
+                    DateTimeOffset.Now,
+                    server,
+                    Secret: null));
+
+                added++;
+            }
+
+            // 链接可能来自另一台服务器：把地址也存下来，否则接下来绑定会打到旧服务器上。
+            if (serverFromLink is not null &&
+                !string.Equals(serverFromLink, SavedServerUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                PersistServerUrl(serverFromLink);
+            }
+
+            LocalSettings.SaveTeacher(_relaySettings);
+            RefreshSavedClassrooms();
+            await RefreshAuthorizedAsync().ConfigureAwait(true);
+
+            ShareLinkInput = string.Empty;
+            AddLog($"分享链接已兑现：{result.Granted} 个班级新授权，共 {added} 个班级可用。");
+            ShowSnackbar($"已加入 {added} 个班级，在下面点一下即可绑定。");
+            RefreshAuthorizedCommand.NotifyCanExecuteChanged();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            ShareError = $"连不上服务器：{ex.Message}";
+        }
+    }
+
     // ======================== 命令 ========================
 
     [RelayCommand]

@@ -41,6 +41,12 @@ var bindingStatePath = Environment.GetEnvironmentVariable("CLASSSHOUT_BINDING_ST
 builder.Services.AddSingleton(sp => new ClassroomStore(statePath, sp.GetRequiredService<ILogger<ClassroomStore>>()));
 builder.Services.AddSingleton(sp => new UserStore(userStatePath, sp.GetRequiredService<ILogger<UserStore>>()));
 builder.Services.AddSingleton(sp => new BindingStore(bindingStatePath, sp.GetRequiredService<ILogger<BindingStore>>()));
+
+// 分享链接也要落盘：管理员上午生成、下午才发给老师，中间重启一次就全失效的话没法用。
+var shareStatePath = Environment.GetEnvironmentVariable("CLASSSHOUT_SHARE_STATE")
+    ?? Path.Combine(AppContext.BaseDirectory, "relay-shares.json");
+
+builder.Services.AddSingleton(sp => new ShareStore(shareStatePath, sp.GetRequiredService<ILogger<ShareStore>>()));
 builder.Services.AddSingleton<UserSessions>();
 builder.Services.AddSingleton<RelaySessions>();
 builder.Services.AddSingleton<MessageHub>();
@@ -115,6 +121,7 @@ if (!StatePreflight.Report(
 var store = app.Services.GetRequiredService<ClassroomStore>();
 var users = app.Services.GetRequiredService<UserStore>();
 var bindings = app.Services.GetRequiredService<BindingStore>();
+var shares = app.Services.GetRequiredService<ShareStore>();
 var userSessions = app.Services.GetRequiredService<UserSessions>();
 var sessions = app.Services.GetRequiredService<RelaySessions>();
 var hub = app.Services.GetRequiredService<MessageHub>();
@@ -1109,9 +1116,222 @@ app.MapPost(RelayPaths.ConsoleBroadcast, (
     });
 }).RequireRateLimiting("auth");
 
+// ======================== 分享链接一键绑定 ========================
+//
+// 排课之后要把"这位老师教这几个班"告诉老师，原来只有两条路：管理员在控制台逐个授权，
+// 或者把 UUID 与口令抄给他。前者要点很多下，后者要让口令在聊天软件里流传。
+// 分享链接是第三条路：管理员勾几个班、生成一条链接发给老师，老师点开就绑好了。
+//
+// 链接是**凭据**，所以兑现时必须先登录 —— 谁绑的始终有据可查，而不是匿名扩散；
+// 同时它有过期时间、也能在控制台上撤销。
+
+app.MapPost(RelayPaths.ConsoleShare, (
+    ShareClassroomRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken,
+    HttpContext context) =>
+{
+    if (!userSessions.IsAdminSession(authToken))
+    {
+        return Results.Unauthorized();
+    }
+
+    var uuids = (request.Uuids ?? []).Where(uuid => !string.IsNullOrWhiteSpace(uuid)).Distinct().ToList();
+    if (uuids.Count == 0)
+    {
+        return Results.BadRequest(new { error = "请至少选一个班级。" });
+    }
+
+    var known = uuids.Where(uuid => store.Get(uuid) is not null).ToList();
+    if (known.Count == 0)
+    {
+        return Results.BadRequest(new { error = "这些班级都不存在，请先让教室端连接一次服务器完成注册。" });
+    }
+
+    var lifetime = TimeSpan.FromHours(Math.Clamp(request.ValidHours, 1, 24 * 30));
+    var link = shares.Create(known, config.AdminUsername, lifetime);
+
+    // 地址由请求推出来：服务器自己不一定知道对外是哪个域名（可能在反向代理后面）。
+    var baseUrl = $"{context.Request.Scheme}://{context.Request.Host}";
+
+    logger.LogInformation("管理员生成了分享链接：{Count} 个班级，{Hours} 小时有效",
+        known.Count, lifetime.TotalHours);
+
+    return Results.Ok(new
+    {
+        ok = true,
+        token = link.Token,
+        url = $"{baseUrl}{string.Format(RelayPaths.SharePage, link.Token)}",
+        appUrl = $"classshout://claim?token={link.Token}&server={Uri.EscapeDataString(baseUrl)}",
+        expiresAt = link.ExpiresAt,
+        count = known.Count,
+        message = $"已生成分享链接（{known.Count} 个班级，{lifetime.TotalHours:0} 小时内有效）。",
+    });
+}).RequireRateLimiting("auth");
+
+/// <summary>分享链接的公开信息。不需要登录 —— 老师点开链接时还没登录。</summary>
+app.MapGet(RelayPaths.Route(RelayPaths.ShareInfo, "token"), (string token, HttpContext context) =>
+{
+    var link = shares.Get(token);
+    if (link is null)
+    {
+        return Results.Ok(new ShareInfoResponse(false, Error: "这条分享链接无效或已过期。请让管理员重新生成一条。"));
+    }
+
+    var baseUrl = $"{context.Request.Scheme}://{context.Request.Host}";
+    var cutoff = DateTimeOffset.UtcNow - OnlineWindow;
+
+    var classrooms = link.ClassroomUuids
+        .Select(uuid => store.Get(uuid))
+        .OfType<ClassroomRecord>()
+        .Select(record => new SharedClassroom(record.Uuid, record.Name, record.LastSeenAt >= cutoff))
+        .ToList();
+
+    return Results.Ok(new ShareInfoResponse(
+        true,
+        link.Token,
+        baseUrl,
+        link.ExpiresAt,
+        link.CreatedBy,
+        classrooms));
+});
+
+/// <summary>兑现：把这批班级授权给当前登录的账号。之后老师在"已授权教室"里点一下就绑上了。</summary>
+app.MapPost(RelayPaths.Route(RelayPaths.ShareClaim, "token"), (
+    string token,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var link = shares.Get(token);
+    if (link is null)
+    {
+        return Results.Ok(new ShareClaimResponse(false, Error: "这条分享链接无效或已过期。"));
+    }
+
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Ok(new ShareClaimResponse(false, Error: "请先在教师端登录账号，再打开这条链接。"));
+    }
+
+    var cutoff = DateTimeOffset.UtcNow - OnlineWindow;
+    var granted = 0;
+    var classrooms = new List<SharedClassroom>();
+
+    foreach (var uuid in link.ClassroomUuids)
+    {
+        var record = store.Get(uuid);
+        if (record is null)
+        {
+            // 教室被管理员删掉了：跳过它，但不让整条链接失败 ——
+            // 链接里通常有好几个班，为一个已经注销的班把整件事搞砸没有道理。
+            continue;
+        }
+
+        var (ok, alreadyExists) = bindings.Grant(profile.Id, uuid, $"{link.CreatedBy}（分享链接）");
+        if (ok && !alreadyExists)
+        {
+            granted++;
+        }
+
+        classrooms.Add(new SharedClassroom(record.Uuid, record.Name, record.LastSeenAt >= cutoff));
+    }
+
+    shares.MarkClaimed(link, profile.Id);
+
+    logger.LogInformation("分享链接被兑现：{User} 绑定 {Count} 个班级（新增 {Granted}）",
+        profile.DisplayName, classrooms.Count, granted);
+
+    return Results.Ok(new ShareClaimResponse(
+        true,
+        granted,
+        classrooms,
+        $"已把 {classrooms.Count} 个班级加到你的账号下。"));
+}).RequireRateLimiting("auth");
+
+/// <summary>
+/// 分享链接的落地页。
+///
+/// 直接用浏览器打开时看到的那一页：说明这条链接会给到什么、并给一个"用教师端打开"的按钮。
+/// 写成服务端拼的静态页而不是塞进控制台的 SPA：点链接的老师没有登录态，
+/// 也不该被拉到管理界面上去。
+/// </summary>
+app.MapGet(RelayPaths.Route(RelayPaths.SharePage, "token"), (string token, HttpContext context) =>
+{
+    var link = shares.Get(token);
+    var baseUrl = $"{context.Request.Scheme}://{context.Request.Host}";
+
+    var body = link is null
+        ? "<p class=\"bad\">这条分享链接无效或已过期。请让管理员重新生成一条。</p>"
+        : BuildSharePageBody(link, baseUrl, store.ListForConsole(), OnlineWindow);
+
+    var html = $$"""
+        <!doctype html>
+        <html lang="zh-CN">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>ClassShout 班级分享</title>
+          <style>
+            body { font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+                   margin: 0; padding: 32px 20px; background: #fbf8fd; color: #1b1b1f; }
+            .card { max-width: 560px; margin: 0 auto; background: #fff; border-radius: 16px;
+                    padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+            h1 { font-size: 20px; margin: 0 0 12px; }
+            ul { padding-left: 20px; }
+            .bad { color: #b3261e; }
+            .muted { color: #49454f; font-size: 14px; }
+            .btn { display: block; text-align: center; margin: 20px 0 8px; padding: 14px;
+                   background: #6750a4; color: #fff; border-radius: 9999px;
+                   text-decoration: none; font-weight: 600; }
+            code { background: #f0edf1; padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>ClassShout 班级分享</h1>
+            {{body}}
+          </div>
+        </body>
+        </html>
+        """;
+
+    return Results.Content(html, "text/html; charset=utf-8");
+});
+
+/// <summary>拼落地页正文。</summary>
+static string BuildSharePageBody(
+    ShareLinkRecord link,
+    string baseUrl,
+    IReadOnlyList<ClassroomRecord> registered,
+    TimeSpan onlineWindow)
+{
+    var cutoff = DateTimeOffset.UtcNow - onlineWindow;
+
+    var items = link.ClassroomUuids
+        .Select(uuid => registered.FirstOrDefault(record =>
+            string.Equals(record.Uuid, uuid, StringComparison.OrdinalIgnoreCase)))
+        .OfType<ClassroomRecord>()
+        .Select(record =>
+            $"<li>{System.Net.WebUtility.HtmlEncode(record.Name)}"
+            + (record.LastSeenAt >= cutoff ? " <span class=\"muted\">（在线）</span>" : string.Empty)
+            + "</li>")
+        .ToList();
+
+    var appUrl = $"classshout://claim?token={link.Token}&server={Uri.EscapeDataString(baseUrl)}";
+
+    return $"""
+        <p class="muted">由 <strong>{System.Net.WebUtility.HtmlEncode(link.CreatedBy)}</strong> 分享，
+           有效期至 {link.ExpiresAt.ToLocalTime():yyyy-MM-dd HH:mm}。</p>
+        <p>打开这条链接后，下列班级会加到你账号的「管理员分配的班级」里，点一下就绑定：</p>
+        <ul>{(items.Count == 0 ? "<li class=\"muted\">（这些班级已被移除）</li>" : string.Concat(items))}</ul>
+        <a class="btn" href="{appUrl}">用 ClassShout 教师端打开</a>
+        <p class="muted">没装教师端？在教师端里打开「设备」页，把这条链接粘进「用分享链接绑定」也可以。
+           链接需要在教师端里登录账号后使用 —— 这样"谁绑了这几个班"才有据可查。</p>
+        <p class="muted">令牌：<code>{link.Token}</code></p>
+        """;
+}
+
 /// <summary>停用 / 启用账号。</summary>
-app.MapPost("/api/console/users/{id}/disabled", (
-    string id,
+app.MapPost("/api/console/users/{id}/disabled", (    string id,
     ConsoleFlagRequest request,
     [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
 {

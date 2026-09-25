@@ -176,10 +176,11 @@ async function loadClassrooms() {
 
   host.innerHTML =
     '<table><thead><tr>' +
-    '<th>教室名</th><th>UUID</th><th>在线教师</th><th>注册时间</th><th>最后在线</th><th></th>' +
+    '<th></th><th>教室名</th><th>UUID</th><th>在线教师</th><th>注册时间</th><th>最后在线</th><th></th>' +
     '</tr></thead><tbody>' +
     list.map(c =>
       '<tr>' +
+      '<td><input type="checkbox" class="share-pick" value="' + escapeAttr(c.uuid) + '"></td>' +
       '<td>' + escapeHtml(c.name) + '</td>' +
       '<td class="mono">' + escapeHtml(c.uuid) + '</td>' +
       '<td>' + (c.onlineTeachers > 0
@@ -511,6 +512,60 @@ async function submitShout() {
   }
 }
 
+/* ---------- 分享班级连接 ---------- */
+
+async function shareClassrooms() {
+  const picked = Array.prototype.slice
+    .call(document.querySelectorAll('.share-pick:checked'))
+    .map(function (box) { return box.value; });
+
+  // 一个都没勾就分享全部：开学时"把这些班都给这位老师"是最常见的用法，
+  // 而现在正好有一屋子班要选，让他逐个勾是没必要的摩擦。
+  const uuids = picked.length > 0
+    ? picked
+    : Array.prototype.slice.call(document.querySelectorAll('.share-pick')).map(function (box) { return box.value; });
+
+  if (uuids.length === 0) {
+    toast('还没有教室可以分享。');
+    return;
+  }
+
+  const result = await apiJson('/api/console/share', {
+    method: 'POST',
+    body: JSON.stringify({ uuids: uuids })
+  });
+
+  if (!result || !result.ok) {
+    toast((result && result.error) || '生成分享链接失败。');
+    return;
+  }
+
+  // 链接是凭据，所以给一个能直接复制的输入框，而不是只在提示条上闪一下。
+  const link = result.url;
+  document.getElementById('shareCount').textContent = result.count;
+  document.getElementById('shareLink').value = link;
+  document.getElementById('shareExpires').textContent = fmtTime(result.expiresAt);
+  setBanner('shareError', '');
+  showOverlay('shareOverlay');
+}
+
+function copyShareLink() {
+  const input = document.getElementById('shareLink');
+
+  if (!input) return;
+
+  input.select();
+
+  try {
+    navigator.clipboard.writeText(input.value);
+    toast('链接已复制，发给老师即可。');
+  } catch (err) {
+    // 复制失败（旧浏览器、没有权限）不算错误：输入框已经全选，
+    // 手动 Ctrl+C 一样能用。
+    toast('请按 Ctrl+C 复制选中的链接。');
+  }
+}
+
 /* ---------- 集体喊话 ---------- */
 
 function openBroadcast() {
@@ -652,8 +707,12 @@ const actions = {
   'close-shout': () => hideOverlay('shoutOverlay'),
   'submit-shout': () => submitShout(),
 
+  'share-classrooms': () => shareClassrooms(),
+
   'open-broadcast': () => openBroadcast(),
   'close-broadcast': () => hideOverlay('broadcastOverlay'),
+  'close-share': () => hideOverlay('shareOverlay'),
+  'copy-share': () => copyShareLink(),
   'submit-broadcast': () => submitBroadcast(),
 
   'close-login-help': () => hideOverlay('loginHelpOverlay'),

@@ -238,3 +238,10 @@ textarea {
   resize: vertical;
 }
 textarea:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
+/* 次要说明文字：卡片里那些'怎么说都行、但不看会踩坑'的一句话 */
+.muted {
+  color: var(--muted, #49454f);
+  font-size: 13px;
+  margin: 6px 0 10px;
+}
+

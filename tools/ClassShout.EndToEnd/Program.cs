@@ -909,7 +909,7 @@ internal static class Program
             Check("集体喊话也送到了第二间在线教室", secondGot,
                 secondGot ? $"来源={broadcastSecond.Task.Result}" : "6 秒内没收到");
 
-            // 空内容要被挡住：一条空的集体喊话会让每间教室都收到一次没声音的"提醒"
+            // 空的集体喊话要被挡住：一条空的集体喊话会让每间教室都收到一次没声音的"提醒"
             var emptyResponse = await adminHttp.PostAsJsonAsync(
                 $"{root}{RelayPaths.ConsoleBroadcast}",
                 new BroadcastShoutRequest("   "),
@@ -918,6 +918,99 @@ internal static class Program
             Check("空的集体喊话被拒",
                 !emptyResponse.IsSuccessStatusCode,
                 $"HTTP {(int)emptyResponse.StatusCode}");
+
+            // ---------- 8d. 分享链接一键绑定 ----------
+            //
+            // 这条路上最要紧的两件事：链接是凭据（所以兑现必须登录），
+            // 以及兑现之后老师确实拿到了这几个班（而不是"接口返回成功但什么都没发生"）。
+            var shareUuids = new List<string> { uuid, otherSettings.Uuid };
+
+            var shareCreate = await adminHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.ConsoleShare}",
+                new ShareClassroomRequest(shareUuids),
+                JsonOptions);
+
+            var shareBody = await shareCreate.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+            var shareToken = shareBody.TryGetProperty("token", out var tokenElement)
+                ? tokenElement.GetString()
+                : null;
+
+            Check("管理员能生成分享链接",
+                shareCreate.IsSuccessStatusCode && !string.IsNullOrEmpty(shareToken),
+                Trim(shareBody.ToString()));
+
+            Check("分享链接里带上了班级数量",
+                shareBody.TryGetProperty("count", out var countElement) && countElement.GetInt32() == 2,
+                $"count={(shareBody.TryGetProperty("count", out var c2) ? c2.GetInt32() : -1)}");
+
+            // 公开信息：老师点开链接时还没登录，这一步必须不需要凭据
+            var shareInfo = await http.GetFromJsonAsync<ShareInfoResponse>(
+                $"{root}{string.Format(RelayPaths.ShareInfo, shareToken)}", JsonOptions);
+
+            Check("分享链接的公开信息不需要登录就能看",
+                shareInfo is { Ok: true } && shareInfo.Classrooms?.Count == 2,
+                shareInfo is null ? "没有响应" : $"{shareInfo.Classrooms?.Count ?? 0} 个班级");
+
+            Check("公开信息里没有口令之类的凭据",
+                shareInfo?.Classrooms?.All(item => !string.IsNullOrWhiteSpace(item.Name)) == true,
+                string.Join("、", shareInfo?.Classrooms?.Select(item => item.Name) ?? []));
+
+            // 未登录兑现要被明确拒绝：链接是凭据，但"谁绑的"必须有据可查
+            var anonymousClaim = await http.PostAsync(
+                $"{root}{string.Format(RelayPaths.ShareClaim, shareToken)}", content: null);
+
+            var anonymousBody = await anonymousClaim.Content.ReadFromJsonAsync<ShareClaimResponse>(JsonOptions);
+
+            Check("未登录时兑现分享链接被拒，并告诉老师该先做什么",
+                anonymousBody is { Ok: false } && anonymousBody.Error?.Contains("登录") == true,
+                anonymousBody?.Error ?? "居然通过了");
+
+            // 用之前那个已登录的教师账号兑现
+            var claimRequest = new HttpRequestMessage(
+                HttpMethod.Post, $"{root}{string.Format(RelayPaths.ShareClaim, shareToken)}");
+
+            claimRequest.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, teacherSettings.AuthToken);
+
+            var claimResponse = await http.SendAsync(claimRequest);
+            var claimBody = await claimResponse.Content.ReadFromJsonAsync<ShareClaimResponse>(JsonOptions);
+
+            Check("登录后兑现分享链接成功",
+                claimBody is { Ok: true } && claimBody.Classrooms?.Count == 2,
+                claimBody?.Error ?? $"授权了 {claimBody?.Classrooms?.Count ?? 0} 个班级");
+
+            Check("兑现时会报告新增了几个班级",
+                claimBody?.Granted >= 0,
+                $"新增 {claimBody?.Granted ?? -1} 个");
+
+            // 关键一条：兑现之后这些班要真的出现在这个账号的"已授权教室"里，
+            // 否则老师那边看到的还是空列表 —— 接口返回成功而什么都没发生。
+            //
+            // 这个接口要教师令牌，所以不能拿默认的 http 直接请求：
+            // 401 会让 GetFromJsonAsync 抛异常，而那看起来像"测试崩了"而不是"授权没生效"。
+            using var authorizedRequest = new HttpRequestMessage(
+                HttpMethod.Get, $"{root}{RelayPaths.TeacherAuthorized}");
+
+            authorizedRequest.Headers.TryAddWithoutValidation(
+                RelayPaths.AuthTokenHeader, teacherSettings.AuthToken);
+
+            using var authorizedResponse = await http.SendAsync(authorizedRequest);
+
+            var authorizedAfterClaim = await authorizedResponse.Content
+                .ReadFromJsonAsync<List<AuthorizedClassroom>>(JsonOptions);
+
+            Check("兑现之后这些班级出现在账号的授权列表里",
+                authorizedAfterClaim?.Count >= 2,
+                $"授权列表里有 {authorizedAfterClaim?.Count ?? 0} 个班级（HTTP {(int)authorizedResponse.StatusCode}）");
+
+            // 无效令牌
+            var bogusClaim = await http.PostAsync(
+                $"{root}{string.Format(RelayPaths.ShareClaim, "0123456789abcdef0123456789abcdef")}", content: null);
+
+            var bogusBody = await bogusClaim.Content.ReadFromJsonAsync<ShareClaimResponse>(JsonOptions);
+
+            Check("无效的分享令牌被拒",
+                bogusBody is { Ok: false },
+                bogusBody?.Error ?? "居然通过了");
         }
 
         // ---------- 8c. 中继链路上的图片 ----------

@@ -56,6 +56,18 @@ public static class RelayPaths
     /// <summary>管理控制台：向所有在线教室集体喊话。</summary>
     public const string ConsoleBroadcast = "/api/console/broadcast";
 
+    /// <summary>管理控制台：把一批班级做成一条分享链接。</summary>
+    public const string ConsoleShare = "/api/console/share";
+
+    /// <summary>分享链接的公开信息（不需要登录）。</summary>
+    public const string ShareInfo = "/api/share/{0}";
+
+    /// <summary>用分享链接兑现绑定（需要登录）。</summary>
+    public const string ShareClaim = "/api/share/{0}/claim";
+
+    /// <summary>分享链接的落地页（给浏览器看的）。</summary>
+    public const string SharePage = "/share/{0}";
+
     /// <summary>携带教室/教师会话令牌的请求头名。</summary>
     /// <remarks>
     /// 令牌走请求头而不是查询串：查询串会进访问日志，口令这类东西不该留在日志里。
@@ -179,6 +191,47 @@ public sealed record BroadcastShoutRequest(
     string? FontSize = null,
     int HoldMs = ShoutHoldDurations.Unspecified,
     bool Speak = true);
+
+// ======================== 分享链接一键绑定 ========================
+
+/// <summary>管理员把哪些班级做成一条分享链接。</summary>
+/// <param name="Uuids">要分享的教室 UUID。可以是多间。</param>
+/// <param name="ValidHours">有效期（小时）。默认 7 天。</param>
+public sealed record ShareClassroomRequest(List<string> Uuids, int ValidHours = 168);
+
+/// <summary>分享链接的公开信息。落地页与教师端都靠它显示"这条链接会给到什么"。</summary>
+/// <param name="Ok">链接是否有效。</param>
+/// <param name="Token">令牌。</param>
+/// <param name="ServerUrl">服务器地址（教师端据此知道自己该连哪台）。</param>
+/// <param name="ExpiresAt">过期时间。</param>
+/// <param name="CreatedBy">谁分享的。</param>
+/// <param name="Classrooms">这批班级。</param>
+/// <param name="Error">无效原因。</param>
+public sealed record ShareInfoResponse(
+    bool Ok,
+    string? Token = null,
+    string? ServerUrl = null,
+    DateTimeOffset? ExpiresAt = null,
+    string? CreatedBy = null,
+    List<SharedClassroom>? Classrooms = null,
+    string? Error = null);
+
+/// <summary>分享链接里的一个班级。</summary>
+/// <param name="Uuid">教室 UUID。</param>
+/// <param name="Name">教室名。</param>
+/// <param name="Online">当前是否在线。</param>
+public sealed record SharedClassroom(string Uuid, string Name, bool Online);
+
+/// <summary>兑现分享链接的结果。</summary>
+/// <param name="Ok">是否成功。</param>
+/// <param name="Granted">这次新授权了几间（已在授权列表里的不重复计）。</param>
+/// <param name="Classrooms">这批班级（含已授权的）。</param>
+/// <param name="Error">失败原因。</param>
+public sealed record ShareClaimResponse(
+    bool Ok,
+    int Granted = 0,
+    List<SharedClassroom>? Classrooms = null,
+    string? Error = null);
 
 /// <summary>
 /// 图片喊话的声明。之后跟着若干 <see cref="ImageChunkRequest"/>，由 image/end 收尾。

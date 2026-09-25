@@ -70,7 +70,10 @@
         <h2>已注册教室</h2>
         <div class="row-actions">
           <button class="tonal small" data-action="open-broadcast">集体喊话（所有在线教室）</button>
+          <button class="outlined small" data-action="share-classrooms">分享选中的班级</button>
         </div>
+        <p class="muted">勾选左边的方框可以选择几个班级；一个都不勾就分享全部。
+           分享出去的是一条链接，老师点开就能把这几班加到自己的账号下。</p>
         <div id="classroomList"></div>
       </div>
     </section>
@@ -190,6 +193,24 @@
     <div class="actions">
       <button class="outlined" data-action="close-shout">取消</button>
       <button class="primary" data-action="submit-shout">发送</button>
+    </div>
+  </div>
+</div>
+
+<!-- 分享班级连接 -->
+<div id="shareOverlay" class="overlay hidden">
+  <div class="dialog">
+    <h2>分享班级连接</h2>
+    <p>把这条链接发给老师：他点开之后，<strong><span id="shareCount"></span> 个班级</strong>会加到他账号的
+       「管理员分配的班级」里，点一下就绑定了。链接 <span id="shareExpires"></span> 过期。</p>
+    <div id="shareError" class="hidden"></div>
+    <label for="shareLink">分享链接</label>
+    <input id="shareLink" type="text" readonly>
+    <p class="muted">链接本身就是凭据，别发到公开的地方。老师需要在教师端登录账号后才能使用 ——
+       这样"谁绑了这几个班"才有据可查。</p>
+    <div class="actions">
+      <button class="outlined" data-action="close-share">关闭</button>
+      <button class="primary" data-action="copy-share">复制链接</button>
     </div>
   </div>
 </div>

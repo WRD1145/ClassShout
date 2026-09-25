@@ -824,6 +824,32 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!-- ==================== 分享链接一键绑定 ==================== -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="cardTitle" Text="用分享链接绑定" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="管理员给你一条链接（例如 https://你的服务器/share/xxxx），粘到下面点「加入我的账号」：这几个班级会加到「管理员分配的班级」里，之后点一下就能绑定，不必再抄 UUID 与口令。" />
+
+                <TextBox Classes="outlined dense"
+                         Watermark="粘贴分享链接"
+                         Text="{Binding ShareLinkInput}" />
+
+                <Button Classes="tonal block" Content="加入我的账号"
+                        Command="{Binding ClaimShareCommand}" />
+
+                <Border IsVisible="{Binding HasShareError}"
+                        Background="{DynamicResource Md3.ErrorContainer}"
+                        CornerRadius="10" Padding="10,8">
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnErrorContainer}"
+                             Text="{Binding ShareError}" />
+                </Border>
+              </StackPanel>
+            </md3:Md3Card>
+
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="10">
                 <Grid ColumnDefinitions="*,Auto">
