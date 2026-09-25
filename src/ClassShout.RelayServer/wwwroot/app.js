@@ -511,6 +511,43 @@ async function submitShout() {
   }
 }
 
+/* ---------- 集体喊话 ---------- */
+
+function openBroadcast() {
+  const input = document.getElementById('broadcastText');
+  if (input) input.value = '';
+
+  setBanner('broadcastError', '');
+  showOverlay('broadcastOverlay');
+  if (input) input.focus();
+}
+
+async function submitBroadcast() {
+  const text = fieldValue('broadcastText').trim();
+
+  if (!text) {
+    setBanner('broadcastError', '请填写要朗读的内容。');
+    return;
+  }
+
+  const result = await apiJson('/api/console/broadcast', {
+    method: 'POST',
+    body: JSON.stringify({ text: text })
+  });
+
+  if (result && result.ok) {
+    hideOverlay('broadcastOverlay');
+
+    // 一间都没有时也要说清楚：否则管理员会以为"发出去了"，
+    // 而教室里其实什么都没发生。
+    toast(result.count > 0
+      ? result.message
+      : '当前没有在线教室，没有发送。');
+  } else {
+    setBanner('broadcastError', (result && result.error) || '发送失败。');
+  }
+}
+
 /* ---------- 重置口令对话框 ---------- */
 
 let resetTarget = null;
@@ -614,6 +651,10 @@ const actions = {
   shout: (el) => openShout(el.dataset.uuid, el.dataset.name),
   'close-shout': () => hideOverlay('shoutOverlay'),
   'submit-shout': () => submitShout(),
+
+  'open-broadcast': () => openBroadcast(),
+  'close-broadcast': () => hideOverlay('broadcastOverlay'),
+  'submit-broadcast': () => submitBroadcast(),
 
   'close-login-help': () => hideOverlay('loginHelpOverlay'),
 

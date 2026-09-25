@@ -145,6 +145,15 @@ catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
 var pollTimeout = TimeSpan.FromSeconds(25);
 
 /// <summary>
+/// 多久之内有过活动就算"这间教室还连着"。
+///
+/// 取 90 秒是因为教室端的长轮询一轮最多等 25 秒，加上网络与重连的余量，
+/// 三次都还没回来才判离线 —— 判早了会把正在上课的教室漏掉，
+/// 而"集体喊话少发一间"是那种当场就能被发现的尴尬。
+/// </summary>
+var OnlineWindow = TimeSpan.FromSeconds(90);
+
+/// <summary>
 /// 单个音频分片的体积上限。正常一批是 100 毫秒，约 3200 字节；
 /// 给到 16 KB 已是很宽的余量，同时把"持令牌者用大包撑爆内存"这条路口封死。
 /// </summary>
@@ -1034,6 +1043,70 @@ app.MapPost("/api/console/shout", (
     // 收到一条 TextShout 也不会做任何事，多发一份只是噪音。
     logger.LogInformation("管理员对教室 {Name}（{Uuid}）喊话：{Text}", classroom.Name, classroom.Uuid, request.Text.Trim());
     return Results.Ok(new { ok = true, message = $"已向「{classroom.Name}」喊话。" });
+}).RequireRateLimiting("auth");
+
+/// <summary>
+/// 集体喊话：一次发给所有**在线**教室。
+///
+/// 判"在线"用的是教室记录上的最近活动时间，而不是另立一张在线表：
+/// 教室端一直在长轮询（一轮约半分钟），而每次轮询服务器都会 Touch 一下记录 ——
+/// 所以"最近一分钟内有过动静"就是"还连着"的准确代理，不需要额外的心跳协议。
+///
+/// 离线教室刻意**不发**：消息队列有历史上限（约几分钟的内容），
+/// 发给一间已经关机的教室，它下次开机时可能收到一条几小时前的"临时通知" ——
+/// 那种迟到比没收到更糟。
+/// </summary>
+app.MapPost(RelayPaths.ConsoleBroadcast, (
+    BroadcastShoutRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    if (!userSessions.IsAdminSession(authToken))
+    {
+        return Results.Unauthorized();
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Text))
+    {
+        return Results.BadRequest(new { error = "喊话内容不能为空。" });
+    }
+
+    var text = request.Text.Trim();
+    var cutoff = DateTimeOffset.UtcNow - OnlineWindow;
+    var online = store.ListForConsole().Where(record => record.LastSeenAt >= cutoff).ToList();
+
+    if (online.Count == 0)
+    {
+        return Results.Ok(new { ok = true, count = 0, message = "当前没有在线教室，没有发送。" });
+    }
+
+    var from = $"{config.AdminUsername}（控制台）";
+
+    foreach (var classroom in online)
+    {
+        hub.Publish(MessageHub.ClassroomKey(classroom.Uuid), new RelayEnvelope
+        {
+            Kind = RelayKinds.TextShout,
+            From = from,
+            Text = text,
+            Rate = request.Rate,
+            Volume = request.Volume,
+            Interrupt = request.Interrupt,
+            Display = request.Display,
+            FontSize = request.FontSize,
+            HoldMs = request.HoldMs,
+            Speak = request.Speak,
+        });
+    }
+
+    logger.LogInformation("管理员集体喊话：{Count} 间在线教室，内容 {Text}", online.Count, text);
+
+    return Results.Ok(new
+    {
+        ok = true,
+        count = online.Count,
+        names = online.Select(record => record.Name).ToList(),
+        message = $"已向 {online.Count} 间在线教室喊话。",
+    });
 }).RequireRateLimiting("auth");
 
 /// <summary>停用 / 启用账号。</summary>

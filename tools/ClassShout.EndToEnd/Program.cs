@@ -859,6 +859,67 @@ internal static class Program
 
         await broadcaster.ResetAsync();
 
+        // ---------- 8c. 控制台集体喊话 ----------
+        //
+        // "所有在线教室"这个概念得真的压一遍：判在线的依据是教室记录上的最近活动时间，
+        // 而两间教室此刻都在长轮询 —— 少发一间是那种当场就会被发现的尴尬。
+        if (!string.IsNullOrEmpty(adminToken))
+        {
+            using var adminHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            adminHttp.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, adminToken);
+
+            var broadcastText = $"集体喊话测试 {Guid.NewGuid():N}"[..22];
+
+            var broadcastFirst = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var broadcastSecond = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == broadcastText)
+                {
+                    broadcastFirst.TrySetResult(envelope.From ?? string.Empty);
+                }
+            };
+
+            otherClassroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == broadcastText)
+                {
+                    broadcastSecond.TrySetResult(envelope.From ?? string.Empty);
+                }
+            };
+
+            var broadcastResponse = await adminHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.ConsoleBroadcast}",
+                new BroadcastShoutRequest(broadcastText),
+                JsonOptions);
+
+            var broadcastBody = await broadcastResponse.Content.ReadAsStringAsync();
+
+            Check("管理员可以发起集体喊话",
+                broadcastResponse.IsSuccessStatusCode && broadcastBody.Contains("\"count\":2"),
+                Trim(broadcastBody));
+
+            var firstGot = await Task.WhenAny(broadcastFirst.Task, Task.Delay(6000)) == broadcastFirst.Task;
+            var secondGot = await Task.WhenAny(broadcastSecond.Task, Task.Delay(6000)) == broadcastSecond.Task;
+
+            Check("集体喊话送到了第一间在线教室", firstGot,
+                firstGot ? $"来源={broadcastFirst.Task.Result}" : "6 秒内没收到");
+
+            Check("集体喊话也送到了第二间在线教室", secondGot,
+                secondGot ? $"来源={broadcastSecond.Task.Result}" : "6 秒内没收到");
+
+            // 空内容要被挡住：一条空的集体喊话会让每间教室都收到一次没声音的"提醒"
+            var emptyResponse = await adminHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.ConsoleBroadcast}",
+                new BroadcastShoutRequest("   "),
+                JsonOptions);
+
+            Check("空的集体喊话被拒",
+                !emptyResponse.IsSuccessStatusCode,
+                $"HTTP {(int)emptyResponse.StatusCode}");
+        }
+
         // ---------- 8c. 中继链路上的图片 ----------
         //
         // 中继那条路的分片大小和局域网不一样（服务器对单个请求体有 16 KiB 上限，

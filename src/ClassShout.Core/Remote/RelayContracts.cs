@@ -53,6 +53,9 @@ public static class RelayPaths
     /// <summary>管理控制台：班级授权。</summary>
     public const string ConsoleBindings = "/api/console/bindings";
 
+    /// <summary>管理控制台：向所有在线教室集体喊话。</summary>
+    public const string ConsoleBroadcast = "/api/console/broadcast";
+
     /// <summary>携带教室/教师会话令牌的请求头名。</summary>
     /// <remarks>
     /// 令牌走请求头而不是查询串：查询串会进访问日志，口令这类东西不该留在日志里。
@@ -152,6 +155,30 @@ public sealed record TextShoutRequest(
     bool Speak = true);
 
 public sealed record AudioStartRequest(int SampleRate, int Channels, int BitsPerSample);
+
+/// <summary>
+/// 管理控制台向**所有在线教室**集体喊话。
+///
+/// 它和单间喊话的区别只在"发给谁"：内容是同一份，服务器照着已注册教室的
+/// 最近活动时间挑出在线的那些，逐个投进去。
+/// </summary>
+/// <param name="Text">喊话内容。</param>
+/// <param name="Rate">TTS 语速。</param>
+/// <param name="Volume">TTS 音量。</param>
+/// <param name="Interrupt">是否打断当前朗读。</param>
+/// <param name="Display">展示方式，取值见 <see cref="ShoutDisplayModes"/>。</param>
+/// <param name="FontSize">字号档位，取值见 <see cref="ShoutFontSizes"/>。</param>
+/// <param name="HoldMs">停留时长（毫秒）。</param>
+/// <param name="Speak">是否朗读。</param>
+public sealed record BroadcastShoutRequest(
+    string Text,
+    int Rate = 1,
+    int Volume = 100,
+    bool Interrupt = true,
+    string? Display = null,
+    string? FontSize = null,
+    int HoldMs = ShoutHoldDurations.Unspecified,
+    bool Speak = true);
 
 /// <summary>
 /// 图片喊话的声明。之后跟着若干 <see cref="ImageChunkRequest"/>，由 image/end 收尾。

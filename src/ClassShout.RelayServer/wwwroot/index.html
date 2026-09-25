@@ -68,6 +68,9 @@
     <section id="tab-classrooms" class="hidden">
       <div class="card">
         <h2>已注册教室</h2>
+        <div class="row-actions">
+          <button class="tonal small" data-action="open-broadcast">集体喊话（所有在线教室）</button>
+        </div>
         <div id="classroomList"></div>
       </div>
     </section>
@@ -187,6 +190,22 @@
     <div class="actions">
       <button class="outlined" data-action="close-shout">取消</button>
       <button class="primary" data-action="submit-shout">发送</button>
+    </div>
+  </div>
+</div>
+
+<!-- 集体喊话对话框 -->
+<div id="broadcastOverlay" class="overlay hidden">
+  <div class="dialog">
+    <h2>集体喊话</h2>
+    <p>把这句话发给**所有在线教室**（正在连着服务器的那些），由各教室电脑朗读出来。
+       离线的教室不会收到 —— 它们下次上线时收到一条几小时前的临时通知，比没收到更糟。</p>
+    <div id="broadcastError" class="hidden"></div>
+    <label for="broadcastText">要朗读的内容</label>
+    <input id="broadcastText" type="text" autocomplete="off" placeholder="例如 请各班打开广播，收听通知">
+    <div class="actions">
+      <button class="outlined" data-action="close-broadcast">取消</button>
+      <button class="primary" data-action="submit-broadcast">发给所有在线教室</button>
     </div>
   </div>
 </div>
