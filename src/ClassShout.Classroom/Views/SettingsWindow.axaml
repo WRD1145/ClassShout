@@ -77,10 +77,55 @@
                          Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                          Text="{Binding SettingsLockError}" />
             </StackPanel>
+
+            <!-- 分项保护：哪几项要单独解锁。
+                 整张「设置口令」卡片刻意**不参与锁定** —— 否则锁上之后就再也解不开了。 -->
+            <StackPanel Spacing="8" IsVisible="{Binding SettingsLockEnabled}">
+              <TextBlock Classes="bodyMedium" Text="这几项要单独输 PIN 才能改" />
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="勾中的项目在下面会显示为灰色。适合「别的都能改，但密钥、教室身份、退出不许随手动」这种用法；一项都不勾则只拦「进入设置」这一步。" />
+
+              <ItemsControl ItemsSource="{Binding ProtectedOptions}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="svc:ProtectedAreaOption">
+                    <CheckBox Margin="0,0,0,2" IsChecked="{Binding IsProtected}">
+                      <TextBlock Classes="bodyMedium" Text="{Binding Label}" />
+                    </CheckBox>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="bodyMedium" Text="退出程序也需要 PIN" />
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="启用后，托盘菜单里的「退出」会先要求输入 PIN" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                              IsChecked="{Binding ProtectExit}" />
+              </Grid>
+            </StackPanel>
+
+            <!-- 解锁入口：只在确实有东西锁着时出现 -->
+            <StackPanel Spacing="6" IsVisible="{Binding HasLockedAreas}">
+              <TextBlock Classes="bodyMedium" Text="有项目正被锁定" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBox Classes="outlined dense" PasswordChar="●"
+                         Watermark="输入 PIN 解锁这些项目"
+                         Text="{Binding UnlockPin}" />
+                <Button Grid.Column="1" Classes="tonal" Content="解锁"
+                        Command="{Binding UnlockProtectedCommand}" />
+              </Grid>
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="{Binding UnlockError}" />
+            </StackPanel>
           </StackPanel>
         </md3:Md3Card>
         <md3:Md3Card Classes="outlined">
-          <StackPanel Spacing="10">
+          <StackPanel Spacing="10" IsEnabled="{Binding !IsClassroomInfoLocked}">
             <TextBlock Classes="cardTitle" Text="教室信息" />
 
             <TextBlock Classes="bodySmall" TextWrapping="Wrap"
@@ -98,7 +143,7 @@
         </md3:Md3Card>
 
         <md3:Md3Card Classes="outlined">
-          <StackPanel Spacing="18">
+          <StackPanel Spacing="18" IsEnabled="{Binding !IsSpeechLocked}">
             <TextBlock Classes="cardTitle" Text="朗读设置" />
 
             <StackPanel Spacing="6">
@@ -189,7 +234,7 @@
           教室里那块屏幕才能把老师说的话摆成字幕。
         -->
         <md3:Md3Card Classes="outlined">
-          <StackPanel Spacing="10">
+          <StackPanel Spacing="10" IsEnabled="{Binding !IsSttLocked}">
             <Grid ColumnDefinitions="*,Auto">
               <TextBlock Classes="cardTitle" Text="语音转文字" Margin="0" />
               <TextBlock Grid.Column="1" Classes="bodySmall" VerticalAlignment="Center"
@@ -249,7 +294,7 @@
 
         <!-- ==================== 跨局域网（中继服务器） ==================== -->
         <md3:Md3Card Classes="outlined">
-          <StackPanel Spacing="12">
+          <StackPanel Spacing="12" IsEnabled="{Binding !IsRelayLocked}">
             <Grid ColumnDefinitions="*,Auto">
               <TextBlock Classes="cardTitle" Text="跨局域网喊话" Margin="0" />
               <Border Grid.Column="1" CornerRadius="9999" Padding="9,3"
@@ -342,7 +387,7 @@
 
         <!-- ==================== 喊话默认怎么显示 ==================== -->
         <md3:Md3Card Classes="outlined">
-          <StackPanel Spacing="14">
+          <StackPanel Spacing="14" IsEnabled="{Binding !IsDisplayLocked}">
             <TextBlock Classes="cardTitle" Text="喊话默认怎么显示" />
 
             <TextBlock Classes="bodySmall" TextWrapping="Wrap"
@@ -401,7 +446,7 @@
 
         <!-- ==================== 屏幕边缘弹窗 ==================== -->
         <md3:Md3Card Classes="outlined">
-          <StackPanel Spacing="14">
+          <StackPanel Spacing="14" IsEnabled="{Binding !IsDisplayLocked}">
             <TextBlock Classes="cardTitle" Text="喊话弹窗" />
 
             <Grid ColumnDefinitions="*,Auto">
@@ -505,7 +550,7 @@
         </md3:Md3Card>
 
         <md3:Md3Card Classes="outlined">
-          <StackPanel Spacing="8">
+          <StackPanel Spacing="8" IsEnabled="{Binding !IsBackgroundLocked}">
             <TextBlock Classes="cardTitle" Text="后台运行" />
             <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                        Foreground="{DynamicResource Md3.OnSurfaceVariant}"

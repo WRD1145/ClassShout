@@ -16,12 +16,12 @@
                 Background="{DynamicResource Md3.PrimaryContainer}">
           <md3:Md3Icon Kind="Lock" Size="20" Classes="onPrimaryContainer" />
         </Border>
-        <TextBlock Classes="titleMedium" Text="需要口令" VerticalAlignment="Center" />
+        <TextBlock x:Name="PromptTitle" Classes="titleMedium" Text="需要口令" VerticalAlignment="Center" />
       </StackPanel>
     </Border>
 
     <StackPanel Grid.Row="1" Margin="20,16" Spacing="10">
-      <TextBlock Classes="bodyMedium" TextWrapping="Wrap"
+      <TextBlock x:Name="PromptDetail" Classes="bodyMedium" TextWrapping="Wrap"
                  Text="这台教室的设置已加锁。请输入 PIN 后继续 —— 验证一次即可，关掉设置窗口后会重新上锁。" />
       <TextBox x:Name="PinInput" Classes="outlined dense" PasswordChar="●"
                Watermark="PIN" MaxLength="32" />

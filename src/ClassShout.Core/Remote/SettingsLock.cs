@@ -6,7 +6,7 @@ namespace ClassShout.Core.Remote;
 /// <summary>设置锁的本地配置。</summary>
 public sealed class SettingsLockSettings
 {
-    /// <summary>是否启用。关闭时下面两个字段即使有值也一律忽略。</summary>
+    /// <summary>是否启用。关闭时下面这些字段即使有值也一律忽略。</summary>
     public bool Enabled { get; set; }
 
     /// <summary>PIN 的 PBKDF2 派生值（Base64）。服务器与本机都不保存明文。</summary>
@@ -14,6 +14,62 @@ public sealed class SettingsLockSettings
 
     /// <summary>PIN 的随机盐（Base64）。</summary>
     public string? PinSalt { get; set; }
+
+    /// <summary>
+    /// 进入设置界面时先验一次 PIN（整体锁）。
+    ///
+    /// 和 <see cref="ProtectedAreas"/> 是两种用法，可以同时开：
+    /// 整体锁管"别让人翻设置"，分项锁管"别的都能改，但密钥和退出不许动"。
+    /// </summary>
+    public bool LockSettingsEntry { get; set; } = true;
+
+    /// <summary>
+    /// 需要单独解锁才能改动的那几项，取值见 <see cref="ProtectedAreas"/>。
+    ///
+    /// 用字符串而不是位标志：这份文件是给人看、也可能被手改的，
+    /// 存 "stt" 比存 4 一眼就能看懂，将来加项也不会让旧文件里的数字改变含义。
+    /// </summary>
+    public List<string> ProtectedAreas { get; set; } = [];
+
+    /// <summary>退出程序时需要 PIN。</summary>
+    public bool ProtectExit { get; set; }
+}
+
+/// <summary>可以被 PIN 单独保护的设置项。</summary>
+public static class ProtectedAreas
+{
+    /// <summary>朗读设置（音量、语速、引擎、音色）。</summary>
+    public const string Speech = "speech";
+
+    /// <summary>语音转文字（含接口地址与密钥）。</summary>
+    public const string Stt = "stt";
+
+    /// <summary>跨局域网喊话与教室身份。</summary>
+    public const string Relay = "relay";
+
+    /// <summary>喊话弹窗与默认展示参数。</summary>
+    public const string Display = "display";
+
+    /// <summary>教室信息（教室名）。</summary>
+    public const string Classroom = "classroom";
+
+    /// <summary>后台运行与开机自启。</summary>
+    public const string Background = "background";
+
+    public static readonly string[] All =
+        [Speech, Stt, Relay, Display, Classroom, Background];
+
+    /// <summary>界面上显示的名字。</summary>
+    public static string Label(string area) => area switch
+    {
+        Speech => "朗读设置",
+        Stt => "语音转文字与密钥",
+        Relay => "跨局域网与教室身份",
+        Display => "喊话展示与弹窗",
+        Classroom => "教室信息",
+        Background => "后台运行与开机自启",
+        _ => area,
+    };
 }
 
 /// <summary>
@@ -74,12 +130,13 @@ public static class SettingsLock
         var hash = Rfc2898DeriveBytes.Pbkdf2(
             pin, salt, Pbkdf2Iterations, HashAlgorithmName.SHA256, HashBytes);
 
-        var settings = new SettingsLockSettings
-        {
-            Enabled = true,
-            PinHash = Convert.ToBase64String(hash),
-            PinSalt = Convert.ToBase64String(salt),
-        };
+        // 在**已有配置**上改，而不是新建一份：改个 PIN 不该顺手把
+        // "哪些项目受保护""退出要不要 PIN"这些选择清空 —— 那样用户会以为
+        // 自己只是换了个口令，实际保护范围被悄悄重置了。
+        var settings = Load();
+        settings.Enabled = true;
+        settings.PinHash = Convert.ToBase64String(hash);
+        settings.PinSalt = Convert.ToBase64String(salt);
 
         if (!LocalSettings.Save(FileName, settings))
         {
@@ -129,6 +186,31 @@ public static class SettingsLock
     /// <summary>关闭设置锁，并清掉已保存的 PIN。</summary>
     public static bool Disable()
         => LocalSettings.Save(FileName, new SettingsLockSettings());
+
+    /// <summary>
+    /// 某一项是不是受保护的。
+    ///
+    /// 没启用锁时一律返回 false：这是可选功能，关着的时候不该拦人 ——
+    /// 哪怕配置文件里还留着上次勾的那几项。
+    /// </summary>
+    public static bool IsAreaProtected(string area)
+    {
+        if (!IsEnabled)
+        {
+            return false;
+        }
+
+        var settings = Load();
+
+        return settings.ProtectedAreas.Any(
+            item => string.Equals(item, area, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>退出程序需不需要 PIN。</summary>
+    public static bool IsExitProtected => IsEnabled && Load().ProtectExit;
+
+    /// <summary>进入设置界面需不需要先验 PIN。</summary>
+    public static bool IsEntryLocked => IsEnabled && Load().LockSettingsEntry;
 
     /// <summary>PIN 是否合规。</summary>
     public static bool IsWellFormed(string? pin, out string? error)

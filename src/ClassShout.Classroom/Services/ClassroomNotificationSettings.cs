@@ -139,3 +139,25 @@ public sealed class ClassroomNotificationSettings
 
     public bool Save() => LocalSettings.Save("classroom-notification.json", this);
 }
+
+/// <summary>
+/// 「这一项单独用 PIN 保护」的一个勾选项。
+///
+/// 做成可观察对象而不是纯记录：勾选状态就是界面状态，而且勾一下要立刻落盘 ——
+/// 把"保存"这一步交给用户去点，迟早会有人勾完就关窗口，以为已经生效了。
+/// </summary>
+public sealed partial class ProtectedAreaOption : CommunityToolkit.Mvvm.ComponentModel.ObservableObject
+{
+    public ProtectedAreaOption(string area, bool isProtected)
+    {
+        Area = area;
+        _isProtected = isProtected;
+    }
+
+    public string Area { get; }
+
+    public string Label => ProtectedAreas.Label(Area);
+
+    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
+    private bool _isProtected;
+}

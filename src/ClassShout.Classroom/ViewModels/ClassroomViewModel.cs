@@ -253,6 +253,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 而教室里没人会注意到"今天没自动打开"。
         _autoStart = StartupShortcut.IsEnabled;
         HealAutoStartShortcut();
+
+        // 分项保护的勾选状态（哪几项要 PIN）
+        LoadProtectedOptions();
     }
 
     // ======================== 可绑定状态 ========================
@@ -711,6 +714,160 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         OnPropertyChanged(nameof(SettingsLockEnabled));
         OnPropertyChanged(nameof(SettingsLockHint));
+    }
+
+    // ======================== 分项保护 ========================
+    //
+    // 和"进入设置要 PIN"是两种用法，可以同时开：前者管"别让人翻设置"，
+    // 后者管"别的都能改，但密钥、教室身份、退出这些不许随手动"。
+    //
+    // 已解锁的项只记在内存里，关掉设置窗口就清空 —— 与整体锁同一个道理：
+    // 落盘就等于永久解锁，那道锁也就没意义了。
+
+    private readonly HashSet<string> _unlockedAreas = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>这一项现在是不是锁着（受保护且还没解锁）。</summary>
+    public bool IsAreaLocked(string area)
+        => SettingsLock.IsAreaProtected(area) && !_unlockedAreas.Contains(area);
+
+    public bool IsSpeechLocked => IsAreaLocked(ProtectedAreas.Speech);
+
+    public bool IsSttLocked => IsAreaLocked(ProtectedAreas.Stt);
+
+    public bool IsRelayLocked => IsAreaLocked(ProtectedAreas.Relay);
+
+    public bool IsDisplayLocked => IsAreaLocked(ProtectedAreas.Display);
+
+    public bool IsClassroomInfoLocked => IsAreaLocked(ProtectedAreas.Classroom);
+
+    public bool IsBackgroundLocked => IsAreaLocked(ProtectedAreas.Background);
+
+    /// <summary>退出程序需不需要 PIN。托盘菜单与关闭时的退出路径都要看它。</summary>
+    public bool IsExitProtected => SettingsLock.IsExitProtected;
+
+    /// <summary>受保护项的勾选列表。</summary>
+    public ObservableCollection<ProtectedAreaOption> ProtectedOptions { get; } = [];
+
+    /// <summary>"退出程序需要 PIN"的开关。</summary>
+    public bool ProtectExit
+    {
+        get => SettingsLock.Load().ProtectExit;
+        set
+        {
+            var settings = SettingsLock.Load();
+            if (settings.ProtectExit == value)
+            {
+                return;
+            }
+
+            settings.ProtectExit = value;
+            LocalSettings.Save("settings-lock.json", settings);
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsExitProtected));
+        }
+    }
+
+    private void LoadProtectedOptions()
+    {
+        ProtectedOptions.Clear();
+
+        var settings = SettingsLock.Load();
+
+        foreach (var area in ProtectedAreas.All)
+        {
+            var isProtected = settings.ProtectedAreas.Any(
+                item => string.Equals(item, area, StringComparison.OrdinalIgnoreCase));
+
+            var option = new ProtectedAreaOption(area, isProtected);
+            option.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(ProtectedAreaOption.IsProtected))
+                {
+                    SaveProtectedAreas();
+                }
+            };
+
+            ProtectedOptions.Add(option);
+        }
+    }
+
+    private void SaveProtectedAreas()
+    {
+        var settings = SettingsLock.Load();
+        settings.ProtectedAreas = ProtectedOptions.Where(o => o.IsProtected).Select(o => o.Area).ToList();
+        LocalSettings.Save("settings-lock.json", settings);
+
+        NotifyAreaLocksChanged();
+    }
+
+    /// <summary>PIN 验过之后把受保护项全部解锁（整体锁进入设置时用）。</summary>
+    public void UnlockAllAreas()
+    {
+        foreach (var area in ProtectedAreas.All)
+        {
+            _unlockedAreas.Add(area);
+        }
+
+        NotifyAreaLocksChanged();
+    }
+
+    /// <summary>重新锁上所有分项。关掉设置窗口时调用。</summary>
+    public void LockAreasAgain()
+    {
+        _unlockedAreas.Clear();
+        NotifyAreaLocksChanged();
+    }
+
+    /// <summary>受保护项里有没有任何一项正锁着（界面据此决定要不要显示解锁入口）。</summary>
+    public bool HasLockedAreas =>
+        IsSpeechLocked || IsSttLocked || IsRelayLocked
+        || IsDisplayLocked || IsClassroomInfoLocked || IsBackgroundLocked;
+
+    [ObservableProperty]
+    private string _unlockPin = string.Empty;
+
+    [ObservableProperty]
+    private string _unlockError = string.Empty;
+
+    /// <summary>
+    /// 在设置里解锁受保护项。
+    ///
+    /// 刻意做成"输入框 + 按钮"而不是弹一个对话框：解锁只是一次性动作，
+    /// 而设置窗口里本来就有输入 PIN 的地方（设口令那一段），多一层模态窗反而绕。
+    /// </summary>
+    [RelayCommand]
+    private void UnlockProtected()
+    {
+        if (!SettingsLock.IsEnabled)
+        {
+            UnlockError = "还没有设置 PIN。请先在「设置口令」里设一个。";
+            return;
+        }
+
+        if (!SettingsLock.Verify(UnlockPin))
+        {
+            UnlockError = "PIN 不正确。";
+            return;
+        }
+
+        UnlockPin = string.Empty;
+        UnlockError = string.Empty;
+        UnlockAllAreas();
+
+        AddLog("系统", "已解锁受保护的设置项（关掉本窗口后会重新上锁）。");
+    }
+
+    private void NotifyAreaLocksChanged()
+    {
+        OnPropertyChanged(nameof(IsSpeechLocked));
+        OnPropertyChanged(nameof(IsSttLocked));
+        OnPropertyChanged(nameof(IsRelayLocked));
+        OnPropertyChanged(nameof(IsDisplayLocked));
+        OnPropertyChanged(nameof(IsClassroomInfoLocked));
+        OnPropertyChanged(nameof(IsBackgroundLocked));
+        OnPropertyChanged(nameof(IsExitProtected));
+        OnPropertyChanged(nameof(HasLockedAreas));
     }
 
     // ======================== 生命周期 ========================

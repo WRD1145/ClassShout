@@ -1083,6 +1083,44 @@ internal static class Program
                 }, 0, 0,
                 _ => null),
 
+            // 开了 PIN 保护之后，设置窗口长什么样。
+            //
+            // 这一张必须单独渲染：分项保护的勾选列表与"有项目正被锁定"那一块
+            // 都绑在"是否启用了 PIN"上，而默认那张 classroom-settings 是关着锁的 ——
+            // 也就是说新加的 UI 在那张图上根本不存在。
+            new("classroom-locked",
+                () =>
+                {
+                    var lockPath = Path.Combine(LocalSettings.Directory, "settings-lock.json");
+                    var hadLock = File.Exists(lockPath);
+                    var lockBackup = hadLock ? File.ReadAllText(lockPath) : null;
+
+                    try
+                    {
+                        SettingsLock.SetPin("2468");
+
+                        var settings = SettingsLock.Load();
+                        settings.ProtectedAreas =
+                            [ProtectedAreas.Stt, ProtectedAreas.Relay, ProtectedAreas.Background];
+                        settings.ProtectExit = true;
+                        LocalSettings.Save("settings-lock.json", settings);
+
+                        return new ClassroomSettings { DataContext = new ClassroomViewModel(), Height = 2900 };
+                    }
+                    finally
+                    {
+                        if (hadLock && lockBackup is not null)
+                        {
+                            File.WriteAllText(lockPath, lockBackup);
+                        }
+                        else
+                        {
+                            File.Delete(lockPath);
+                        }
+                    }
+                }, 0, 0,
+                _ => null),
+
             // 进入设置前的 PIN 提示窗。同样只验能不能渲染出来。
             new("classroom-pin-prompt",
                 () => new ClassroomPin(), 0, 0,

@@ -1852,8 +1852,41 @@ internal static class Program
             Check("PIN 不以明文落盘", !onDisk.Contains("2468"),
                 "文件里存的是 PBKDF2 派生值与随机盐");
 
+            // ---------- 分项保护 ----------
+            //
+            // 这一段的重点是"改 PIN 不该把已选的项目清空"：用户只是想换个口令，
+            // 而保护范围被悄悄重置成默认值的话，他不会收到任何提示。
+            var settings = SettingsLock.Load();
+            settings.ProtectedAreas = [ProtectedAreas.Stt, ProtectedAreas.Relay];
+            settings.ProtectExit = true;
+            LocalSettings.Save("settings-lock.json", settings);
+
+            Check("受保护的项被识别出来", SettingsLock.IsAreaProtected(ProtectedAreas.Stt),
+                ProtectedAreas.Label(ProtectedAreas.Stt));
+            Check("没勾的项不受保护", !SettingsLock.IsAreaProtected(ProtectedAreas.Speech),
+                ProtectedAreas.Label(ProtectedAreas.Speech));
+            Check("退出保护能读出来", SettingsLock.IsExitProtected, "退出需要 PIN");
+
+            var (rePinOk, rePinError) = SettingsLock.SetPin("1357");
+            var afterPin = SettingsLock.Load();
+
+            Check("换 PIN 成功", rePinOk, rePinError ?? "新 PIN 已生效");
+            Check("换 PIN 之后受保护项没被清空",
+                afterPin.ProtectedAreas.Count == 2 && afterPin.ProtectedAreas.Contains(ProtectedAreas.Stt),
+                $"仍勾着 {afterPin.ProtectedAreas.Count} 项");
+
+            Check("换 PIN 之后退出保护还在",
+                SettingsLock.IsExitProtected,
+                $"ProtectExit={afterPin.ProtectExit}");
+
             SettingsLock.Disable();
             Check("关闭之后不再拦人", SettingsLock.Verify("0000"), "已恢复为未启用");
+
+            // 关掉之后即使旧配置里还留着"受保护项"，也应该一律放行 ——
+            // 这是可选功能，关着的时候不该拦人。
+            Check("关闭之后分项保护也一律放行",
+                !SettingsLock.IsAreaProtected(ProtectedAreas.Stt) && !SettingsLock.IsExitProtected,
+                "关着锁时任何项目都不再受保护");
         }
         finally
         {

@@ -1,5 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
+using ClassShout.Classroom.Views;
+using ClassShout.Core.Remote;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform;
 
@@ -89,13 +91,39 @@ public sealed class TrayPresence : IDisposable
         show.Click += (_, _) => Restore();
 
         var exit = new NativeMenuItem("退出");
-        exit.Click += (_, _) => Exit();
+        exit.Click += (_, _) => RequestExit();
 
         var menu = new NativeMenu();
         menu.Items.Add(show);
         menu.Items.Add(new NativeMenuItemSeparator());
         menu.Items.Add(exit);
         return menu;
+    }
+
+    /// <summary>
+    /// 点「退出」之后真正该做什么。
+    ///
+    /// 开了"退出需要 PIN"时先验一次 —— 教室里那台机器是共用的，
+    /// 而"把喊话软件关掉"正是路过的人最可能干、后果又最直接的一件事：
+    /// 关掉之后整间教室从所有老师的列表里消失，且没有任何提示。
+    /// </summary>
+    private async void RequestExit()
+    {
+        if (!SettingsLock.IsExitProtected)
+        {
+            Exit();
+            return;
+        }
+
+        var prompt = new PinPromptWindow();
+        prompt.Configure("退出教室端", "这台教室端设置了退出保护。请输入 PIN 后再退出 —— 退出之后，老师在教师端里就找不到这间教室了。");
+
+        // 用模态而不是自己做回调：退出是一次性动作，"验过就退"这件事
+        // 用一个布尔值表达最清楚，也天然保证没验过就退不掉。
+        if (await prompt.ShowDialog<bool>(_window))
+        {
+            Exit();
+        }
     }
 
     /// <summary>把窗口收进托盘。</summary>

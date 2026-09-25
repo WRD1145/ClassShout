@@ -4,6 +4,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
 using ClassShout.Classroom.Services;
 using ClassShout.Classroom.ViewModels;
+using ClassShout.Core.Remote;
 
 namespace ClassShout.Classroom.Views;
 
@@ -77,21 +78,34 @@ public partial class MainWindow : Window
 
         if (!SettingsAccess.IsUnlocked)
         {
-            var prompt = new PinPromptWindow();
-            var passed = await prompt.ShowDialog<bool>(this);
-
-            if (!passed)
+            // 只有在"进去要 PIN"这一类保护开着时才拦；只设了分项保护时，
+            // 设置窗口可以随便进，锁的是里面那几项本身。
+            if (SettingsLock.IsEntryLocked)
             {
-                return;
+                var prompt = new PinPromptWindow();
+                var passed = await prompt.ShowDialog<bool>(this);
+
+                if (!passed)
+                {
+                    return;
+                }
             }
 
             SettingsAccess.Unlock();
+
+            // 整体锁验过之后，受保护的那几项也一并放行 ——
+            // 进来时已经验过一次，再让用户为每一项各输一遍，只会把 PIN 逼到便签上。
+            (DataContext as ViewModels.ClassroomViewModel)?.UnlockAllAreas();
         }
 
         var window = new SettingsWindow { DataContext = DataContext };
         window.Closed += (_, _) =>
         {
             SettingsAccess.Lock();
+
+            // 关掉窗口就把分项锁恢复：与整体锁同一个语义 ——
+            // 验证一次是"这一次进入"的通行证，不是"这台机器永久免验"。
+            (DataContext as ViewModels.ClassroomViewModel)?.LockAreasAgain();
             _settingsWindow = null;
         };
 

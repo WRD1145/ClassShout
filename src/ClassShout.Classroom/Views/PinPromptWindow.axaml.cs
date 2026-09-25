@@ -25,6 +25,20 @@ public partial class PinPromptWindow : Window
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
+    /// <summary>
+    /// 换一套标题与说明。
+    ///
+    /// 同一个窗口服务两个场景：进入设置、退出程序。两处的"为什么要输 PIN"
+    /// 完全不同（前者是"别乱改"，后者是"别把教室关掉"），
+    /// 用同一句文案会让其中一边的人看不懂自己在确认什么。
+    /// </summary>
+    public void Configure(string title, string detail)
+    {
+        this.FindControl<TextBlock>("PromptTitle")?.SetCurrentValue(TextBlock.TextProperty, title);
+        this.FindControl<TextBlock>("PromptDetail")?.SetCurrentValue(TextBlock.TextProperty, detail);
+        Title = title;
+    }
+
     private void OnConfirmClick(object? sender, RoutedEventArgs e) => TryAccept();
 
     private void OnCancelClick(object? sender, RoutedEventArgs e) => Close(false);
