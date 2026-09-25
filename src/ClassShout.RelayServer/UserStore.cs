@@ -19,6 +19,17 @@ public sealed class UserRecord
     /// <summary>显示名，即"老师姓名"。教室端弹窗与教师端界面都显示它。</summary>
     public string DisplayName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 任教科目，例如"数学"。可为空。
+    ///
+    /// 它出现在喊话来源里（"数学张老师"），因为教室里最常见的疑问就是
+    /// "这是谁在说话"—— 同一间教室一天里会有好几位老师来喊，
+    /// 只报姓名往往对不上人，加上科目就一眼能认出来。
+    /// 刻意做成自由文本而不是固定列表：各校的科目叫法不一样（"道法""信息技术"），
+    /// 而这份数据是给本校人看的。
+    /// </summary>
+    public string? Subject { get; set; }
+
     public string PasswordHash { get; set; } = string.Empty;
 
     public string PasswordSalt { get; set; } = string.Empty;
@@ -31,7 +42,19 @@ public sealed class UserRecord
 }
 
 /// <summary>注册或登录后的公开信息。刻意不含口令相关字段。</summary>
-public sealed record UserProfile(string Id, string? Username, string? Email, string DisplayName, DateTimeOffset CreatedAt, DateTimeOffset? LastLoginAt, bool Disabled);
+public sealed record UserProfile(
+    string Id,
+    string? Username,
+    string? Email,
+    string DisplayName,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? LastLoginAt,
+    bool Disabled,
+    string? Subject = null)
+{
+    /// <summary>喊话来源里显示的名字：有科目就带上（"数学张老师"），没有就只报姓名。</summary>
+    public string ShoutName => string.IsNullOrWhiteSpace(Subject) ? DisplayName : $"{Subject}{DisplayName}";
+}
 
 /// <summary>用户名与邮箱的格式校验。集中在一处，注册与改资料共用同一套规则。</summary>
 public static partial class AccountRules
@@ -119,6 +142,7 @@ public sealed class UserStore
     public (UserProfile? Profile, string? Error) Register(
         string? username,
         string? email,
+        string? subject,
         string displayName,
         string password)
     {
@@ -170,6 +194,7 @@ public sealed class UserStore
                 Username = username,
                 Email = email,
                 DisplayName = displayName.Trim(),
+                Subject = string.IsNullOrWhiteSpace(subject) ? null : subject.Trim(),
                 PasswordHash = hash,
                 PasswordSalt = salt,
                 CreatedAt = DateTimeOffset.UtcNow,
@@ -302,7 +327,7 @@ public sealed class UserStore
     }
 
     private static UserProfile ToProfile(UserRecord user)
-        => new(user.Id, user.Username, user.Email, user.DisplayName, user.CreatedAt, user.LastLoginAt, user.Disabled);
+        => new(user.Id, user.Username, user.Email, user.DisplayName, user.CreatedAt, user.LastLoginAt, user.Disabled, user.Subject);
 
     // ======================== 口令处理 ========================
 

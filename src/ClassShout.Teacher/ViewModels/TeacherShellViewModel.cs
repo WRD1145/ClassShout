@@ -763,6 +763,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     [NotifyCanExecuteChangedFor(nameof(RegisterCommand))]
     private string _registerPassword = string.Empty;
 
+    /// <summary>任教科目，例如"数学"。可留空 —— 留空时喊话来源只报姓名。</summary>
+    [ObservableProperty]
+    private string _registerSubject = string.Empty;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(LoginCommand))]
     [NotifyCanExecuteChangedFor(nameof(RegisterCommand))]
@@ -889,7 +893,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             }
 
             var (ok, error) = await _account
-                .RegisterAsync(RegisterUsername, RegisterEmail, RegisterDisplayName, RegisterPassword)
+                .RegisterAsync(RegisterUsername, RegisterEmail, RegisterDisplayName, RegisterPassword, RegisterSubject)
                 .ConfigureAwait(true);
 
             if (!ok)

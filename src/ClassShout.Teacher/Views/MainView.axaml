@@ -655,6 +655,12 @@
                              Watermark="姓名（学生看到的就是它）"
                              Text="{Binding RegisterDisplayName}" />
                     <TextBox Classes="outlined dense"
+                             Watermark="任教科目（选填，例如 数学）"
+                             Text="{Binding RegisterSubject}" />
+                    <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="填了科目，教室里看到的来源就是「数学张老师」—— 同一间教室一天里有好几位老师来喊，只报姓名往往对不上人。" />
+                    <TextBox Classes="outlined dense"
                              Watermark="口令（至少 6 位）"
                              PasswordChar="●"
                              Text="{Binding RegisterPassword}" />

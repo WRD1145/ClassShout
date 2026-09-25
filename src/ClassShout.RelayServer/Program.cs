@@ -195,7 +195,7 @@ app.MapPost(RelayPaths.AuthRegister, (RegisterRequest request) =>
             "该账号名由服务器管理员保留，请换一个。"));
     }
 
-    var (profile, error) = users.Register(request.Username, request.Email, request.DisplayName, request.Password);
+    var (profile, error) = users.Register(request.Username, request.Email, request.Subject, request.DisplayName, request.Password);
     if (profile is null)
     {
         return Results.Ok(new AuthResponse(false, null, null, error));
@@ -378,7 +378,9 @@ app.MapPost(RelayPaths.BindTeacher, (
         return Results.Ok(new TeacherBindResponse(false, null, null, hint));
     }
 
-    var teacherName = profile?.DisplayName ?? request.TeacherName;
+        // 喊话来源用"科目 + 姓名"（"数学张老师"）：同一间教室一天里有好几位老师来喊，
+    // 只报姓名往往对不上人。没填科目就还是只报姓名。
+    var teacherName = profile is null ? request.TeacherName : profile.ShoutName;
 
     var binding = sessions.BindTeacher(record.Uuid, teacherName, profile?.Id);
     store.Touch(record.Uuid);
@@ -860,6 +862,7 @@ app.MapGet("/api/console/classrooms", ([FromHeader(Name = RelayPaths.AuthTokenHe
         record.Name,
         record.RegisteredAt,
         record.LastSeenAt,
+        sessions.OnlineTeacherCountOf(record.Uuid, DateTimeOffset.UtcNow - OnlineWindow),
         sessions.TeacherCountOf(record.Uuid))));
 });
 
@@ -913,7 +916,7 @@ app.MapPost("/api/console/users", (
         return Results.BadRequest(new { error = "该账号名由服务器内置管理员保留，请换一个。" });
     }
 
-    var (profile, error) = users.Register(request.Username, request.Email, request.DisplayName ?? string.Empty, request.Password);
+    var (profile, error) = users.Register(request.Username, request.Email, subject: null, request.DisplayName ?? string.Empty, request.Password);
     if (profile is null)
     {
         return Results.BadRequest(new { error = error ?? "创建失败。" });
@@ -971,8 +974,11 @@ app.MapPost("/api/console/users/import", (
             continue;
         }
 
+        // 第 5 列是可选科目：各校名单里未必有这一列，没有就不填
         var (username, email, displayName, password) =
             (Empty(fields[0]), Empty(fields[1]), Empty(fields[2]), fields[3]);
+
+        var subject = fields.Length >= 5 ? Empty(fields[4]) : null;
 
         if (username is null && email is null)
         {
@@ -988,7 +994,7 @@ app.MapPost("/api/console/users/import", (
             continue;
         }
 
-        var (profile, error) = users.Register(username, email, displayName ?? string.Empty, password);
+        var (profile, error) = users.Register(username, email, subject, displayName ?? string.Empty, password);
         if (profile is null)
         {
             failed++;
@@ -1575,7 +1581,7 @@ bool IsAdminIdentity(string? value)
 }
 
 UserProfileDto ToDto(UserProfile profile)
-    => new(profile.Id, profile.Username, profile.Email, profile.DisplayName, profile.CreatedAt, profile.LastLoginAt, profile.Disabled, false);
+    => new(profile.Id, profile.Username, profile.Email, profile.DisplayName, profile.CreatedAt, profile.LastLoginAt, profile.Disabled, false, profile.Subject);
 
 /// <summary>内置管理员的档案。它不是用户库里的一条记录，而是由配置文件描述的。</summary>
 UserProfileDto ToAdminDto()

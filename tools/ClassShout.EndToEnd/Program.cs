@@ -475,7 +475,7 @@ internal static class Program
         var accountName = "e2e" + Guid.NewGuid().ToString("N")[..8];
         const string accountPassword = "e2e-pass-1234";
 
-        var (regOk, regError) = await account.RegisterAsync(accountName, null, "端到端张老师", accountPassword);
+        var (regOk, regError) = await account.RegisterAsync(accountName, null, "张老师", accountPassword, subject: "数学");
         Check("用户名注册成功", regOk, regError ?? $"用户名={accountName}");
         Check("注册后即处于登录态", account.IsSignedIn, $"显示名={account.DisplayName}");
 
@@ -549,7 +549,11 @@ internal static class Program
         // 关键一条：带上登录令牌后，服务器应当以账号里的姓名为准，
         // 而不是采用客户端 bind 时传的那个自由字符串 —— 否则姓名可以被随意冒充。
         Check("喊话来源是账号里注册的姓名（而非客户端自填）",
-            text.From == "端到端张老师",
+            text.From == "数学张老师",
+            $"From={text.From}");
+
+        Check("来源里带上了任教科目（同一间教室一天里有好几位老师来喊）",
+            text.From?.StartsWith("数学", StringComparison.Ordinal) == true,
             $"From={text.From}");
 
         // ---------- 4. 语音流（含逐字节校验） ----------
@@ -839,7 +843,7 @@ internal static class Program
         var multiResults = await broadcaster.SendTextAsync(
             multiTargets,
             new TextShoutMessage { Text = multiText, Rate = 1, Volume = 90 },
-            "端到端张老师");
+            "数学张老师");
 
         await Task.Delay(2500);
 

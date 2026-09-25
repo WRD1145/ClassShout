@@ -184,8 +184,11 @@ async function loadClassrooms() {
       '<td>' + escapeHtml(c.name) + '</td>' +
       '<td class="mono">' + escapeHtml(c.uuid) + '</td>' +
       '<td>' + (c.onlineTeachers > 0
-        ? '<span class="chip ok">' + c.onlineTeachers + ' 个</span>'
-        : '<span class="chip">无</span>') + '</td>' +
+        ? '<span class="chip ok">在线 ' + c.onlineTeachers + ' 人</span>'
+        : '<span class="chip">无人在线</span>')
+        + (c.boundTeachers > c.onlineTeachers
+          ? ' <span class="muted-inline">绑定 ' + c.boundTeachers + '</span>'
+          : '') + '</td>' +
       '<td>' + fmtTime(c.registeredAt) + '</td>' +
       '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
       '<td class="cell-actions">' +

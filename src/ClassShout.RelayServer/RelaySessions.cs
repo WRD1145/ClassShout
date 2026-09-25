@@ -98,6 +98,36 @@ public sealed class RelaySessions
     /// <summary>教室端上线/离线时，把所有绑定教师标记一次，便于教师端界面显示状态。</summary>
     public int TeacherCountOf(string uuid) => _teachersByClassroom.TryGetValue(uuid, out var tokens) ? tokens.Count : 0;
 
+    /// <summary>
+    /// 这个教室里"确实还在线"的教师端数量。
+    ///
+    /// 判据是绑定记录上的最近活动时间：教师端一直在长轮询（一轮最多 25 秒），
+    /// 每次请求服务器都会刷新它。所以"最近一分半内有过动静"就是"还在连着"。
+    ///
+    /// 为什么要与 <see cref="TeacherCountOf"/> 分开：绑定令牌在内存里一直留着，
+    /// 老师关掉手机之后那条绑定依然算数 —— 控制台只显示绑定数的话，
+    /// 管理员会以为教室里还有人在用，而实际上一个人都没有。
+    /// </summary>
+    public int OnlineTeacherCountOf(string uuid, DateTimeOffset cutoff)
+    {
+        if (!_teachersByClassroom.TryGetValue(uuid, out var tokens))
+        {
+            return 0;
+        }
+
+        var online = 0;
+
+        foreach (var token in tokens.Keys)
+        {
+            if (_teachers.TryGetValue(token, out var binding) && binding.LastSeenAt >= cutoff)
+            {
+                online++;
+            }
+        }
+
+        return online;
+    }
+
     /// <summary>当前所有教室绑定的教师会话总数（概览统计用）。</summary>
     public int TeacherCountTotal() => _teachers.Count;
 

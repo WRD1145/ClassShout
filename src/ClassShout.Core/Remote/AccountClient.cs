@@ -49,11 +49,18 @@ public sealed class AccountClient
     public string? Token => _settings.AuthToken;
 
     /// <summary>注册。用户名与邮箱至少要填一个。</summary>
+    /// <param name="username">用户名。</param>
+    /// <param name="email">邮箱。</param>
+    /// <param name="displayName">老师姓名，教室端弹窗上显示的就是它。</param>
+    /// <param name="password">口令。</param>
+    /// <param name="subject">任教科目，例如"数学"。可留空 —— 留空时喊话来源只报姓名。</param>
+    /// <param name="cancellationToken">取消标记。</param>
     public Task<(bool Ok, string? Error)> RegisterAsync(
         string? username,
         string? email,
         string displayName,
         string password,
+        string? subject = null,
         CancellationToken cancellationToken = default)
         => PostAuthAsync(
             RelayPaths.AuthRegister,
@@ -61,7 +68,8 @@ public sealed class AccountClient
                 string.IsNullOrWhiteSpace(username) ? null : username.Trim(),
                 string.IsNullOrWhiteSpace(email) ? null : email.Trim(),
                 displayName.Trim(),
-                password),
+                password,
+                string.IsNullOrWhiteSpace(subject) ? null : subject.Trim()),
             cancellationToken);
 
     /// <summary>登录。<paramref name="account"/> 可以填用户名，也可以填邮箱。</summary>

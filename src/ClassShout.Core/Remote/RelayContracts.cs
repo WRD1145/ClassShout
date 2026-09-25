@@ -273,7 +273,17 @@ public sealed record ClassroomStatusRequest(bool Muted, int Volume, string State
 /// <param name="Email">邮箱。</param>
 /// <param name="DisplayName">老师姓名。教室端弹窗与教师端界面显示的就是它。</param>
 /// <param name="Password">口令，至少 6 位。</param>
-public sealed record RegisterRequest(string? Username, string? Email, string DisplayName, string Password);
+/// <param name="Subject">
+/// 任教科目，例如"数学"。可留空。
+/// 它会出现在喊话来源里（"数学张老师"）—— 同一间教室一天里有好几位老师来喊，
+/// 只报姓名往往对不上人。
+/// </param>
+public sealed record RegisterRequest(
+    string? Username,
+    string? Email,
+    string DisplayName,
+    string Password,
+    string? Subject = null);
 
 /// <summary>登录请求。<paramref name="Account"/> 填用户名或邮箱都可以。</summary>
 public sealed record LoginRequest(string Account, string Password);
@@ -308,15 +318,28 @@ public sealed record UserProfileDto(
     DateTimeOffset CreatedAt,
     DateTimeOffset? LastLoginAt,
     bool Disabled,
-    bool IsAdmin);
+    bool IsAdmin,
+    string? Subject = null);
 
 /// <summary>管理控制台用的教室条目。</summary>
+/// <param name="Uuid">教室 UUID。</param>
+/// <param name="Name">教室名。</param>
+/// <param name="RegisteredAt">注册时间。</param>
+/// <param name="LastSeenAt">最近一次活动时间。</param>
+/// <param name="OnlineTeachers">
+/// 当前**在线**的教师端数量（最近一分半内有过请求）。
+///
+/// 它和"绑定数"不是一回事：绑定令牌在服务器内存里一直留着，
+/// 老师关掉手机之后那条绑定依然在 —— 只显示绑定数会让管理员以为还有人在用。
+/// </param>
+/// <param name="BoundTeachers">历史上绑定过的教师端总数（含已经关掉、还没被清理的）。</param>
 public sealed record ConsoleClassroom(
     string Uuid,
     string Name,
     DateTimeOffset RegisteredAt,
     DateTimeOffset LastSeenAt,
-    int OnlineTeachers);
+    int OnlineTeachers,
+    int BoundTeachers);
 
 /// <summary>管理控制台概览。</summary>
 public sealed record ConsoleOverview(
