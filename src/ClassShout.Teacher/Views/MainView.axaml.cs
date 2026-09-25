@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using ClassShout.Core.Remote;
 using ClassShout.Design.Controls;
@@ -34,6 +35,75 @@ public partial class MainView : UserControl
             about.AppName = "ClassShout 教师端";
             about.DiagnosticsProvider = BuildDiagnostics;
         }
+
+        // 呼叫页的拼装区：接住从组件面板拖过来的组件。
+        // 接在容器上而不是每个子项上 —— 拖到空白处也该算数，那里正是最自然的目标。
+        if (this.FindControl<Border>("CallComposer") is { } composer)
+        {
+            composer.AddHandler(DragDrop.DragOverEvent, OnComposerDragOver);
+            composer.AddHandler(DragDrop.DropEvent, OnComposerDrop);
+        }
+    }
+
+    /// <summary>拖放时用来识别"这是一个呼叫组件"的私有格式。</summary>
+    private const string PaletteFormat = "classshout/component";
+
+    /// <summary>
+    /// 从组件面板开始拖动。
+    ///
+    /// 点击按钮本身也能加组件（按钮的 Command）—— 两条路都留着：
+    /// Android 上拖放支持有限，而教室里那台手机恰恰是常用的那一端。
+    /// </summary>
+    private async void OnPalettePointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+    {
+        if (sender is not Avalonia.Controls.Button { DataContext: ComponentPaletteItem item })
+        {
+            return;
+        }
+
+        // 只有按下主键才当成拖动：右键/中键点一下不该触发拖放
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        // 这里用的是 Avalonia 11.3 起标记为过时的 DataObject/DoDragDrop。
+        // 新的 IAsyncDataTransfer 要用 DataTransferItem 与 DataFormat<T> 拼出来，
+        // 而这段代码只是一个便利 —— 点击组件按钮那条路才是主路径
+        // （Android 上的拖放支持本来就有限，而教室里的老师多半用的是手机）。
+        // 为一个便利去追一套刚引入的异步 API，换来的风险比收益大。
+#pragma warning disable CS0618
+        var data = new DataObject();
+        data.Set(PaletteFormat, item.Kind);
+
+        try
+        {
+            await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            // 某些平台（部分 Android 设备）不支持拖放：不抛出去，
+            // 因为点击按钮那条路仍然可用，用户只是少了一种操作方式。
+        }
+    }
+
+    private void OnComposerDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = e.Data.Contains(PaletteFormat) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+#pragma warning restore CS0618
+    }
+
+    private void OnComposerDrop(object? sender, DragEventArgs e)
+    {
+#pragma warning disable CS0618
+        if (DataContext is TeacherShellViewModel vm && e.Data.Get(PaletteFormat) is string kind)
+        {
+            vm.Call.AddComponentCommand.Execute(kind);
+        }
+#pragma warning restore CS0618
+
+        e.Handled = true;
     }
 
     /// <summary>

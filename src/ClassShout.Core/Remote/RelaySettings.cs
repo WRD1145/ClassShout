@@ -274,4 +274,11 @@ public static class LocalSettings
 
     public static bool SaveRosters(TeacherRosterSettings settings)
         => Save("teacher-rosters.json", settings);
+
+    /// <summary>呼叫模板（组件拼装出来的那几套）。</summary>
+    public static TeacherCallSettings LoadCalls()
+        => Load("teacher-calls.json", static () => new TeacherCallSettings { Templates = [TeacherCallSettings.DefaultTemplate()] });
+
+    public static bool SaveCalls(TeacherCallSettings settings)
+        => Save("teacher-calls.json", settings);
 }

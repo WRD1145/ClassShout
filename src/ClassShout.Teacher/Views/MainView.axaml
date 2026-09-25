@@ -228,14 +228,219 @@
         <!-- ==================== 快速呼叫 ==================== -->
         <ScrollViewer IsVisible="{Binding IsCallPage}">
           <StackPanel Margin="20,18" Spacing="18">
-            <md3:Md3Card Classes="outlined" CardPadding="14">
+
+            <!-- 没有名单时先把人引到名单页：组件拼得再好，没有学生也发不出去 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding Call.HasNoRoster}">
               <StackPanel Spacing="8">
-                <TextBlock Classes="cardTitle" Text="快速呼叫" />
+                <TextBlock Classes="cardTitle" Text="先导入一份学生名单" />
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="正在搭建中：这里会用组件拼出要喊的话（学生姓名 / 学号 / 简写 / 小组成员 / 固定文字），选好学生一次发出去。名单请先在「名单」页导入。" />
+                           Text="呼叫页要用名单里的学生来拼句子。去「名单」页粘贴一份名单（从 Excel 直接复制就行），再回来。" />
+                <Button Classes="tonal block" Content="去导入名单"
+                        Command="{Binding NavigateStudentsCommand}" />
               </StackPanel>
             </md3:Md3Card>
+
+            <!-- 模板 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding Call.HasRoster}">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="模板" Margin="0" />
+                  <TextBlock Grid.Column="1" Classes="bodySmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding Call.RosterHint}" />
+                </Grid>
+
+                <ComboBox HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding Call.TemplateChoices}"
+                          SelectedItem="{Binding Call.SelectedTemplate}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TemplateChoice">
+                      <TextBlock Text="{Binding Label}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <TextBox Classes="outlined dense"
+                         Watermark="模板名（例如 来办公室）"
+                         Text="{Binding Call.TemplateName}" />
+
+                <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                  <Button Grid.Column="0" Classes="tonal" Content="保存模板"
+                          Command="{Binding Call.SaveTemplateCommand}" />
+                  <Button Grid.Column="1" Classes="outlined" Content="新建"
+                          Command="{Binding Call.NewTemplateCommand}" />
+                  <Button Grid.Column="2" Classes="outlined" Content="删除"
+                          Command="{Binding Call.DeleteTemplateCommand}" />
+                </Grid>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <!-- 组件面板：点一下加进去，也可以拖到下面的拼装区 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding Call.HasRoster}">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="cardTitle" Text="组件" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="点一下加到拼装区，或者直接拖过去。空格与标点由「文字」组件自己带 —— 想要「张三 来 数学张老师」就在文字里写「 来 」。" />
+
+                <ItemsControl ItemsSource="{Binding Call.ComponentPalette}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <WrapPanel />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ComponentPaletteItem">
+                      <Button Classes="tonal small" Margin="0,0,8,8"
+                              Content="{Binding Label}"
+                              PointerPressed="OnPalettePointerPressed"
+                              Command="{Binding $parent[ItemsControl].((vm:TeacherShellViewModel)DataContext).Call.AddComponentCommand}"
+                              CommandParameter="{Binding Kind}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <!-- 拼装区 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding Call.HasRoster}">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="cardTitle" Text="拼装区（拖到这里）" />
+
+                <Border Name="CallComposer" MinHeight="90" CornerRadius="12" Padding="10"
+                        DragDrop.AllowDrop="True"
+                        Background="{DynamicResource Md3.SurfaceContainerHigh}">
+                  <StackPanel Spacing="6">
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               IsVisible="{Binding !Call.HasComponents}"
+                               Text="还是空的 —— 从上面点或拖一个组件进来。" />
+
+                    <ItemsControl ItemsSource="{Binding Call.Components}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ComponentRow">
+                          <Border CornerRadius="10" Margin="0,0,0,6" Padding="8"
+                                  Background="{DynamicResource Md3.SurfaceContainerLowest}">
+                            <Grid ColumnDefinitions="Auto,*,Auto">
+                              <TextBlock Classes="labelMedium" VerticalAlignment="Center"
+                                         Text="{Binding Label}" />
+                              <TextBox Grid.Column="1" Classes="outlined dense" Margin="8,0"
+                                       IsVisible="{Binding IsText}"
+                                       Watermark="文字（空格、标点都写在这里）"
+                                       Text="{Binding Text}" />
+                              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
+                                <Button Classes="icon" Command="{Binding MoveLeftCommand}" ToolTip.Tip="左移">
+                                  <md3:Md3Icon Kind="ArrowLeft" Size="16" />
+                                </Button>
+                                <Button Classes="icon" Command="{Binding MoveRightCommand}" ToolTip.Tip="右移">
+                                  <md3:Md3Icon Kind="ArrowRight" Size="16" />
+                                </Button>
+                                <Button Classes="icon" Command="{Binding RemoveCommand}" ToolTip.Tip="移除">
+                                  <md3:Md3Icon Kind="Close" Size="16" />
+                                </Button>
+                              </StackPanel>
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{DynamicResource Md3.SurfaceContainerHighest}"
+                        CornerRadius="10" Padding="12,10">
+                  <StackPanel Spacing="4">
+                    <TextBlock Classes="labelSmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="预览" />
+                    <TextBlock Classes="bodyLarge" TextWrapping="Wrap"
+                               Text="{Binding Call.PreviewText}" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <!-- 选学生 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding Call.HasRoster}">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="叫谁" Margin="0" />
+                  <TextBlock Grid.Column="1" Classes="bodySmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding Call.PickedSummary}" />
+                </Grid>
+
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="bodySmall"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="列表里按哪种标识显示（只有填过的学生才会出现在这一档里）" />
+                  <ComboBox HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding Call.LabelStyles}"
+                            SelectedItem="{Binding Call.SelectedLabelStyle}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:StudentLabelChoice">
+                        <TextBlock Text="{Binding Label}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding Call.HasGroups}">
+                  <TextBlock Classes="bodySmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="按小组叫：" />
+                  <ItemsControl ItemsSource="{Binding Call.Groups}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <WrapPanel />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <Button Classes="tonal small" Margin="0,0,6,0" Content="{Binding}"
+                                Command="{Binding $parent[ItemsControl].((vm:TeacherShellViewModel)DataContext).Call.PickGroupCommand}"
+                                CommandParameter="{Binding}" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+
+                <ItemsControl ItemsSource="{Binding Call.Students}" MaxHeight="320">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:StudentPickRow">
+                      <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,2">
+                        <CheckBox IsChecked="{Binding IsSelected}"
+                                  IsEnabled="{Binding IsSelectable}"
+                                  VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" Spacing="1" Margin="4,0,0,0">
+                          <TextBlock Classes="bodyMedium" Text="{Binding Display}" />
+                          <TextBlock Classes="bodySmall"
+                                     Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                     Text="{Binding Detail}" />
+                          <TextBlock Classes="bodySmall"
+                                     Foreground="{DynamicResource Md3.Error}"
+                                     Text="{Binding UnavailableHint}" />
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                  <Button Grid.Column="0" Classes="outlined" Content="清空选择"
+                          Command="{Binding Call.ClearPicksCommand}" />
+                  <Button Grid.Column="1" Classes="block" Content="呼叫"
+                          Command="{Binding Call.SendCallCommand}" />
+                </Grid>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding Call.StatusHint}" />
+              </StackPanel>
+            </md3:Md3Card>
+
           </StackPanel>
         </ScrollViewer>
 

@@ -1067,6 +1067,57 @@ internal static class Program
                 }, 430, 1500,
                 _ => null),
 
+            // 教师端「呼叫」页：模板 + 组件 + 拼装区 + 选学生。
+            // 都没有名单时整页只显示"先去导入名单"那一张卡，所以必须种一份。
+            new("teacher-call",
+                () =>
+                {
+                    var path = Path.Combine(LocalSettings.Directory, "teacher-rosters.json");
+                    var had = File.Exists(path);
+                    var backup = had ? File.ReadAllText(path) : null;
+
+                    try
+                    {
+                        var settings = new TeacherRosterSettings();
+                        var parsed = RosterCsv.Parse(
+                            "张三,20250101,小张,A组\n李四,20250102,,A组\n王五,,小五,B组\n赵六,20250105,六六,B组",
+                            "三年二班");
+
+                        if (parsed.Roster is { } roster)
+                        {
+                            settings.Rosters.Add(roster);
+                            settings.ActiveRosterId = roster.Id;
+                        }
+
+                        LocalSettings.SaveRosters(settings);
+
+                        var vm = new TeacherShellViewModel();
+                        vm.NavigateCallCommand.Execute(null);
+
+
+                        // 勾上一位学生，让预览那一行有内容可看
+                        var first = vm.Call.Students.FirstOrDefault();
+                        if (first is not null)
+                        {
+                            first.IsSelected = true;
+                        }
+
+                        return new TeacherView { DataContext = vm };
+                    }
+                    finally
+                    {
+                        if (had && backup is not null)
+                        {
+                            File.WriteAllText(path, backup);
+                        }
+                        else
+                        {
+                            File.Delete(path);
+                        }
+                    }
+                }, 430, 1700,
+                _ => null),
+
             // 教室端窗口自带尺寸，这里传 0 表示用窗口自己的
             new("classroom",
                 () => new ClassroomWindow { DataContext = new ClassroomViewModel() }, 0, 0,

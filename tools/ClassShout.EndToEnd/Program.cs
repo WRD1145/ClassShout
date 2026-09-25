@@ -33,6 +33,27 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        try
+        {
+            return await RunAsync(args);
+        }
+        catch (Exception ex)
+        {
+            // 回归工具自己崩掉时，最要紧的是把那句话打出来。
+            //
+            // 不包这一层的话，进程直接以 -532462766（未处理异常）退出，
+            // 而输出里只有一个退出码 —— 真正的原因（哪一条断言在等什么超时）
+            // 全都丢了，偏偏这类失败又往往是偶发的、不复现的。
+            Console.WriteLine();
+            Console.WriteLine($"回归工具自身出错：{ex.GetType().Name}：{ex.Message}");
+            Console.WriteLine(ex.StackTrace);
+
+            return 2;
+        }
+    }
+
+    private static async Task<int> RunAsync(string[] args)
+    {
 
         // 中继链路测试需要先自行启动中继服务器；不在这里拉进程，
         // 否则端口、启动时序、清理这些噪音会淹没"协议是否跑通"这个真正的问题。
@@ -209,7 +230,10 @@ internal static class Program
         // ---------- 3k. 学生名单 ----------
         AssertRosterParsing();
 
-        // ---------- 3l. 发送队列 ----------
+        // ---------- 3l. 组件式呼叫的拼装 ----------
+        AssertCallComposer();
+
+        // ---------- 3m. 发送队列 ----------
         await AssertShoutQueueAsync();
 
         // ---------- 4. 语音流 ----------
@@ -1632,6 +1656,130 @@ internal static class Program
         Check("空文本不会产出一份空名单",
             !RosterCsv.Parse("", "空").Ok && !RosterCsv.Parse(null, "空").Ok,
             "两次都返回了失败");
+    }
+
+    /// <summary>
+    /// 组件式呼叫的拼装。
+    ///
+    /// 两条规则各自都会"看起来对、其实不对"：
+    ///   · 组件之间**不加**自动空格 —— 空格由"文字"组件自己带，
+    ///     否则"张三" + "："会变成"张三 ："，标点前多一个空格；
+    ///   · 含"小组成员"时按组归并成一句，否则每个学生一条 ——
+    ///     老师一次叫三个人，教室里要的是"张三、李四 来办公室"这样一句，
+    ///     而不是连着闪三条几乎一样的喊话。
+    /// </summary>
+    private static void AssertCallComposer()
+    {
+        var roster = RosterCsv.Parse(
+            "张三,20250101,小张,A组\n李四,20250102,,A组\n王五,,小五,B组", "三年二班").Roster;
+
+        if (roster is null)
+        {
+            Check("呼叫拼装：名单能解析出来", false, "名单没解析出来，后面的断言无法进行");
+            return;
+        }
+
+        var zhangsan = roster.Students.First(s => s.Name == "张三");
+        var lisi = roster.Students.First(s => s.Name == "李四");
+        var wangwu = roster.Students.First(s => s.Name == "王五");
+
+        var perStudent = new CallTemplate
+        {
+            Components =
+            [
+                MessageComponent.Of(MessageComponentKinds.StudentName),
+                MessageComponent.Of(MessageComponentKinds.Text, " 来 "),
+                MessageComponent.Of(MessageComponentKinds.Teacher),
+                MessageComponent.Of(MessageComponentKinds.Text, " 办公室"),
+            ],
+        };
+
+        var single = CallComposer.Compose(perStudent, [zhangsan], roster, "数学张老师");
+
+        Check("逐学生拼装：姓名 + 文字 + 教师名",
+            single.Count == 1 && single[0] == "张三 来 数学张老师 办公室",
+            single.Count == 0 ? "没有输出" : single[0]);
+
+        var two = CallComposer.Compose(perStudent, [zhangsan, lisi], roster, "数学张老师");
+
+        Check("选了两位学生就发两条", two.Count == 2, $"共 {two.Count} 条");
+
+        Check("第二条对应第二位学生",
+            two.Count == 2 && two[1].StartsWith("李四", StringComparison.Ordinal),
+            two.Count == 2 ? two[1] : "(缺)");
+
+        // 标点紧贴：组件之间不加自动空格
+        var punctuated = new CallTemplate
+        {
+            Components =
+            [
+                MessageComponent.Of(MessageComponentKinds.StudentName),
+                MessageComponent.Of(MessageComponentKinds.Text, "：请到办公室"),
+            ],
+        };
+
+        var tight = CallComposer.Compose(punctuated, [zhangsan], roster, "数学张老师");
+
+        Check("组件之间不会自动加空格（标点要紧贴姓名）",
+            tight.Count == 1 && tight[0] == "张三：请到办公室",
+            tight.Count == 0 ? "没有输出" : tight[0]);
+
+        // 小组成员：按组归并，且列出**整组**的人
+        var groupTemplate = new CallTemplate
+        {
+            Components =
+            [
+                MessageComponent.Of(MessageComponentKinds.Text, "请 "),
+                MessageComponent.Of(MessageComponentKinds.Group),
+                MessageComponent.Of(MessageComponentKinds.Text, " 来 "),
+                MessageComponent.Of(MessageComponentKinds.Teacher),
+                MessageComponent.Of(MessageComponentKinds.Text, " 办公室"),
+            ],
+        };
+
+        var grouped = CallComposer.Compose(groupTemplate, [zhangsan], roster, "数学张老师");
+
+        Check("小组成员拼出整组的人（不只被勾上的那位）",
+            grouped.Count == 1 && grouped[0] == "请 张三、李四 来 数学张老师 办公室",
+            grouped.Count == 0 ? "没有输出" : grouped[0]);
+
+        // 同组的两位一起被勾上时只发一条
+        var sameGroup = CallComposer.Compose(groupTemplate, [zhangsan, lisi], roster, "数学张老师");
+        Check("同组两人只发一条（按小组归并）", sameGroup.Count == 1, $"共 {sameGroup.Count} 条");
+
+        // 不同组各一条
+        var twoGroups = CallComposer.Compose(groupTemplate, [zhangsan, wangwu], roster, "数学张老师");
+        Check("不同组各发一条", twoGroups.Count == 2, $"共 {twoGroups.Count} 条：{string.Join(" / ", twoGroups)}");
+
+        // 学号与简写组件
+        var byNo = new CallTemplate
+        {
+            Components =
+            [
+                MessageComponent.Of(MessageComponentKinds.StudentNo),
+                MessageComponent.Of(MessageComponentKinds.Text, " "),
+                MessageComponent.Of(MessageComponentKinds.StudentShort),
+            ],
+        };
+
+        var zhangNo = CallComposer.Compose(byNo, [zhangsan], roster, "数学张老师");
+        Check("学号与简写组件取到对应字段",
+            zhangNo.Count == 1 && zhangNo[0] == "20250101 小张",
+            zhangNo.Count == 0 ? "没有输出" : $"「{zhangNo[0]}」");
+
+        // 没填的字段输出空串，而不是"（空）"之类
+        var wangNo = CallComposer.Compose(byNo, [wangwu], roster, "数学张老师");
+        Check("学生没填的字段输出为空（不留占位）",
+            wangNo.Count == 1 && wangNo[0].Trim() == "小五",
+            wangNo.Count == 0 ? "没有输出" : $"「{wangNo[0]}」");
+
+        Check("没选学生时一句都不发",
+            CallComposer.Compose(perStudent, [], roster, "数学张老师").Count == 0,
+            "返回了空表");
+
+        Check("空模板一句都不发",
+            CallComposer.Compose(new CallTemplate(), [zhangsan], roster, "数学张老师").Count == 0,
+            "返回了空表");
     }
 
     /// <summary>

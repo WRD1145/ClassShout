@@ -140,6 +140,13 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         _rosterSettings = LocalSettings.LoadRosters();
         RefreshRosterStudents();
 
+        // 快速呼叫：模板与"选谁"都存本机；发出去仍然走当前那条链路
+        Call = new CallShoutViewModel(
+            LocalSettings.LoadCalls(),
+            _rosterSettings,
+            () => TeacherName,
+            SendCallMessagesAsync);
+
         // 定时通知：读盘、接管发送、开始按秒检查
         _scheduleSettings = LocalSettings.LoadSchedule();
         _scheduler = new ShoutScheduler(_scheduleSettings) { SendAsync = SendScheduledAsync };
@@ -178,6 +185,9 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     public TextShoutViewModel Text { get; }
 
     public VoiceShoutViewModel Voice { get; }
+
+    /// <summary>快速呼叫页：组件拼装 + 选学生 + 模板。</summary>
+    public CallShoutViewModel Call { get; }
 
     // ======================== 连接状态 ========================
 
@@ -636,6 +646,9 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(HasRosters));
         OnPropertyChanged(nameof(HasRosterStudents));
         OnPropertyChanged(nameof(RosterSummaryText));
+
+        // 名单换了，呼叫页的候选学生也跟着换
+        Call?.LoadStudents();
     }
 
     private bool HasRosterImportText => !string.IsNullOrWhiteSpace(RosterImportText);
@@ -708,6 +721,45 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         ActivePage = TeacherPage.Text;
         Text.Text = row.Student.Label;
+    }
+
+    /// <summary>
+    /// 把呼叫页拼出来的几句依次发出去，返回成功条数。
+    ///
+    /// 用的展示参数与「文字」页当前那一套相同 —— 呼叫页不另设一套，
+    /// 否则老师会看到"同一个应用里两条路发出去的字号不一样"。
+    /// </summary>
+    private async Task<int> SendCallMessagesAsync(IReadOnlyList<string> messages)
+    {
+        var sent = 0;
+
+        foreach (var text in messages)
+        {
+            var message = new TextShoutMessage
+            {
+                Text = text,
+                Rate = Text.Rate,
+                Volume = Text.Volume,
+                Display = Text.SelectedDisplay?.Value,
+                FontSize = Text.SelectedFontSize?.Value,
+                HoldMs = Text.SelectedHold?.Value ?? ShoutHoldDurations.Unspecified,
+                Speak = Text.Speak,
+            };
+
+            // 一条失败不打断其余：一次叫三位学生，不该因为第一位没发出去就全都不发
+            if (await _channel.SendTextAsync(message).ConfigureAwait(true))
+            {
+                sent++;
+                AddLog($"呼叫：{text}");
+            }
+            else
+            {
+                AddLog($"呼叫未发出：{text}");
+            }
+        }
+
+        ShowSnackbar(sent == messages.Count ? $"已呼叫 {sent} 条。" : $"发出 {sent}/{messages.Count} 条。");
+        return sent;
     }
 
     // ======================== 命令 ========================
