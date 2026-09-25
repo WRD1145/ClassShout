@@ -260,4 +260,11 @@ public static class LocalSettings
 
     public static bool SaveTeacherDisplay(TeacherDisplaySettings settings)
         => Save("teacher-display.json", settings);
+
+    /// <summary>定时喊话（还没发的任务 + 最近处理完的记录）。</summary>
+    public static TeacherScheduleSettings LoadSchedule()
+        => Load("teacher-schedule.json", static () => new TeacherScheduleSettings());
+
+    public static bool SaveSchedule(TeacherScheduleSettings settings)
+        => Save("teacher-schedule.json", settings);
 }

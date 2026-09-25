@@ -200,7 +200,10 @@ internal static class Program
         // ---------- 3h. 一次喊话的展示参数 ----------
         AssertShoutDisplayPlan();
 
-        // ---------- 3i. 发送队列 ----------
+        // ---------- 3i. 定时通知 ----------
+        await AssertSchedulerAsync();
+
+        // ---------- 3j. 发送队列 ----------
         await AssertShoutQueueAsync();
 
         // ---------- 4. 语音流 ----------
@@ -1324,6 +1327,89 @@ internal static class Program
         Check("服务器地址能落盘再读回来",
             back.RecentClassrooms.Count == 1 && back.RecentClassrooms[0].ServerUrl == "https://relay.example.com",
             back.RecentClassrooms.Count == 0 ? "读回来是空的" : $"地址={back.RecentClassrooms[0].ServerUrl ?? "(丢失)"}");
+    }
+
+    /// <summary>
+    /// 定时通知：到点的发、没到的不发、过期太久的不补发、发过的不重复发。
+    ///
+    /// 这四条里最要紧的是最后两条。补发一条"下课前五分钟提醒交作业"，
+    /// 会在下一节课上突然喊一句不着边际的话；而重复发则是同一条提醒响两遍 ——
+    /// 两者都不会报错，只会让教室里的人觉得这软件坏了。
+    /// </summary>
+    private static async Task AssertSchedulerAsync()
+    {
+        var settings = new TeacherScheduleSettings();
+        var now = DateTimeOffset.Now;
+
+        var due = new ScheduledShout { SendAt = now.AddSeconds(-5), Text = "到点了" };
+        var future = new ScheduledShout { SendAt = now.AddMinutes(10), Text = "还没到" };
+        var missed = new ScheduledShout { SendAt = now.AddHours(-2), Text = "早就过了" };
+
+        settings.Add(future);
+        settings.Add(missed);
+        settings.Add(due);
+
+        Check("待发列表按时间排好序",
+            settings.Items.Select(i => i.Text).SequenceEqual(["早就过了", "到点了", "还没到"]),
+            string.Join(" → ", settings.Items.Select(i => i.Text)));
+
+        var sent = new List<string>();
+
+        // 构造时会自己扫一遍"过期"（sendDue: false），所以我们传进去的三个任务里
+        // 那条早就过期的会被立刻标成错过 —— 这正是应用启动时该发生的事。
+        using var scheduler = new ShoutScheduler(settings)
+        {
+            SendAsync = item =>
+            {
+                lock (sent)
+                {
+                    sent.Add(item.Text);
+                }
+
+                return Task.FromResult<(bool, string?)>((true, "已发"));
+            },
+        };
+
+        Check("启动时就把过期太久的标成错过，且不补发",
+            settings.History.Any(i => i.Text == "早就过了") && !sent.Contains("早就过了"),
+            $"历史里 {settings.History.Count} 条，已发 {sent.Count} 条");
+
+        scheduler.Sweep(now);
+        await Task.Delay(400);
+
+        Check("到点的任务被发出去", sent.Contains("到点了"),
+            sent.Count == 0 ? "一条都没发" : string.Join("、", sent));
+
+        Check("还没到的不发", !sent.Contains("还没到"), "未来那条仍在待发列表");
+
+        Check("发出去的任务移进历史", settings.History.Any(i => i.Text == "到点了"),
+            $"历史 {settings.History.Count} 条，待发 {settings.Items.Count} 条");
+
+        // 再扫一遍：发过的不该再发一次
+        scheduler.Sweep(now.AddSeconds(1));
+        await Task.Delay(300);
+
+        Check("已经发过的不重复发",
+            sent.Count(text => text == "到点了") == 1,
+            $"「到点了」发了 {sent.Count(text => text == "到点了")} 次");
+
+        // 取消掉的任务也不再发
+        var cancelled = new ScheduledShout { SendAt = now.AddSeconds(-1), Text = "已取消", Cancelled = true };
+        settings.Add(cancelled);
+        scheduler.Sweep(now.AddSeconds(1));
+        await Task.Delay(300);
+
+        Check("取消掉的任务不会发", !sent.Contains("已取消"), "已取消的那条没发出去");
+
+        // 上限：列表不会无限长
+        for (var i = 0; i < TeacherScheduleSettings.MaxItems + 5; i++)
+        {
+            settings.Add(new ScheduledShout { SendAt = now.AddHours(i + 1), Text = $"第 {i} 条" });
+        }
+
+        Check($"待发最多保留 {TeacherScheduleSettings.MaxItems} 条",
+            settings.Items.Count <= TeacherScheduleSettings.MaxItems,
+            $"{settings.Items.Count} 条");
     }
 
     /// <summary>

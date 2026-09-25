@@ -278,6 +278,73 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!-- 定时通知：把当前这条排到某个时间自动发出去。
+                 可靠性边界写在卡片上，而不是只写在文档里 ——
+                 老师会照着界面上的字去预期行为。 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="12">
+                <TextBlock Classes="cardTitle" Text="定时通知" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding ScheduleHintText}" />
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                  <StackPanel Spacing="4">
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="日期" />
+                    <DatePicker HorizontalAlignment="Stretch" SelectedDate="{Binding ScheduleDate}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="时间" />
+                    <TimePicker HorizontalAlignment="Stretch" SelectedTime="{Binding ScheduleTime}" />
+                  </StackPanel>
+                </Grid>
+
+                <Button Classes="tonal block" HorizontalContentAlignment="Center"
+                        Command="{Binding ScheduleShoutCommand}">
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                    <md3:Md3Icon Kind="ClockPlusOutline" Size="18" />
+                    <TextBlock Text="把这条排进定时" VerticalAlignment="Center" />
+                  </StackPanel>
+                </Button>
+
+                <StackPanel Spacing="6" IsVisible="{Binding HasScheduledShouts}">
+                  <TextBlock Classes="bodySmall"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="待发送" />
+                  <ItemsControl ItemsSource="{Binding ScheduledShouts}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:ScheduledShoutItem">
+                        <Border CornerRadius="10" Margin="0,0,0,6" Padding="10"
+                                Background="{DynamicResource Md3.SurfaceContainerHigh}">
+                          <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="2">
+                              <TextBlock Classes="bodyMedium" Text="{Binding TimeText}" />
+                              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                                         Text="{Binding SummaryText}" />
+                              <TextBlock Classes="bodySmall"
+                                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                         Text="{Binding TargetText, StringFormat='发给：{0}'}" />
+                              <TextBlock Classes="bodySmall"
+                                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                         Text="{Binding DisplayText}" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Classes="text small" Content="取消"
+                                    VerticalAlignment="Center"
+                                    Command="{Binding CancelCommand}" />
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </StackPanel>
+            </md3:Md3Card>
+
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="12">
                 <TextBlock Classes="cardTitle" Text="朗读参数（教室端生效）" />

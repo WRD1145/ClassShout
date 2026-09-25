@@ -128,6 +128,24 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 应该是"我上次用的那间教室在这儿"，而不是一个空列表。
         RefreshSavedClassrooms();
 
+        // 定时通知：读盘、接管发送、开始按秒检查
+        _scheduleSettings = LocalSettings.LoadSchedule();
+        _scheduler = new ShoutScheduler(_scheduleSettings) { SendAsync = SendScheduledAsync };
+        _scheduler.Handled += result => Post(() =>
+        {
+            RefreshScheduledShouts();
+            LocalSettings.SaveSchedule(_scheduleSettings);
+
+            if (result.Message is { Length: > 0 } message)
+            {
+                AddLog(message);
+                ShowSnackbar(message);
+            }
+        });
+
+        RefreshScheduledShouts();
+        _scheduler.Start();
+
         // 用本地令牌尝试恢复登录；失败也只是回到未登录，不阻塞界面
         _ = RestoreSessionAsync();
     }
@@ -239,6 +257,166 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
                 // 被新的提示顶掉属于正常流程
             }
         });
+    }
+
+    // ======================== 定时通知 ========================
+    //
+    // 关于可靠性有一条必须写在界面上、也写在这里的边界：
+    // **只有在应用运行时才会到点发送**。老师把应用彻底关掉之后，到点不会有人替他发 ——
+    // 这是本地定时的固有边界，要做"关掉也能发"得让服务器来担这件事。
+    // 正因为如此，错过太久（超过三分钟）的任务不会被补发，只标出来给老师看：
+    // "下课前五分钟提醒交作业"在过期之后已经没有意义了。
+
+    private readonly TeacherScheduleSettings _scheduleSettings;
+    private readonly ShoutScheduler _scheduler;
+
+    public ObservableCollection<ScheduledShoutItem> ScheduledShouts { get; } = [];
+
+    /// <summary>要发的那一天。</summary>
+    [ObservableProperty]
+    private DateTimeOffset? _scheduleDate = DateTimeOffset.Now.AddHours(1);
+
+    /// <summary>要发的那一刻。</summary>
+    [ObservableProperty]
+    private TimeSpan? _scheduleTime = DateTimeOffset.Now.AddHours(1).TimeOfDay;
+
+    public bool HasScheduledShouts => ScheduledShouts.Count > 0;
+
+    public string ScheduleHintText
+    {
+        get
+        {
+            var count = ScheduledShouts.Count;
+            var head = count == 0
+                ? "设好时间，到点自动把这条发出去。"
+                : $"还有 {count} 条没发。";
+
+            return head + "注意：只有在应用运行时才会到点发送；错过的（超过三分钟）不会补发。";
+        }
+    }
+
+    /// <summary>把当前输入的这一条排进定时队列。</summary>
+    [RelayCommand]
+    private void ScheduleShout()
+    {
+        var text = Text.Text?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            ShowSnackbar("先写点要说的内容，再排定时。");
+            return;
+        }
+
+        if (Text.HasImage)
+        {
+            // 图片多发意味着同一张图对着每个班各传一遍，而定时任务可能存好几天 ——
+            // 那些字节要一直留在配置文件里。先只支持文字，等真有需要再说。
+            ShowSnackbar("定时暂不支持带图片的喊话，请先移除图片。");
+            return;
+        }
+
+        if (ScheduleDate is not { } date || ScheduleTime is not { } time)
+        {
+            ShowSnackbar("请选择要发送的日期与时间。");
+            return;
+        }
+
+        var sendAt = new DateTimeOffset(date.Date.Add(time), DateTimeOffset.Now.Offset);
+
+        if (sendAt <= DateTimeOffset.Now)
+        {
+            ShowSnackbar("这个时间已经过去了，请选一个将来的时间。");
+            return;
+        }
+
+        var item = new ScheduledShout
+        {
+            SendAt = sendAt,
+            Text = text,
+            Display = Text.SelectedDisplay?.Value,
+            FontSize = Text.SelectedFontSize?.Value,
+            HoldMs = Text.SelectedHold?.Value ?? ShoutHoldDurations.Unspecified,
+            Speak = Text.Speak,
+            TargetUuids = Text.Targets.Where(t => t.IsSelected).Select(t => t.Uuid).ToList(),
+        };
+
+        _scheduleSettings.Add(item);
+        LocalSettings.SaveSchedule(_scheduleSettings);
+        RefreshScheduledShouts();
+
+        AddLog($"已排定 {item.TimeText} 发送：「{item.SummaryText}」");
+        ShowSnackbar($"已排定 {item.TimeText} 自动发送。");
+    }
+
+    [RelayCommand]
+    private void CancelSchedule(ScheduledShoutItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        item.Record.Cancelled = true;
+        _scheduleSettings.MoveToHistory(item.Record);
+        LocalSettings.SaveSchedule(_scheduleSettings);
+        RefreshScheduledShouts();
+
+        AddLog($"已取消 {item.Record.TimeText} 的定时喊话。");
+    }
+
+    /// <summary>把待发列表读进界面。</summary>
+    private void RefreshScheduledShouts()
+    {
+        ScheduledShouts.Clear();
+
+        foreach (var record in _scheduleSettings.Items.OrderBy(i => i.SendAt))
+        {
+            ScheduledShouts.Add(new ScheduledShoutItem(record, CancelSchedule));
+        }
+
+        OnPropertyChanged(nameof(HasScheduledShouts));
+        OnPropertyChanged(nameof(ScheduleHintText));
+    }
+
+    /// <summary>
+    /// 真正把一条定时任务发出去。
+    ///
+    /// 目标在创建时就固定了：老师上午排的任务，下午早就把绑定的班级换过好几轮，
+    /// 而他要的是"发给当时选的那几个班"。
+    /// </summary>
+    private async Task<(bool Ok, string? Message)> SendScheduledAsync(ScheduledShout item)
+    {
+        var message = new TextShoutMessage
+        {
+            Text = item.Text,
+            Rate = Text.Rate,
+            Volume = Text.Volume,
+            Display = item.Display,
+            FontSize = item.FontSize,
+            HoldMs = item.HoldMs,
+            Speak = item.Speak,
+        };
+
+        var targets = item.TargetUuids
+            .Select(uuid => _relaySettings.RecentClassrooms
+                .FirstOrDefault(record => string.Equals(record.Uuid, uuid, StringComparison.OrdinalIgnoreCase)))
+            .OfType<BoundClassroom>()
+            .ToList();
+
+        // 目标都还在（没被移除）且不止一间 → 逐个经中继发；
+        // 否则退回"当前链路" —— 这是老师按下发送按钮时会走的那条路。
+        if (targets.Count > 1)
+        {
+            var results = await _broadcaster.SendTextAsync(targets, message, TeacherName).ConfigureAwait(true);
+            var sent = results.Count(r => r.Ok);
+
+            return sent > 0
+                ? (true, $"定时喊话已发给 {sent} 个班级。")
+                : (false, "定时喊话一条都没发出去。");
+        }
+
+        var ok = await _channel.SendTextAsync(message).ConfigureAwait(true);
+        return ok ? (true, "定时喊话已发出。") : (false, "定时喊话没能发出（当前没有可用的链路）。");
     }
 
     // ======================== 命令 ========================
@@ -1426,6 +1604,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         _snackbarCts?.Cancel();
         _snackbarCts?.Dispose();
 
+        // 定时器要停掉：它内部持着一个按秒跑的 DispatcherTimer，
+        // 应用退出后还留着只会让它在已经关掉的界面上继续排队。
+        _scheduler.Dispose();
+
         Voice.Dispose();
 
         // 两条链路都要拆：可能只连了其中一个，也可能两个都在
@@ -1439,6 +1621,41 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         await _channel.DisposeAsync().ConfigureAwait(false);
     }
+}
+
+/// <summary>
+/// 一条「已排定的定时喊话」。
+///
+/// 命令挂在条目自己身上，XAML 模板里就不必写父级转换绑定。
+/// </summary>
+public sealed class ScheduledShoutItem
+{
+    public ScheduledShoutItem(ScheduledShout record, Action<ScheduledShoutItem> cancel)
+    {
+        Record = record;
+        CancelCommand = new RelayCommand(() => cancel(this));
+    }
+
+    public ScheduledShout Record { get; }
+
+    public string TimeText => Record.TimeText;
+
+    public string SummaryText => Record.SummaryText;
+
+    /// <summary>发给谁：把 UUID 换成教室名，找不到的说明记录已被移除。</summary>
+    public string TargetText => Record.TargetUuids.Count switch
+    {
+        0 => "当前绑定的教室",
+        1 => "1 个班级",
+        _ => $"{Record.TargetUuids.Count} 个班级",
+    };
+
+    /// <summary>展示参数的摘要，和即时喊话用的是同一套档位。</summary>
+    public string DisplayText =>
+        $"{ShoutFontSizes.Label(Record.FontSize)}字 · {ShoutHoldDurations.Label(Record.HoldMs)}"
+        + (Record.Speak ? " · 朗读" : " · 不朗读");
+
+    public IRelayCommand CancelCommand { get; }
 }
 
 /// <summary>
