@@ -267,4 +267,11 @@ public static class LocalSettings
 
     public static bool SaveSchedule(TeacherScheduleSettings settings)
         => Save("teacher-schedule.json", settings);
+
+    /// <summary>学生名单（可以有好几份）与"我正在叫谁"。</summary>
+    public static TeacherRosterSettings LoadRosters()
+        => Load("teacher-rosters.json", static () => new TeacherRosterSettings());
+
+    public static bool SaveRosters(TeacherRosterSettings settings)
+        => Save("teacher-rosters.json", settings);
 }

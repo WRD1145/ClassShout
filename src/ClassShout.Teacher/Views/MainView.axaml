@@ -3,6 +3,7 @@
              xmlns:md3="using:ClassShout.Design.Controls"
              xmlns:vm="using:ClassShout.Teacher.ViewModels"
              xmlns:proto="using:ClassShout.Core.Protocol"
+             xmlns:remote="using:ClassShout.Core.Remote"
              x:Class="ClassShout.Teacher.Views.MainView"
              x:DataType="vm:TeacherShellViewModel"
              Background="{DynamicResource Md3.Surface}">
@@ -126,6 +127,118 @@
       <Panel Grid.Row="2">
 
         <!-- ······ 文字喊话 ······ -->
+        <!-- ==================== 学生名单 ==================== -->
+        <ScrollViewer IsVisible="{Binding IsStudentsPage}">
+          <StackPanel Margin="20,18" Spacing="18">
+
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="学生名单" Margin="0" />
+                  <TextBlock Grid.Column="1" Classes="bodySmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding RosterSummaryText}" />
+                </Grid>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="名单只存这台设备上 —— 它是你自己的备课资料，没有必要传到服务器上去。" />
+
+                <ComboBox HorizontalAlignment="Stretch"
+                          IsVisible="{Binding HasRosters}"
+                          ItemsSource="{Binding Rosters}"
+                          SelectedItem="{Binding ActiveRoster}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="remote:StudentRoster">
+                      <TextBlock Text="{Binding Name}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasRosters}">
+                  <Button Classes="outlined small" Content="删除这份名单"
+                          Command="{Binding DeleteRosterCommand}" />
+                </StackPanel>
+              </StackPanel>
+            </md3:Md3Card>
+
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="cardTitle" Text="导入名单" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="每行一位学生：姓名,学号,简写,小组 —— 只有姓名是必填，后面三项留空就行。可以直接从 Excel 里复制粘贴，带表头也没关系。" />
+
+                <TextBox Classes="outlined dense"
+                         Watermark="这份名单叫什么（例如 三年二班）"
+                         Text="{Binding RosterImportName}" />
+
+                <TextBox Classes="outlined"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         MinHeight="140"
+                         MaxHeight="240"
+                         Watermark="张三,20250101,小张,A组&#x0a;李四,20250102,,B组&#x0a;王五"
+                         Text="{Binding RosterImportText}" />
+
+                <Button Classes="tonal block" Content="导入"
+                        Command="{Binding ImportRosterCommand}" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding RosterHint}" />
+              </StackPanel>
+            </md3:Md3Card>
+
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding HasRosterStudents}">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="cardTitle" Text="名单里的学生" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="点「叫这位」会把他填进「文字」页。要一次叫好几位，去「呼叫」页。" />
+
+                <ItemsControl ItemsSource="{Binding RosterStudents}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:StudentRow">
+                      <Border CornerRadius="10" Margin="0,0,0,6" Padding="10"
+                              Background="{DynamicResource Md3.SurfaceContainerHigh}">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <StackPanel Spacing="2">
+                            <TextBlock Classes="bodyMedium" Text="{Binding Label}" />
+                            <TextBlock Classes="bodySmall"
+                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                       Text="{Binding GroupText, StringFormat='小组：{0}'}" />
+                          </StackPanel>
+                          <Button Grid.Column="1" Classes="tonal small" Content="叫这位"
+                                  VerticalAlignment="Center"
+                                  Command="{Binding UseCommand}" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </md3:Md3Card>
+
+          </StackPanel>
+        </ScrollViewer>
+
+        <!-- ==================== 快速呼叫 ==================== -->
+        <ScrollViewer IsVisible="{Binding IsCallPage}">
+          <StackPanel Margin="20,18" Spacing="18">
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="8">
+                <TextBlock Classes="cardTitle" Text="快速呼叫" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="正在搭建中：这里会用组件拼出要喊的话（学生姓名 / 学号 / 简写 / 小组成员 / 固定文字），选好学生一次发出去。名单请先在「名单」页导入。" />
+              </StackPanel>
+            </md3:Md3Card>
+          </StackPanel>
+        </ScrollViewer>
+
         <ScrollViewer IsVisible="{Binding IsTextPage}">
           <StackPanel Margin="20,18" Spacing="18">
 
@@ -904,7 +1017,7 @@
 
       <!-- ==================== 底部导航 ==================== -->
       <Border Grid.Row="3" Background="{DynamicResource Md3.SurfaceContainer}" Padding="10,4">
-        <Grid ColumnDefinitions="*,*,*">
+        <Grid ColumnDefinitions="*,*,*,*,*">
           <RadioButton Grid.Column="0" Theme="{StaticResource Md3NavItem}"
                        GroupName="Md3Nav" Tag="文字"
                        IsChecked="{Binding IsTextPage, Mode=OneWay}"
@@ -918,6 +1031,18 @@
             <md3:Md3Icon Kind="Microphone" Size="24" />
           </RadioButton>
           <RadioButton Grid.Column="2" Theme="{StaticResource Md3NavItem}"
+                       GroupName="Md3Nav" Tag="名单"
+                       IsChecked="{Binding IsStudentsPage, Mode=OneWay}"
+                       Command="{Binding NavigateStudentsCommand}">
+            <md3:Md3Icon Kind="AccountMultiple" Size="24" />
+          </RadioButton>
+          <RadioButton Grid.Column="3" Theme="{StaticResource Md3NavItem}"
+                       GroupName="Md3Nav" Tag="呼叫"
+                       IsChecked="{Binding IsCallPage, Mode=OneWay}"
+                       Command="{Binding NavigateCallCommand}">
+            <md3:Md3Icon Kind="Bullhorn" Size="24" />
+          </RadioButton>
+          <RadioButton Grid.Column="4" Theme="{StaticResource Md3NavItem}"
                        GroupName="Md3Nav" Tag="设备"
                        IsChecked="{Binding IsDevicesPage, Mode=OneWay}"
                        Command="{Binding NavigateDevicesCommand}">

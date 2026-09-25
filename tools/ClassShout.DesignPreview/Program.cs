@@ -1024,6 +1024,49 @@ internal static class Program
                 }, 430, 1750,
                 _ => null),
 
+            // 教师端「名单」页：导入区 + 名单里的学生。
+            // 空名单时那一块整块不显示，所以必须种一份数据才画得出来。
+            new("teacher-students",
+                () =>
+                {
+                    var path = Path.Combine(LocalSettings.Directory, "teacher-rosters.json");
+                    var had = File.Exists(path);
+                    var backup = had ? File.ReadAllText(path) : null;
+
+                    try
+                    {
+                        var settings = new TeacherRosterSettings();
+                        var parsed = RosterCsv.Parse(
+                            "张三,20250101,小张,A组\n李四,20250102,,B组\n王五\n赵六,20250105,六六,A组",
+                            "三年二班");
+
+                        if (parsed.Roster is { } roster)
+                        {
+                            settings.Rosters.Add(roster);
+                            settings.ActiveRosterId = roster.Id;
+                        }
+
+                        LocalSettings.SaveRosters(settings);
+
+                        var vm = new TeacherShellViewModel();
+                        vm.NavigateStudentsCommand.Execute(null);
+
+                        return new TeacherView { DataContext = vm };
+                    }
+                    finally
+                    {
+                        if (had && backup is not null)
+                        {
+                            File.WriteAllText(path, backup);
+                        }
+                        else
+                        {
+                            File.Delete(path);
+                        }
+                    }
+                }, 430, 1500,
+                _ => null),
+
             // 教室端窗口自带尺寸，这里传 0 表示用窗口自己的
             new("classroom",
                 () => new ClassroomWindow { DataContext = new ClassroomViewModel() }, 0, 0,

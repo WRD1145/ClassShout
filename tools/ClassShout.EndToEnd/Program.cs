@@ -206,7 +206,10 @@ internal static class Program
         // ---------- 3j. 分享链接的解析 ----------
         AssertShareLinkParsing();
 
-        // ---------- 3k. 发送队列 ----------
+        // ---------- 3k. 学生名单 ----------
+        AssertRosterParsing();
+
+        // ---------- 3l. 发送队列 ----------
         await AssertShoutQueueAsync();
 
         // ---------- 4. 语音流 ----------
@@ -1571,6 +1574,64 @@ internal static class Program
         Check($"待发最多保留 {TeacherScheduleSettings.MaxItems} 条",
             settings.Items.Count <= TeacherScheduleSettings.MaxItems,
             $"{settings.Items.Count} 条");
+    }
+
+    /// <summary>
+    /// 学生名单的导入与标识格式。
+    ///
+    /// 名单是老师从教务系统导出、或在 Excel 里手打的一份表，
+    /// 所以解析必须宽容（表头、空行、注释、只有姓名）。
+    /// 而"名字（学号，简写，小组）"这个格式是给学生看的 ——
+    /// 没填的字段不能留下空括号，否则教室里那块屏上会满屏是括号。
+    /// </summary>
+    private static void AssertRosterParsing()
+    {
+        const string input = """
+            姓名,学号,简写,小组
+            张三,20250101,小张,A组
+            李四,20250102,,B组
+            王五
+            ,20250104,,
+            # 这是注释
+            赵六,20250105,六六,
+            """;
+
+        var result = RosterCsv.Parse(input, "三年二班");
+
+        Check("名单能解析出来", result.Ok, result.Roster is null ? "没解析出名单" : $"{result.Roster.Students.Count} 名学生");
+
+        var students = result.Roster?.Students ?? [];
+
+        Check("表头与注释行不计入学生", students.Count == 4, $"共 {students.Count} 人：{string.Join("、", students.Select(s => s.Name))}");
+
+        Check("没有姓名的行被跳过并说明原因",
+            result.SkippedLines.Any(line => line.Contains("姓名", StringComparison.Ordinal)),
+            result.SkippedLines.Count == 0 ? "没有任何跳过说明" : result.SkippedLines[0]);
+
+        Check("只有姓名的行也能导入",
+            students.Any(student => student.Name == "王五"),
+            "王五在名单里");
+
+        Check("标识格式是 姓名（学号，简写，小组）",
+            students.FirstOrDefault(s => s.Name == "张三")?.Label == "张三（20250101，小张，A组）",
+            students.FirstOrDefault(s => s.Name == "张三")?.Label ?? "(缺)");
+
+        Check("只填了小组时也带上括号",
+            students.FirstOrDefault(s => s.Name == "李四")?.Label == "李四（20250102，B组）",
+            students.FirstOrDefault(s => s.Name == "李四")?.Label ?? "(缺)");
+
+        Check("没填的可选字段不留空括号",
+            students.FirstOrDefault(s => s.Name == "王五")?.Label == "王五",
+            students.FirstOrDefault(s => s.Name == "王五")?.Label ?? "(缺)");
+
+        Check("小组去重后按出现顺序列出",
+            (result.Roster?.Groups ?? []).SequenceEqual(["A组", "B组"]),
+            string.Join("、", result.Roster?.Groups ?? []));
+
+        // 空输入不能崩，也不能产出一份空名单
+        Check("空文本不会产出一份空名单",
+            !RosterCsv.Parse("", "空").Ok && !RosterCsv.Parse(null, "空").Ok,
+            "两次都返回了失败");
     }
 
     /// <summary>

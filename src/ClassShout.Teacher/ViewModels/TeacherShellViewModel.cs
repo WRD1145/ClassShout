@@ -19,11 +19,19 @@ internal static class RelayJsonOptions
     public static readonly JsonSerializerOptions Value = new(JsonSerializerDefaults.Web);
 }
 
-/// <summary>底部导航的三个页面。</summary>
+/// <summary>底部导航的页面。</summary>
 public enum TeacherPage
 {
     Text,
+
     Voice,
+
+    /// <summary>学生名单：导入、查看、改名、删除。</summary>
+    Students,
+
+    /// <summary>快速呼叫：组件拼装 + 选学生 + 模板。</summary>
+    Call,
+
     Devices,
 }
 
@@ -128,6 +136,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 应该是"我上次用的那间教室在这儿"，而不是一个空列表。
         RefreshSavedClassrooms();
 
+        // 学生名单：本机资料，读进来就能用
+        _rosterSettings = LocalSettings.LoadRosters();
+        RefreshRosterStudents();
+
         // 定时通知：读盘、接管发送、开始按秒检查
         _scheduleSettings = LocalSettings.LoadSchedule();
         _scheduler = new ShoutScheduler(_scheduleSettings) { SendAsync = SendScheduledAsync };
@@ -189,12 +201,16 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     // ======================== 导航 ========================
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsTextPage), nameof(IsVoicePage), nameof(IsDevicesPage))]
+    [NotifyPropertyChangedFor(nameof(IsTextPage), nameof(IsVoicePage), nameof(IsStudentsPage), nameof(IsCallPage), nameof(IsDevicesPage))]
     private TeacherPage _activePage = TeacherPage.Text;
 
     public bool IsTextPage => ActivePage == TeacherPage.Text;
 
     public bool IsVoicePage => ActivePage == TeacherPage.Voice;
+
+    public bool IsStudentsPage => ActivePage == TeacherPage.Students;
+
+    public bool IsCallPage => ActivePage == TeacherPage.Call;
 
     public bool IsDevicesPage => ActivePage == TeacherPage.Devices;
 
@@ -544,6 +560,156 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    // ======================== 学生名单 ========================
+    //
+    // 名单存在本机：它是老师自己的备课资料（从教务系统导出、或在 Excel 里手打的一份表），
+    // 不该被传到服务器上去 —— 服务器只需要知道"某间教室收到了什么"，
+    // 没有任何理由持有一整份学生名册。
+
+    private readonly TeacherRosterSettings _rosterSettings;
+
+    /// <summary>当前名单里的学生，界面直接绑它。</summary>
+    public ObservableCollection<StudentRow> RosterStudents { get; } = [];
+
+    /// <summary>所有名单（一位老师通常教好几个班）。</summary>
+    public ObservableCollection<StudentRoster> Rosters { get; } = [];
+
+    /// <summary>导入时粘贴的那一大段文本。</summary>
+    [ObservableProperty]
+    private string _rosterImportText = string.Empty;
+
+    /// <summary>这份名单叫什么，例如"三年二班"。</summary>
+    [ObservableProperty]
+    private string _rosterImportName = string.Empty;
+
+    [ObservableProperty]
+    private string _rosterHint = string.Empty;
+
+    /// <summary>选中的名单。</summary>
+    public StudentRoster? ActiveRoster
+    {
+        get => _rosterSettings.Active;
+        set
+        {
+            if (value is null || _rosterSettings.ActiveRosterId == value.Id)
+            {
+                return;
+            }
+
+            _rosterSettings.ActiveRosterId = value.Id;
+            LocalSettings.SaveRosters(_rosterSettings);
+
+            OnPropertyChanged();
+            RefreshRosterStudents();
+        }
+    }
+
+    public bool HasRosters => Rosters.Count > 0;
+
+    public bool HasRosterStudents => RosterStudents.Count > 0;
+
+    public string RosterSummaryText => ActiveRoster is { } roster
+        ? $"{roster.Name} · {roster.Students.Count} 名学生"
+        : "还没有名单";
+
+    /// <summary>把当前名单读进界面。</summary>
+    private void RefreshRosterStudents()
+    {
+        Rosters.Clear();
+
+        foreach (var roster in _rosterSettings.Rosters)
+        {
+            Rosters.Add(roster);
+        }
+
+        RosterStudents.Clear();
+
+        if (ActiveRoster is { } active)
+        {
+            foreach (var student in active.Students)
+            {
+                RosterStudents.Add(new StudentRow(student, UseStudent));
+            }
+        }
+
+        OnPropertyChanged(nameof(ActiveRoster));
+        OnPropertyChanged(nameof(HasRosters));
+        OnPropertyChanged(nameof(HasRosterStudents));
+        OnPropertyChanged(nameof(RosterSummaryText));
+    }
+
+    private bool HasRosterImportText => !string.IsNullOrWhiteSpace(RosterImportText);
+
+    partial void OnRosterImportTextChanged(string value) => ImportRosterCommand.NotifyCanExecuteChanged();
+
+    [RelayCommand(CanExecute = nameof(HasRosterImportText))]
+    private void ImportRoster()
+    {
+        var name = string.IsNullOrWhiteSpace(RosterImportName)
+            ? $"名单 {DateTime.Now:MM-dd HH:mm}"
+            : RosterImportName.Trim();
+
+        var result = RosterCsv.Parse(RosterImportText, name);
+
+        if (!result.Ok || result.Roster is null)
+        {
+            RosterHint = result.SkippedLines.Count > 0
+                ? string.Join(" ", result.SkippedLines)
+                : "没有读到任何学生。每行格式：姓名,学号,简写,小组（后三项可留空）。";
+
+            return;
+        }
+
+        _rosterSettings.Rosters.Add(result.Roster);
+        _rosterSettings.ActiveRosterId = result.Roster.Id;
+        LocalSettings.SaveRosters(_rosterSettings);
+
+        RosterImportText = string.Empty;
+        RosterImportName = string.Empty;
+
+        var skipped = result.SkippedLines.Count == 0
+            ? string.Empty
+            : $"（跳过 {result.SkippedLines.Count} 行：{string.Join(" ", result.SkippedLines)}）";
+
+        RosterHint = $"已导入「{result.Roster.Name}」，共 {result.Roster.Students.Count} 名学生。{skipped}";
+        AddLog(RosterHint);
+
+        RefreshRosterStudents();
+    }
+
+    /// <summary>删除当前名单。</summary>
+    [RelayCommand]
+    private void DeleteRoster()
+    {
+        if (ActiveRoster is not { } roster)
+        {
+            return;
+        }
+
+        _rosterSettings.Rosters.Remove(roster);
+        _rosterSettings.ActiveRosterId = _rosterSettings.Rosters.FirstOrDefault()?.Id;
+        _rosterSettings.SelectedStudentIds.Clear();
+        LocalSettings.SaveRosters(_rosterSettings);
+
+        RosterHint = $"已删除名单「{roster.Name}」。";
+        AddLog(RosterHint);
+
+        RefreshRosterStudents();
+    }
+
+    /// <summary>把一位学生填进文字页 —— 最直接的"呼叫"方式。</summary>
+    [RelayCommand]
+    private void UseStudent(StudentRow? row)
+    {
+        if (row is null)
+        {
+            return;
+        }
+
+        ActivePage = TeacherPage.Text;
+        Text.Text = row.Student.Label;
+    }
+
     // ======================== 命令 ========================
 
     [RelayCommand]
@@ -557,6 +723,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     [RelayCommand]
     private void NavigateVoice() => ActivePage = TeacherPage.Voice;
+
+    [RelayCommand]
+    private void NavigateStudents() => ActivePage = TeacherPage.Students;
+
+    [RelayCommand]
+    private void NavigateCall() => ActivePage = TeacherPage.Call;
 
     [RelayCommand]
     private void NavigateDevices() => ActivePage = TeacherPage.Devices;
@@ -1750,6 +1922,35 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         await _channel.DisposeAsync().ConfigureAwait(false);
     }
+}
+
+/// <summary>
+/// 名单里的一位学生。
+///
+/// 命令挂在条目自己身上（和别处一样），XAML 模板里就不必写父级转换绑定。
+/// </summary>
+public sealed class StudentRow
+{
+    public StudentRow(Student student, Action<StudentRow>? use = null)
+    {
+        Student = student;
+        UseCommand = new RelayCommand(() => use?.Invoke(this));
+    }
+
+    public Student Student { get; }
+
+    public string Name => Student.Name;
+
+    /// <summary>喊话里用的完整标识：姓名（学号，简写，小组）。</summary>
+    public string Label => Student.Label;
+
+    public string StudentNoText => Student.HasStudentNo ? Student.StudentNo! : "—";
+
+    public string ShortNameText => Student.HasShortName ? Student.ShortName! : "—";
+
+    public string GroupText => Student.HasGroup ? Student.Group! : "—";
+
+    public IRelayCommand UseCommand { get; }
 }
 
 /// <summary>
