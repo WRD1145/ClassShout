@@ -47,6 +47,15 @@ public static class RelayPaths
     public const string AuthMe = "/api/auth/me";
     public const string AuthLogout = "/api/auth/logout";
 
+    /// <summary>老师自己的任教科目（默认 + 按班级覆盖）。只能改自己的那一份。</summary>
+    public const string AuthSubjects = "/api/auth/subjects";
+
+    /// <summary>服务器上的定时喊话：创建（POST）、列表（GET）。</summary>
+    public const string AuthSchedule = "/api/auth/schedule";
+
+    /// <summary>取消一条服务器定时。</summary>
+    public const string AuthScheduleItem = "/api/auth/schedule/{0}";
+
     /// <summary>教师端列出「管理员授权给我使用的教室」。登录后无需再填 UUID 与口令即可绑定。</summary>
     public const string TeacherAuthorized = "/api/teachers/authorized";
 
@@ -310,6 +319,11 @@ public sealed record RelayHealthDto(
 
 /// <summary>账号公开信息。刻意不含任何口令相关字段。</summary>
 /// <param name="IsAdmin">是否为内置管理员。管理控制台只对管理员开放。</param>
+/// <param name="Subject">默认任教科目（没被按班级覆盖时用它）。</param>
+/// <param name="SubjectByClassroom">
+/// 按班级覆盖的任教科目：教室 UUID → 科目。一位老师在不同班教不同科目时用它。
+/// 没列到的班级用 <paramref name="Subject"/>。
+/// </param>
 public sealed record UserProfileDto(
     string Id,
     string? Username,
@@ -319,7 +333,20 @@ public sealed record UserProfileDto(
     DateTimeOffset? LastLoginAt,
     bool Disabled,
     bool IsAdmin,
-    string? Subject = null);
+    string? Subject = null,
+    IReadOnlyDictionary<string, string>? SubjectByClassroom = null);
+
+/// <summary>
+/// 一位老师的任教科目：默认那份 + 按班级的覆盖。
+///
+/// 读写共用同一个形状：GET 回的就是 POST 收的，客户端拿回来改一改再存回去 ——
+/// 两份不同的形状迟早会在某一次改动里漏掉一个字段。
+/// </summary>
+/// <param name="Subject">默认科目，可空。</param>
+/// <param name="SubjectByClassroom">按班级覆盖；空表示这些班都用默认科目。</param>
+public sealed record TeachingSubjectsDto(
+    string? Subject = null,
+    IReadOnlyDictionary<string, string?>? SubjectByClassroom = null);
 
 /// <summary>管理控制台用的教室条目。</summary>
 /// <param name="Uuid">教室 UUID。</param>

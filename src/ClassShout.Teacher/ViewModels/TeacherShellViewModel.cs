@@ -118,6 +118,9 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         _broadcaster = new ClassroomBroadcaster(_http, _relaySettings);
         _broadcaster.Log += message => Post(() => AddLog(message));
         Text.Broadcaster = _broadcaster;
+
+        // 文字页那条局域网直连的链路也按目标班级取来源
+        Text.ShoutNameFor = NameFor;
         Text.BroadcastFinished += summary => Post(() =>
         {
             AddLog(summary);
@@ -136,6 +139,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 应该是"我上次用的那间教室在这儿"，而不是一个空列表。
         RefreshSavedClassrooms();
 
+        // 科目那几行是"每间已保存的教室一行"，所以必须跟着上面那一步走。
+        // 只在账号变化时刷新的话，未登录的老师打开应用会看到一张空的科目表 ——
+        // 而"没登录"恰恰是最需要按班级填科目的情况（局域网直连那条路）。
+        RefreshSubjectRows();
+
         // 学生名单：本机资料，读进来就能用
         _rosterSettings = LocalSettings.LoadRosters();
         RefreshRosterStudents();
@@ -144,12 +152,15 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         Call = new CallShoutViewModel(
             LocalSettings.LoadCalls(),
             _rosterSettings,
-            () => TeacherName,
+            // 教师名字组件取**当前这间教室**的科目："数学张老师"还是"信息技术张老师"
+            // 取决于这条呼叫发给谁
+            () => NameFor(_relaySettings.LastUuid),
             SendCallMessagesAsync);
 
         // 定时通知：读盘、接管发送、开始按秒检查
         _scheduleSettings = LocalSettings.LoadSchedule();
         _scheduler = new ShoutScheduler(_scheduleSettings) { SendAsync = SendScheduledAsync };
+        _serverSchedule = new ServerScheduleClient(_http, _relaySettings);
         _scheduler.Handled += result => Post(() =>
         {
             RefreshScheduledShouts();
@@ -165,7 +176,8 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         RefreshScheduledShouts();
         _scheduler.Start();
 
-        // 用本地令牌尝试恢复登录；失败也只是回到未登录，不阻塞界面
+        // 用本地令牌尝试恢复登录；失败也只是回到未登录，不阻塞界面。
+        // 恢复成功之后会把服务器上的定时拉回来（见 OnAccountChanged）。
         _ = RestoreSessionAsync();
 
         // 从分享链接启动（或者应用在前台时又点了一条链接）时自动兑现。
@@ -300,14 +312,25 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     // ======================== 定时通知 ========================
     //
-    // 关于可靠性有一条必须写在界面上、也写在这里的边界：
-    // **只有在应用运行时才会到点发送**。老师把应用彻底关掉之后，到点不会有人替他发 ——
-    // 这是本地定时的固有边界，要做"关掉也能发"得让服务器来担这件事。
-    // 正因为如此，错过太久（超过三分钟）的任务不会被补发，只标出来给老师看：
+    // 两条路，界面上要说清是哪一条：
+    //   · **服务器定时**（登录之后默认）—— 任务存在服务器上，到点由服务器自己发，
+    //     老师关掉手机、甚至关机过周末，教室里照样响；
+    //   · **本机定时**（没登录、或服务器拒了）—— 只有在应用运行时才会到点发送。
+    // 无论哪一条，错过太久（超过三分钟）都不补发：
     // "下课前五分钟提醒交作业"在过期之后已经没有意义了。
 
     private readonly TeacherScheduleSettings _scheduleSettings;
     private readonly ShoutScheduler _scheduler;
+    private readonly ServerScheduleClient _serverSchedule;
+
+    /// <summary>服务器上那几条（含刚处理完的历史），只是显示用。</summary>
+    private IReadOnlyList<ScheduledShoutDto> _serverSchedules = [];
+
+    /// <summary>录音电平（0~1），界面画电平条用。</summary>
+    [ObservableProperty]
+    private float _clipLevel;
+
+    private DispatcherTimer? _clipTimer;
 
     public ObservableCollection<ScheduledShoutItem> ScheduledShouts { get; } = [];
 
@@ -327,16 +350,18 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         {
             var count = ScheduledShouts.Count;
             var head = count == 0
-                ? "设好时间，到点自动把这条发出去。"
+                ? "设好时间，到点自动发出去。"
                 : $"还有 {count} 条没发。";
 
-            return head + "注意：只有在应用运行时才会到点发送；错过的（超过三分钟）不会补发。";
+            return _serverSchedule.IsAvailable
+                ? head + "登录状态下会交给服务器发送 —— 关掉手机也会到点发。错过的（超过三分钟）不补发。"
+                : head + "还没登录，现在排的由本机发送：只有在应用运行时才会到点发；错过的（超过三分钟）不补发。";
         }
     }
 
     /// <summary>把当前输入的这一条排进定时队列。</summary>
     [RelayCommand]
-    private void ScheduleShout()
+    private async Task ScheduleShoutAsync()
     {
         var text = Text.Text?.Trim() ?? string.Empty;
 
@@ -354,17 +379,8 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        if (ScheduleDate is not { } date || ScheduleTime is not { } time)
+        if (ResolveSendAt() is not { } sendAt)
         {
-            ShowSnackbar("请选择要发送的日期与时间。");
-            return;
-        }
-
-        var sendAt = new DateTimeOffset(date.Date.Add(time), DateTimeOffset.Now.Offset);
-
-        if (sendAt <= DateTimeOffset.Now)
-        {
-            ShowSnackbar("这个时间已经过去了，请选一个将来的时间。");
             return;
         }
 
@@ -379,28 +395,109 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             TargetUuids = Text.Targets.Where(t => t.IsSelected).Select(t => t.Uuid).ToList(),
         };
 
+        await ScheduleItemAsync(item).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// 排一条：优先交给服务器，服务器用不了才退回本机。
+    ///
+    /// 这个优先级是刻意的：服务器定时"关掉手机也会发"，而本机定时要求应用开着。
+    /// 只要有可能，就该让老师得到更可靠的那一种 —— 而且要在界面上说清楚
+    /// 这一条是交给谁了，否则他会按"关掉也会发"去预期，然后错过一整条提醒。
+    /// </summary>
+    private async Task ScheduleItemAsync(ScheduledShout item)
+    {
+        if (_serverSchedule.IsAvailable && item.TargetUuids.Count > 0)
+        {
+            var (ok, _, error) = await _serverSchedule
+                .CreateTextAsync(new ScheduleShoutRequest(
+                    item.Text,
+                    item.SendAt.ToUniversalTime(),
+                    item.TargetUuids,
+                    item.Display,
+                    item.FontSize,
+                    item.HoldMs,
+                    item.Speak))
+                .ConfigureAwait(true);
+
+            if (ok)
+            {
+                AddLog($"已把 {item.TimeText} 的定时交给服务器：「{item.SummaryText}」");
+                ShowSnackbar($"已交给服务器：{item.TimeText} 自动发送（关掉手机也会发）。");
+                await RefreshServerSchedulesAsync().ConfigureAwait(true);
+                return;
+            }
+
+            // 服务器拒了就退回本机，并把原因说出来 —— 悄悄降级会让老师
+            // 误以为"关掉手机也会发"
+            AddLog($"交给服务器失败（{error}），改为本机定时。");
+            ShowSnackbar($"服务器没有接受（{error}），已改为本机定时：要开着应用才会发。");
+        }
+
         _scheduleSettings.Add(item);
         LocalSettings.SaveSchedule(_scheduleSettings);
         RefreshScheduledShouts();
 
         AddLog($"已排定 {item.TimeText} 发送：「{item.SummaryText}」");
-        ShowSnackbar($"已排定 {item.TimeText} 自动发送。");
+        ShowSnackbar($"已排定 {item.TimeText} 自动发送（本机定时，要开着应用）。");
+    }
+
+    /// <summary>把界面上的日期与时间读成一个时刻；不合法时提示并返回 null。</summary>
+    private DateTimeOffset? ResolveSendAt()
+    {
+        if (ScheduleDate is not { } date || ScheduleTime is not { } time)
+        {
+            ShowSnackbar("请选择要发送的日期与时间。");
+            return null;
+        }
+
+        var sendAt = new DateTimeOffset(date.Date.Add(time), DateTimeOffset.Now.Offset);
+
+        if (sendAt <= DateTimeOffset.Now)
+        {
+            ShowSnackbar("这个时间已经过去了，请选一个将来的时间。");
+            return null;
+        }
+
+        return sendAt;
     }
 
     [RelayCommand]
-    private void CancelSchedule(ScheduledShoutItem? item)
+    private async Task CancelScheduleAsync(ScheduledShoutItem? item)
     {
         if (item is null)
         {
             return;
         }
 
-        item.Record.Cancelled = true;
-        _scheduleSettings.MoveToHistory(item.Record);
+        // 交给服务器的那几条要在服务器上取消：只删本地显示的话，
+        // 到点它照样会响，而界面上已经看不见它了。
+        if (item.Server is { } server)
+        {
+            var error = await _serverSchedule.CancelAsync(server.Id).ConfigureAwait(true);
+            if (error is not null)
+            {
+                ShowSnackbar($"服务器上的这条没能取消：{error}");
+                return;
+            }
+
+            await RefreshServerSchedulesAsync().ConfigureAwait(true);
+            AddLog($"已取消服务器上 {server.SendAt.ToLocalTime():MM-dd HH:mm} 的定时。");
+            return;
+        }
+
+        if (item.Record is not { } record)
+        {
+            return;
+        }
+
+        record.Cancelled = true;
+        VoiceClipStore.Delete(record.AudioFile);
+        _scheduleSettings.MoveToHistory(record);
         LocalSettings.SaveSchedule(_scheduleSettings);
         RefreshScheduledShouts();
 
-        AddLog($"已取消 {item.Record.TimeText} 的定时喊话。");
+        AddLog($"已取消 {record.TimeText} 的定时喊话。");
     }
 
     /// <summary>把待发列表读进界面。</summary>
@@ -408,13 +505,231 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     {
         ScheduledShouts.Clear();
 
+        // 服务器上那些排进去的也列在这里：老师只想知道"我排了什么"，
+        // 分成两个列表会让他两头找。
+        foreach (var dto in _serverSchedules.Where(s => s.Status == ServerScheduleStatus.Pending))
+        {
+            ScheduledShouts.Add(ScheduledShoutItem.FromServer(dto, CancelScheduleCommand));
+        }
+
         foreach (var record in _scheduleSettings.Items.OrderBy(i => i.SendAt))
         {
-            ScheduledShouts.Add(new ScheduledShoutItem(record, CancelSchedule));
+            ScheduledShouts.Add(new ScheduledShoutItem(record, item => _ = CancelScheduleAsync(item)));
         }
 
         OnPropertyChanged(nameof(HasScheduledShouts));
         OnPropertyChanged(nameof(ScheduleHintText));
+    }
+
+    /// <summary>问一次服务器上有哪些定时。</summary>
+    [RelayCommand]
+    private async Task RefreshServerSchedulesAsync()
+    {
+        if (!_serverSchedule.IsAvailable)
+        {
+            _serverSchedules = [];
+            RefreshScheduledShouts();
+            return;
+        }
+
+        _serverSchedules = await _serverSchedule.ListAsync().ConfigureAwait(true);
+        RefreshScheduledShouts();
+    }
+
+    // ======================== 定时语音（录一段、存下来、到点放） ========================
+
+    private readonly VoiceClipRecorder _clipRecorder = new();
+
+    /// <summary>正在为定时任务录一段语音。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ScheduleVoiceButtonText))]
+    private bool _isRecordingClip;
+
+    /// <summary>已录时长（秒），界面上显示成 mm:ss。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ClipElapsedText))]
+    private double _clipElapsed;
+
+    /// <summary>录完但还没排进定时的那一段。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPendingClip))]
+    [NotifyPropertyChangedFor(nameof(PendingClipText))]
+    private VoiceClip? _pendingClip;
+
+    /// <summary>录音区的提示/错误。</summary>
+    [ObservableProperty]
+    private string _clipStatus = string.Empty;
+
+    public bool HasPendingClip => PendingClip is { IsEmpty: false };
+
+    public bool IsRecordingClipVisible => TeacherPlatform.HasRecorder;
+
+    public string ScheduleVoiceButtonText => IsRecordingClip ? "停止录音" : "录一段语音";
+
+    public string ClipElapsedText => TimeSpan.FromSeconds(ClipElapsed).ToString(@"mm\:ss");
+
+    public string PendingClipText => PendingClip is { } clip
+        ? $"已录 {clip.Seconds:0.#} 秒，可以排进下面的时间。"
+        : string.Empty;
+
+    /// <summary>录音上限（秒），界面上写出来。</summary>
+    public string ClipLimitText => $"最长 {ServerScheduledShout.MaxVoiceSeconds} 秒。";
+
+    /// <summary>点一下开始录，再点一下停止。</summary>
+    [RelayCommand]
+    private async Task ToggleClipRecordingAsync()
+    {
+        if (IsRecordingClip)
+        {
+            await StopClipRecordingAsync().ConfigureAwait(true);
+            return;
+        }
+
+        ClipStatus = string.Empty;
+        PendingClip = null;
+        ClipElapsed = 0;
+
+        _clipRecorder.LevelChanged += OnClipLevel;
+        _clipRecorder.ReachedLimit += OnClipReachedLimit;
+        _clipRecorder.Failed += OnClipFailed;
+
+        if (!await _clipRecorder.StartAsync().ConfigureAwait(true))
+        {
+            DetachClipRecorder();
+            return;
+        }
+
+        IsRecordingClip = true;
+        ClipStatus = "正在录，再点一下停止。";
+        _clipTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _clipTimer.Tick -= OnClipTick;
+        _clipTimer.Tick += OnClipTick;
+        _clipTimer.Start();
+    }
+
+    [RelayCommand]
+    private async Task StopClipRecordingAsync()
+    {
+        _clipTimer?.Stop();
+        DetachClipRecorder();
+
+        var clip = await _clipRecorder.StopAsync().ConfigureAwait(true);
+
+        IsRecordingClip = false;
+        ClipElapsed = clip?.Seconds ?? ClipElapsed;
+
+        if (clip is not { IsEmpty: false } recorded)
+        {
+            PendingClip = null;
+            ClipStatus = "什么都没录到，再试一次。";
+            return;
+        }
+
+        PendingClip = recorded;
+        ClipStatus = $"录好了：{recorded.Seconds:0.#} 秒。选好时间，点「把这段语音排进定时」。";
+    }
+
+    /// <summary>
+    /// 把录好的这段语音排进定时。
+    ///
+    /// 优先交给服务器（那样关掉手机也会发），但音频要先落一份到本机 ——
+    /// 交不出去时它就退回本机定时，而本机定时到点得能读出声来。
+    /// </summary>
+    [RelayCommand]
+    private async Task ScheduleVoiceClipAsync()
+    {
+        if (PendingClip is not { IsEmpty: false } clip)
+        {
+            ShowSnackbar("先录一段语音。");
+            return;
+        }
+
+        if (ResolveSendAt() is not { } sendAt)
+        {
+            return;
+        }
+
+        var item = new ScheduledShout
+        {
+            SendAt = sendAt,
+            Kind = ScheduledShoutKinds.Voice,
+            AudioSeconds = clip.Seconds,
+            Display = Text.SelectedDisplay?.Value,
+            FontSize = Text.SelectedFontSize?.Value,
+            HoldMs = Text.SelectedHold?.Value ?? ShoutHoldDurations.Unspecified,
+            Speak = Text.Speak,
+            TargetUuids = Text.Targets.Where(t => t.IsSelected).Select(t => t.Uuid).ToList(),
+        };
+
+        if (_serverSchedule.IsAvailable && item.TargetUuids.Count > 0)
+        {
+            var (ok, _, error) = await _serverSchedule
+                .CreateVoiceAsync(sendAt.ToUniversalTime(), item.TargetUuids, new VoiceRecording(clip.ToWav(), clip.Seconds))
+                .ConfigureAwait(true);
+
+            if (ok)
+            {
+                PendingClip = null;
+                ClipStatus = string.Empty;
+                AddLog($"已把 {item.TimeText} 的定时语音交给服务器（{clip.Seconds:0.#} 秒）。");
+                ShowSnackbar($"已交给服务器：{item.TimeText} 播放这段语音（关掉手机也会发）。");
+                await RefreshServerSchedulesAsync().ConfigureAwait(true);
+                return;
+            }
+
+            AddLog($"定时语音交给服务器失败（{error}），改为本机定时。");
+            ShowSnackbar($"服务器没有接受（{error}），已改为本机定时：要开着应用才会发。");
+        }
+
+        item.AudioFile = VoiceClipStore.Save(item.Id, clip);
+
+        if (item.AudioFile is null)
+        {
+            ShowSnackbar("这段语音没能存到本机，排不了定时。");
+            return;
+        }
+
+        _scheduleSettings.Add(item);
+        LocalSettings.SaveSchedule(_scheduleSettings);
+        RefreshScheduledShouts();
+
+        PendingClip = null;
+        ClipStatus = string.Empty;
+
+        AddLog($"已排定 {item.TimeText} 播放一段 {clip.Seconds:0.#} 秒的语音（本机定时）。");
+        ShowSnackbar($"已排定 {item.TimeText} 播放（本机定时，要开着应用）。");
+    }
+
+    /// <summary>丢掉录好的那一段。</summary>
+    [RelayCommand]
+    private void DiscardClip()
+    {
+        PendingClip = null;
+        ClipElapsed = 0;
+        ClipStatus = string.Empty;
+    }
+
+    private void OnClipTick(object? sender, EventArgs e) => ClipElapsed = _clipRecorder.Seconds;
+
+    private void OnClipLevel(float level) => Post(() => ClipLevel = level);
+
+    private void OnClipReachedLimit() => Post(() =>
+    {
+        ClipStatus = $"到 {ServerScheduledShout.MaxVoiceSeconds} 秒上限了，自动停止。";
+        _ = StopClipRecordingAsync();
+    });
+
+    private void OnClipFailed(string message) => Post(() =>
+    {
+        ClipStatus = message;
+        _ = StopClipRecordingAsync();
+    });
+
+    private void DetachClipRecorder()
+    {
+        _clipRecorder.LevelChanged -= OnClipLevel;
+        _clipRecorder.ReachedLimit -= OnClipReachedLimit;
+        _clipRecorder.Failed -= OnClipFailed;
     }
 
     /// <summary>
@@ -425,6 +740,14 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private async Task<(bool Ok, string? Message)> SendScheduledAsync(ScheduledShout item)
     {
+        // 语音定时：把存下来的那段 PCM 按实时节奏放出去。
+        // 走的是与"按住说话"完全相同的那条音频通路 —— 教室端看到的数据流
+        // 一模一样，不引入只在定时语音上才会出现的第二种输入形态。
+        if (ScheduledShoutKinds.IsVoice(item.Kind))
+        {
+            return await SendScheduledVoiceAsync(item).ConfigureAwait(true);
+        }
+
         var message = new TextShoutMessage
         {
             Text = item.Text,
@@ -446,7 +769,9 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 否则退回"当前链路" —— 这是老师按下发送按钮时会走的那条路。
         if (targets.Count > 1)
         {
-            var results = await _broadcaster.SendTextAsync(targets, message, TeacherName).ConfigureAwait(true);
+            var results = await _broadcaster
+                .SendTextAsync(targets, message, target => NameFor(target.Uuid))
+                .ConfigureAwait(true);
             var sent = results.Count(r => r.Ok);
 
             return sent > 0
@@ -456,6 +781,60 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         var ok = await _channel.SendTextAsync(message).ConfigureAwait(true);
         return ok ? (true, "定时喊话已发出。") : (false, "定时喊话没能发出（当前没有可用的链路）。");
+    }
+
+    /// <summary>
+    /// 本机定时里那条语音：读回存好的 PCM，按实时节奏送出去。
+    ///
+    /// 刻意不"一口气全塞进去"：教室端是按数据流播放的，一股脑塞进去要么撑爆缓冲，
+    /// 要么让播放器用一种平时不会走的路径 —— 而那种路径只在定时语音上被用到，
+    /// 真机上出问题最难查。
+    /// </summary>
+    private async Task<(bool Ok, string? Message)> SendScheduledVoiceAsync(ScheduledShout item)
+    {
+        var clip = VoiceClipStore.Load(item.AudioFile);
+
+        if (clip is not { Pcm.Length: > 0 } voice)
+        {
+            // 音频丢了就说清楚：这条不可能再发出去，留在列表里也没意义
+            return (false, "语音文件已经丢失，这条定时发不出去。");
+        }
+
+        if (!_channel.IsConnected)
+        {
+            return (false, "当前没有可用的链路。");
+        }
+
+        await _channel.BeginAudioAsync(voice.Format).ConfigureAwait(true);
+
+        var chunkSize = voice.Format.BytesForDuration(100);
+        if (chunkSize <= 0)
+        {
+            return (false, "这段语音的格式不合法。");
+        }
+
+        try
+        {
+            for (var offset = 0; offset < voice.Pcm.Length; offset += chunkSize)
+            {
+                var length = Math.Min(chunkSize, voice.Pcm.Length - offset);
+                await _channel.SendAudioAsync(voice.Pcm.AsMemory(offset, length)).ConfigureAwait(true);
+
+                if (offset + length < voice.Pcm.Length)
+                {
+                    await Task.Delay(100).ConfigureAwait(true);
+                }
+            }
+        }
+        finally
+        {
+            await _channel.EndAudioAsync().ConfigureAwait(true);
+        }
+
+        // 发完就把文件删掉：这条已经用过了，留着只会占地方
+        VoiceClipStore.Delete(item.AudioFile);
+
+        return (true, $"定时语音已发出（{voice.Seconds:0.#} 秒）。");
     }
 
     // ======================== 分享链接一键绑定 ========================
@@ -839,7 +1218,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         }
 
         await ConnectCoreAsync(
-            ct => _channel.ConnectAsync(item.Announcement, TeacherName, ct),
+            ct => _channel.ConnectAsync(item.Announcement, NameForLan(item.Name), ct),
             $"正在连接「{item.Name}」…",
             item.Name).ConfigureAwait(true);
     }
@@ -857,7 +1236,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         }
 
         await ConnectCoreAsync(
-            ct => _channel.ConnectAsync(endpoint, TeacherName, ct),
+            ct => _channel.ConnectAsync(endpoint, NameFor(_relaySettings.LastUuid), ct),
             $"正在连接 {endpoint}…",
             endpoint.ToString()).ConfigureAwait(true);
     }
@@ -1179,6 +1558,14 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         TeacherName = IsSignedIn ? SignedInName : TeacherPlatform.DeviceName;
         Text.TeacherName = TeacherName;
 
+        // 科目也跟着账号走：换台手机登录，之前填过的科目要自己回来
+        RefreshSubjectRows();
+        _ = RefreshSubjectsFromServerAsync();
+
+        // 服务器上排着的定时也要拉回来：换台设备登录之后，
+        // "我排过什么"必须看得见，否则老师没法取消它
+        _ = RefreshServerSchedulesAsync();
+
         BindServerCommand.NotifyCanExecuteChanged();
 
         // 登录状态变了，已授权教室列表也跟着变
@@ -1200,6 +1587,117 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         {
             Post(() => AddLog("登录状态已失效，请重新登录。"));
         }
+    }
+
+    // ======================== 任教科目（默认 + 按班级） ========================
+
+    /// <summary>
+    /// 这位老师在某一间教室里的喊话来源。
+    ///
+    /// 服务器在**中继**那条路上会自己算一遍（以账号为准，客户端冒充不了），
+    /// 而**局域网直连**那条路不经过服务器 —— 名字只能由教师端自己写进喊话里。
+    /// 两条路必须算得一样，否则同一个班在两台设备上会看到不同的名字。
+    /// </summary>
+    private string NameFor(string? classroomUuid) => _relaySettings.ShoutNameFor(classroomUuid);
+
+    /// <summary>
+    /// 局域网发现到的教室该用哪份科目。
+    ///
+    /// 局域网那条路上没有 UUID（发现包只有名字和地址），所以只能按**教室名**
+    /// 和已保存的教室对一下 —— 也正是老师认教室的方式。
+    /// 对不上就用默认科目：宁可少两个字，也不要给某个班贴错科目。
+    /// </summary>
+    private string NameForLan(string? classroomName)
+    {
+        if (string.IsNullOrWhiteSpace(classroomName))
+        {
+            return NameFor(null);
+        }
+
+        var matched = _relaySettings.RecentClassrooms.FirstOrDefault(
+            classroom => string.Equals(classroom.Name, classroomName.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        return NameFor(matched?.Uuid);
+    }
+
+    /// <summary>默认科目输入框。</summary>
+    [ObservableProperty]
+    private string _defaultSubject = string.Empty;
+
+    /// <summary>按班级的科目：一行一个已保存的教室。</summary>
+    public ObservableCollection<SubjectRow> SubjectRows { get; } = [];
+
+    /// <summary>保存结果的一句话回执。</summary>
+    [ObservableProperty]
+    private string _subjectStatus = string.Empty;
+
+    public bool HasSubjectRows => SubjectRows.Count > 0;
+
+    /// <summary>没有登录时要说清楚：本地改的只影响这台设备自己贴的名字。</summary>
+    public string SubjectHintText => IsSignedIn
+        ? "这些科目存在账号里，换台手机登录也会跟着回来。教室里看到的来源就是「科目＋姓名」。"
+        : "还没登录：现在改的只存在这台设备上，只影响局域网直连时贴的来源。"
+          + "登录之后同一份会存到账号里，换设备也能带过去。";
+
+    private void RefreshSubjectRows()
+    {
+        // 先把界面上还没保存的内容丢掉：这个列表是"从已保存的教室重建"，
+        // 保留半截编辑状态会让"我明明改过"和"列表里没有"同时为真。
+        SubjectRows.Clear();
+
+        foreach (var classroom in _relaySettings.RecentClassrooms)
+        {
+            SubjectRows.Add(new SubjectRow(classroom, SubjectForClassroom(classroom.Uuid)));
+        }
+
+        DefaultSubject = _relaySettings.Subject ?? string.Empty;
+        OnPropertyChanged(nameof(HasSubjectRows));
+        OnPropertyChanged(nameof(SubjectHintText));
+    }
+
+    private string SubjectForClassroom(string uuid)
+        => TeachingSubjects.For(_relaySettings.Subject, _relaySettings.SubjectByClassroom, uuid) ?? string.Empty;
+
+    /// <summary>把服务器上那份拉回本地缓存（登录、恢复会话之后调用）。</summary>
+    private async Task RefreshSubjectsFromServerAsync()
+    {
+        if (!IsSignedIn)
+        {
+            return;
+        }
+
+        var dto = await _account.GetSubjectsAsync().ConfigureAwait(true);
+        if (dto is not null)
+        {
+            Post(RefreshSubjectRows);
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveSubjectsAsync()
+    {
+        var byClassroom = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var row in SubjectRows)
+        {
+            var subject = (row.Subject ?? string.Empty).Trim();
+            if (subject.Length > 0)
+            {
+                byClassroom[row.Uuid] = subject;
+            }
+        }
+
+        var error = await _account
+            .SaveSubjectsAsync(DefaultSubject.Trim() is { Length: > 0 } value ? value : null, byClassroom)
+            .ConfigureAwait(true);
+
+        SubjectStatus = error ?? (byClassroom.Count > 0
+            ? $"已保存：默认科目「{DefaultSubject.Trim()}」，另有 {byClassroom.Count} 个班单独指定。"
+            : "已保存任教科目。");
+
+        AddLog(SubjectStatus);
+        RefreshSubjectRows();
+        OnPropertyChanged(nameof(SubjectHintText));
     }
 
     // ======================== 已授权教室（控制台指派） ========================
@@ -1689,7 +2187,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         _relay.ConnectionChanged += connected => Post(() => AddLog(connected ? "服务器状态通道已连接。" : "服务器状态通道已断开。"));
         _relay.Log += message => Post(() => AddLog(message));
 
-        var (ok, error) = await _relay.BindAsync(uuid, secret ?? string.Empty, TeacherName).ConfigureAwait(true);
+        var (ok, error) = await _relay.BindAsync(uuid, secret ?? string.Empty, NameFor(uuid)).ConfigureAwait(true);
         if (!ok)
         {
             await TearDownRelayAsync().ConfigureAwait(true);
@@ -2009,6 +2507,10 @@ public sealed class StudentRow
 /// 一条「已排定的定时喊话」。
 ///
 /// 命令挂在条目自己身上，XAML 模板里就不必写父级转换绑定。
+///
+/// 它同时代表两种来源：本机排的（<see cref="ScheduledShout"/>）与交给服务器的
+/// （<see cref="ScheduledShoutDto"/>）。界面上合成一个列表 —— 老师只想知道
+/// "我排了什么"，分成两处会让他两头找。
 /// </summary>
 public sealed class ScheduledShoutItem
 {
@@ -2018,26 +2520,84 @@ public sealed class ScheduledShoutItem
         CancelCommand = new RelayCommand(() => cancel(this));
     }
 
-    public ScheduledShout Record { get; }
+    private ScheduledShoutItem(ScheduledShoutDto server, IRelayCommand cancel)
+    {
+        Server = server;
+        CancelCommand = cancel;
+    }
 
-    public string TimeText => Record.TimeText;
+    /// <summary>由服务器上的一条构造（取消命令用外壳那份，它要发请求）。</summary>
+    public static ScheduledShoutItem FromServer(ScheduledShoutDto server, IRelayCommand cancel)
+        => new(server, cancel);
 
-    public string SummaryText => Record.SummaryText;
+    /// <summary>本机那条；服务器上的那条为 null。</summary>
+    public ScheduledShout? Record { get; }
+
+    /// <summary>服务器上那条；本机的为 null。</summary>
+    public ScheduledShoutDto? Server { get; }
+
+    public string TimeText => Server is { } server
+        ? server.SendAt.ToLocalTime().ToString("MM-dd HH:mm")
+        : Record!.TimeText;
+
+    public string SummaryText => Server is { } server
+        ? (string.Equals(server.Kind, ScheduledShoutKinds.Voice, StringComparison.OrdinalIgnoreCase)
+            ? $"语音 {server.AudioSeconds:0.#} 秒"
+            : Truncate(server.Text))
+        : Record!.SummaryText;
 
     /// <summary>发给谁：把 UUID 换成教室名，找不到的说明记录已被移除。</summary>
-    public string TargetText => Record.TargetUuids.Count switch
-    {
-        0 => "当前绑定的教室",
-        1 => "1 个班级",
-        _ => $"{Record.TargetUuids.Count} 个班级",
-    };
+    public string TargetText => Server is { } server
+        ? (server.TargetNames.Count switch
+        {
+            0 => "没有目标班级",
+            1 => server.TargetNames[0],
+            _ => $"{server.TargetNames.Count} 个班级：{string.Join("、", server.TargetNames)}",
+        })
+        : Record!.TargetUuids.Count switch
+        {
+            0 => "当前绑定的教室",
+            1 => "1 个班级",
+            _ => $"{Record!.TargetUuids.Count} 个班级",
+        };
 
     /// <summary>展示参数的摘要，和即时喊话用的是同一套档位。</summary>
-    public string DisplayText =>
-        $"{ShoutFontSizes.Label(Record.FontSize)}字 · {ShoutHoldDurations.Label(Record.HoldMs)}"
-        + (Record.Speak ? " · 朗读" : " · 不朗读");
+    public string DisplayText => Server is { } server
+        ? $"由服务器发送 · {ShoutFontSizes.Label(server.FontSize)}字 · {ShoutHoldDurations.Label(server.HoldMs)}"
+        : $"{ShoutFontSizes.Label(Record!.FontSize)}字 · {ShoutHoldDurations.Label(Record!.HoldMs)}"
+          + (Record!.Speak ? " · 朗读" : " · 不朗读")
+          + (ScheduledShoutKinds.IsVoice(Record!.Kind) ? " · 语音" : string.Empty);
 
     public IRelayCommand CancelCommand { get; }
+
+    private static string Truncate(string? text)
+    {
+        var value = string.IsNullOrWhiteSpace(text) ? "（空）" : text.Trim().ReplaceLineEndings(" ");
+        return value.Length <= 24 ? value : value[..24] + "…";
+    }
+}
+
+/// <summary>
+/// 「某间教室用什么科目」的一行。
+///
+/// 内容可写：界面上一行就是一个输入框，留空表示这个班用默认科目。
+/// </summary>
+public sealed partial class SubjectRow : ObservableObject
+{
+    public SubjectRow(BoundClassroom classroom, string subject)
+    {
+        Uuid = classroom.Uuid;
+        Name = classroom.Name;
+        _subject = subject;
+    }
+
+    public string Uuid { get; }
+
+    public string Name { get; }
+
+    /// <summary>这间教室的科目。留空＝用默认科目。</summary>
+    [ObservableProperty]
+    private string _subject;
 }
 
 /// <summary>

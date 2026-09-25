@@ -36,6 +36,14 @@ public sealed class ClassroomBroadcaster
     public event Action<string>? Log;
 
     /// <summary>串行发给每一间，逐个返回结果。</summary>
+    /// <param name="targets">目标教室。</param>
+    /// <param name="message">要发的内容。</param>
+    /// <param name="nameOf">
+    /// 「这位老师在这间教室叫什么」。做成按目标回调而不是一个字符串：
+    /// 一位老师在不同班可能教不同科目，来源（"数学张老师"/"信息技术张老师"）
+    /// 是跟着**那个班**走的。
+    /// </param>
+    /// <param name="cancellationToken">取消。</param>
     /// <remarks>
     /// 刻意串行而不是并发：一个老师一次通常只发三五个班，串行也就多几百毫秒，
     /// 但日志顺序清楚、出错时能直接指出是哪一间没送到。
@@ -44,14 +52,14 @@ public sealed class ClassroomBroadcaster
     public async Task<IReadOnlyList<BroadcastResult>> SendTextAsync(
         IReadOnlyList<BoundClassroom> targets,
         TextShoutMessage message,
-        string teacherName,
+        Func<BoundClassroom, string> nameOf,
         CancellationToken cancellationToken = default)
     {
         var results = new List<BroadcastResult>(targets.Count);
 
         foreach (var target in targets)
         {
-            results.Add(await SendToOneAsync(target, message, teacherName, cancellationToken).ConfigureAwait(false));
+            results.Add(await SendToOneAsync(target, message, nameOf(target), cancellationToken).ConfigureAwait(false));
         }
 
         return results;

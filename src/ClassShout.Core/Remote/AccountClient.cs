@@ -196,9 +196,108 @@ public sealed class AccountClient
         _settings.DisplayName = user.DisplayName;
         _settings.Username = user.Username;
         _settings.Email = user.Email;
+
+        // 科目跟着账号走：换台手机登录，之前填过的科目应当自己回来
+        _settings.Subject = user.Subject;
+        _settings.SubjectByClassroom = user.SubjectByClassroom is null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(user.SubjectByClassroom, StringComparer.OrdinalIgnoreCase);
+
         LocalSettings.SaveTeacher(_settings);
 
         SignedInChanged?.Invoke(user);
+    }
+
+    /// <summary>
+    /// 取自己那份任教科目（默认 + 按班级覆盖）。
+    ///
+    /// 单独一个请求而不是塞进 me：科目可能在教师端改、也可能被管理员在控制台改，
+    /// 界面要能"改完立刻问到最新的那一份"。
+    /// </summary>
+    public async Task<TeachingSubjectsDto?> GetSubjectsAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsSignedIn || string.IsNullOrWhiteSpace(_settings.ServerUrl))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, Url(RelayPaths.AuthSubjects));
+            request.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, _settings.AuthToken);
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var dto = await response.Content
+                .ReadFromJsonAsync<TeachingSubjectsDto>(JsonOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (dto is not null)
+            {
+                CacheSubjects(dto);
+            }
+
+            return dto;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            // 网络不通就用本地缓存那一份，不打扰老师
+            return null;
+        }
+    }
+
+    /// <summary>把自己那份任教科目存到服务器，并更新本地缓存。返回错误文案；成功时为 null。</summary>
+    public async Task<string?> SaveSubjectsAsync(
+        string? subject,
+        IReadOnlyDictionary<string, string?> byClassroom,
+        CancellationToken cancellationToken = default)
+    {
+        var payload = new TeachingSubjectsDto(subject, byClassroom);
+
+        if (!IsSignedIn || string.IsNullOrWhiteSpace(_settings.ServerUrl))
+        {
+            // 没登录也能改本地那份：局域网直连照样用得上，只是换台设备不会跟着走
+            CacheSubjects(payload);
+            return null;
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, Url(RelayPaths.AuthSubjects));
+            request.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, _settings.AuthToken);
+            request.Content = JsonContent.Create(payload, options: JsonOptions);
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                // 服务器拒绝时**不动本地**：否则界面显示"存好了"，而服务器上是旧的，
+                // 教室里看到的仍是旧名字 —— 这种不一致最难查。
+                return "服务器没有接受这次改动，请稍后再试。";
+            }
+
+            var saved = await response.Content
+                .ReadFromJsonAsync<TeachingSubjectsDto>(JsonOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            CacheSubjects(saved ?? payload);
+            return null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return $"没能连上服务器：{ex.Message}";
+        }
+    }
+
+    private void CacheSubjects(TeachingSubjectsDto dto)
+    {
+        _settings.Subject = dto.Subject;
+        _settings.SubjectByClassroom = TeachingSubjects.Normalize(dto.SubjectByClassroom);
+        LocalSettings.SaveTeacher(_settings);
     }
 
     private void Clear()

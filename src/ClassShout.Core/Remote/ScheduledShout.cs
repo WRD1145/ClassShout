@@ -2,6 +2,17 @@ using ClassShout.Core.Protocol;
 
 namespace ClassShout.Core.Remote;
 
+/// <summary>一条定时喊话的内容形态。</summary>
+public static class ScheduledShoutKinds
+{
+    public const string Text = "text";
+
+    /// <summary>录好的一段语音。到点当作语音喊话放出去。</summary>
+    public const string Voice = "voice";
+
+    public static bool IsVoice(string? kind) => string.Equals(kind, Voice, StringComparison.OrdinalIgnoreCase);
+}
+
 /// <summary>
 /// 一条定时喊话。
 ///
@@ -17,7 +28,21 @@ public sealed class ScheduledShout
     /// <summary>什么时候发（本地时间）。</summary>
     public DateTimeOffset SendAt { get; set; }
 
+    /// <summary>文字内容。语音定时时为空。</summary>
     public string Text { get; set; } = string.Empty;
+
+    /// <summary>文字还是语音，取值见 <see cref="ScheduledShoutKinds"/>。</summary>
+    public string Kind { get; set; } = ScheduledShoutKinds.Text;
+
+    /// <summary>
+    /// 语音片段的文件名（相对数据目录的 schedule-audio 子目录）。
+    ///
+    /// 只在本机定时时用得上：交给服务器发的那几条，音频在服务器上。
+    /// </summary>
+    public string? AudioFile { get; set; }
+
+    /// <summary>语音时长（秒），列表里显示用。</summary>
+    public double AudioSeconds { get; set; }
 
     /// <summary>展示参数，含义与即时喊话完全一致。</summary>
     public string? Display { get; set; }
@@ -64,7 +89,12 @@ public sealed class ScheduledShout
     {
         get
         {
-            var text = string.IsNullOrWhiteSpace(Text) ? "（图片）" : Text.Trim().ReplaceLineEndings(" ");
+            if (ScheduledShoutKinds.IsVoice(Kind))
+            {
+                return $"语音 {AudioSeconds:0.#} 秒";
+            }
+
+            var text = string.IsNullOrWhiteSpace(Text) ? "（空）" : Text.Trim().ReplaceLineEndings(" ");
             return text.Length <= 24 ? text : text[..24] + "…";
         }
     }

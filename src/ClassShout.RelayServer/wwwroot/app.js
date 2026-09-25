@@ -218,6 +218,7 @@ async function deleteClassroom(uuid, name) {
 /* ---------- 用户 ---------- */
 
 let cachedUsers = [];
+let cachedBindings = [];
 
 async function loadUsers() {
   const list = await apiJson('/api/console/users');
@@ -253,17 +254,25 @@ async function loadUsers() {
       // 科目是教师端注册时填的，喊话来源会显示成"数学张老师"。
       // 控制台上单列一列，是因为同一所学校里重名的老师很常见，
       // 光看姓名分不清哪个账号该授权哪间教室。
-      // 「改科目」这个动作也是为它准备的：注册时留空之后，别处就没地方补了。
+      // 「改科目」这个动作也是为它准备的：注册时留空之后，别处就没地方补了；
+      // 同一位老师在不同班教不同科目，也在那个对话框里按班级填。
+      const subjectText = u.subject
+        ? escapeHtml(u.subject) + (u.subjectByClassroom && Object.keys(u.subjectByClassroom).length > 0
+            ? ' <span class="muted-inline">另 ' + Object.keys(u.subjectByClassroom).length + ' 个班不同</span>'
+            : '')
+        : (u.subjectByClassroom && Object.keys(u.subjectByClassroom).length > 0
+            ? '<span class="muted-inline">按班级指定</span>'
+            : '—');
+
       const subjectAction = u.isAdmin ? '' :
         '<button class="outlined small" data-action="subject"' +
           ' data-id="' + escapeAttr(u.id) + '"' +
-          ' data-name="' + escapeAttr(u.displayName) + '"' +
-          ' data-subject="' + escapeAttr(u.subject || '') + '">改科目</button>';
+          ' data-name="' + escapeAttr(u.displayName) + '">改科目</button>';
 
       return '<tr>' +
         '<td>' + escapeHtml(u.displayName) +
           (u.isAdmin ? ' <span class="chip info">内置管理员</span>' : '') + '</td>' +
-        '<td>' + (u.subject ? escapeHtml(u.subject) : '—') + '</td>' +
+        '<td>' + subjectText + '</td>' +
         '<td class="mono">' + (u.username ? escapeHtml(u.username) : '—') + '</td>' +
         '<td class="mono">' + (u.email ? escapeHtml(u.email) : '—') + '</td>' +
         '<td>' + status + '</td>' +
@@ -289,6 +298,7 @@ async function toggleDisabled(id, disabled) {
 
 async function loadBindings() {
   const list = await apiJson('/api/console/bindings');
+  cachedBindings = list || [];
   const host = document.getElementById('bindingList');
 
   if (!list || list.length === 0) {
@@ -625,10 +635,48 @@ async function submitBroadcast() {
 
 let subjectTarget = null;
 
-function openSubject(userId, name, subject) {
+/**
+ * 按班级的科目：这位老师被授权的班级各给一个输入框。
+ *
+ * 只列被授权的班级，而不是全校所有教室：一位老师实际会去喊的就是这几个班，
+ * 把五十间教室全铺出来，反而要找半天。
+ */
+function subjectClassroomRows(userId) {
+  return (cachedBindings || [])
+    .filter(b => b.userId === userId)
+    .map(b => ({ uuid: b.uuid, name: b.classroomName }));
+}
+
+function openSubject(userId, name) {
   subjectTarget = userId;
+
+  const user = (cachedUsers || []).find(u => u.id === userId);
+  const byClassroom = (user && user.subjectByClassroom) || {};
+
   document.getElementById('subjectName').textContent = name;
-  document.getElementById('subjectInput').value = subject || '';
+  document.getElementById('subjectInput').value = (user && user.subject) || '';
+
+  const rows = subjectClassroomRows(userId);
+  const host = document.getElementById('subjectClassrooms');
+
+  if (rows.length === 0) {
+    host.innerHTML = '<p class="empty">这位老师还没有被授权的班级 —— 按班级的科目' +
+      '要等「教室」页把班级授权给他之后才有意义。没有单独指定的班级都用上面的默认科目。</p>';
+  } else {
+    host.innerHTML = rows.map(row => {
+      // 服务器存储时键的大小写按写入时的原样，比较要忽略大小写
+      const key = Object.keys(byClassroom)
+        .find(k => k.toLowerCase() === row.uuid.toLowerCase());
+      const value = key ? byClassroom[key] : '';
+
+      return '<label for="subj-' + escapeAttr(row.uuid) + '">' + escapeHtml(row.name) + '</label>' +
+        '<input id="subj-' + escapeAttr(row.uuid) + '" type="text" autocomplete="off"' +
+        ' data-uuid="' + escapeAttr(row.uuid) + '"' +
+        ' placeholder="留空＝用上面的默认科目"' +
+        ' value="' + escapeAttr(value || '') + '">';
+    }).join('');
+  }
+
   setBanner('subjectError', '');
   document.getElementById('subjectOverlay').classList.remove('hidden');
   document.getElementById('subjectInput').focus();
@@ -642,15 +690,26 @@ function closeSubject() {
 async function submitSubject() {
   const value = document.getElementById('subjectInput').value.trim();
 
+  const byClassroom = {};
+  document.querySelectorAll('#subjectClassrooms input[data-uuid]').forEach(el => {
+    const subject = el.value.trim();
+    if (subject) {
+      byClassroom[el.dataset.uuid] = subject;
+    }
+  });
+
   const result = await apiJson('/api/console/users/' + encodeURIComponent(subjectTarget) + '/subject', {
     method: 'POST',
-    body: JSON.stringify({ value: value || null })
+    body: JSON.stringify({ value: value || null, byClassroom: byClassroom })
   });
 
   if (result && result.ok) {
     hideOverlay('subjectOverlay');
     subjectTarget = null;
-    toast(value ? `已把任教科目改成「${value}」。` : '已清空任教科目。');
+    const perClass = Object.keys(byClassroom).length;
+    toast(perClass > 0
+      ? `已保存：默认科目「${value || '（空）'}」，另有 ${perClass} 个班单独指定。`
+      : (value ? `已把任教科目改成「${value}」。` : '已清空任教科目。'));
     await loadUsers();
   } else {
     setBanner('subjectError', (result && result.error) || '修改失败。');
@@ -746,7 +805,7 @@ const actions = {
   reset: (el) => openReset(el.dataset.id, el.dataset.name),
   'toggle-disabled': (el) => toggleDisabled(el.dataset.id, el.dataset.disabled === 'true'),
 
-  subject: (el) => openSubject(el.dataset.id, el.dataset.name, el.dataset.subject),
+  subject: (el) => openSubject(el.dataset.id, el.dataset.name),
   'close-subject': () => closeSubject(),
   'submit-subject': () => submitSubject(),
 

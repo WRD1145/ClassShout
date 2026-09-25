@@ -68,6 +68,37 @@ public sealed class TeacherRelaySettings
     /// <summary>老师姓名。教室端弹窗与喊话来源显示的都是它。</summary>
     public string? DisplayName { get; set; }
 
+    /// <summary>
+    /// 默认任教科目（服务器上那份的本地缓存）。
+    ///
+    /// 本地留一份是为了**局域网直连**那条路：那条路上没有服务器替我们贴来源，
+    /// 名字得由教师端自己写进喊话里。没有缓存的话，同一个老师走中继叫"数学张老师"、
+    /// 走局域网却只剩"张老师"。
+    /// </summary>
+    public string? Subject { get; set; }
+
+    /// <summary>
+    /// 按班级覆盖的任教科目：教室 UUID → 科目。同样是服务器那份的本地缓存。
+    ///
+    /// 抓在手里而不是每次发送都去问服务器：讲课当中发一条喊话，
+    /// 不该因为网络抖一下就换成"没科目"的名字。
+    /// </summary>
+    public Dictionary<string, string> SubjectByClassroom { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 这位老师在某一间教室里的喊话来源（"数学张老师"）。
+    ///
+    /// 与服务器用的是同一套规则（<see cref="TeachingSubjects"/>）——
+    /// 两边算得不一样，会让同一个班在两台设备上看到不同的名字。
+    /// </summary>
+    /// <param name="classroomUuid">目标教室 UUID；为空表示用默认科目。</param>
+    public string ShoutNameFor(string? classroomUuid)
+        => TeachingSubjects.ShoutName(
+            DisplayName ?? string.Empty,
+            Subject,
+            SubjectByClassroom,
+            classroomUuid);
+
     public string? Username { get; set; }
 
     public string? Email { get; set; }

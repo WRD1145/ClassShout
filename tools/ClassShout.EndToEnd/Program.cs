@@ -233,8 +233,17 @@ internal static class Program
         // ---------- 3l. 组件式呼叫的拼装 ----------
         AssertCallComposer();
 
-        // ---------- 3m. 常用语的自定义 ----------
+        // ---------- 3n. 常用语的自定义 ----------
         AssertPhraseSettings();
+
+        // ---------- 3o. 按班级的任教科目 ----------
+        AssertTeachingSubjects();
+
+        // ---------- 3p. WAV 编解码（定时语音靠它落盘） ----------
+        AssertWavCodec();
+
+        // ---------- 3q. 定时模型的摘要与形态 ----------
+        AssertScheduledShoutModel();
 
         // ---------- 3n. 发送队列 ----------
         await AssertShoutQueueAsync();
@@ -982,7 +991,7 @@ internal static class Program
         var multiResults = await broadcaster.SendTextAsync(
             multiTargets,
             new TextShoutMessage { Text = multiText, Rate = 1, Volume = 90 },
-            "数学张老师");
+            _ => "数学张老师");
 
         await Task.Delay(2500);
 
@@ -1005,7 +1014,391 @@ internal static class Program
 
         await broadcaster.ResetAsync();
 
-        // ---------- 8c. 控制台集体喊话 ----------
+        // ---------- 8b. 按班级的任教科目 ----------
+        //
+        // 一位老师在不同班教不同科目：信息技术老师给一个班上信息课、顺手给另一个班带数学。
+        // 名字是服务器贴的（客户端冒充不了），所以"哪个班用哪个科目"也必须在服务器上算对 ——
+        // 算错的话教室里看到的科目就永远是错的那一半，而界面上什么都看不出来。
+        if (!string.IsNullOrEmpty(adminToken))
+        {
+            using var subjectHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            subjectHttp.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, adminToken);
+
+            var accountProfile = (await subjectHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [])
+                .FirstOrDefault(u => u.Username == accountName);
+
+            var subjectResponse = await subjectHttp.PostAsJsonAsync(
+                $"{root}/api/console/users/{accountProfile?.Id}/subject",
+                new ConsoleSubjectRequest("数学", new Dictionary<string, string?>
+                {
+                    [uuid] = "化学",
+                    [otherSettings.Uuid] = "物理",
+                }),
+                JsonOptions);
+
+            Check("控制台能按班级分别指定科目",
+                subjectResponse.IsSuccessStatusCode,
+                Trim(await subjectResponse.Content.ReadAsStringAsync()));
+
+            // 两间教室各收一条，看它们各自看到的来源
+            var perClassText = $"按班级科目 {Guid.NewGuid():N}"[..22];
+            var firstFrom = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondFrom = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == perClassText)
+                {
+                    firstFrom.TrySetResult(envelope.From ?? string.Empty);
+                }
+            };
+
+            otherClassroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == perClassText)
+                {
+                    secondFrom.TrySetResult(envelope.From ?? string.Empty);
+                }
+            };
+
+            var perClassBroadcaster = new ClassroomBroadcaster(http, teacherSettings);
+            await perClassBroadcaster.SendTextAsync(
+                multiTargets,
+                new TextShoutMessage { Text = perClassText, Rate = 1, Volume = 90 },
+                _ => "这个名字应当被服务器覆盖");
+
+            var firstSeen = await Task.WhenAny(firstFrom.Task, Task.Delay(8000)) == firstFrom.Task
+                ? firstFrom.Task.Result
+                : null;
+
+            var secondSeen = await Task.WhenAny(secondFrom.Task, Task.Delay(8000)) == secondFrom.Task
+                ? secondFrom.Task.Result
+                : null;
+
+            Check("同一个班用的是它自己那份科目",
+                firstSeen == "化学张老师",
+                $"第一间看到的是 {firstSeen ?? "(没收到)"}");
+
+            Check("同一个老师的另一间教室用的是另一份科目",
+                secondSeen == "物理张老师",
+                $"第二间看到的是 {secondSeen ?? "(没收到)"}");
+
+            await perClassBroadcaster.ResetAsync();
+
+            // 没单独指定的班级回落到默认科目
+            await subjectHttp.PostAsJsonAsync(
+                $"{root}/api/console/users/{accountProfile?.Id}/subject",
+                new ConsoleSubjectRequest("数学", new Dictionary<string, string?>()),
+                JsonOptions);
+
+            var fallbackText = $"默认科目 {Guid.NewGuid():N}"[..20];
+            var fallbackFrom = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == fallbackText)
+                {
+                    fallbackFrom.TrySetResult(envelope.From ?? string.Empty);
+                }
+            };
+
+            var fallbackBroadcaster = new ClassroomBroadcaster(http, teacherSettings);
+            await fallbackBroadcaster.SendTextAsync(
+                [multiTargets[0]],
+                new TextShoutMessage { Text = fallbackText, Rate = 1, Volume = 90 },
+                _ => "ignored");
+
+            var fallbackSeen = await Task.WhenAny(fallbackFrom.Task, Task.Delay(8000)) == fallbackFrom.Task
+                ? fallbackFrom.Task.Result
+                : null;
+
+            Check("没单独指定的班级回落到默认科目",
+                fallbackSeen == "数学张老师",
+                $"看到的是 {fallbackSeen ?? "(没收到)"}");
+
+            await fallbackBroadcaster.ResetAsync();
+        }
+
+        // ---------- 8c. 服务器上的定时喊话 ----------
+        //
+        // 这是"教师端不在后台运行也能发"的那条路：任务存在服务器上，到点由服务器自己发。
+        // 自检用的服务器把检查间隔调到了 200 毫秒（CLASSSHOUT_SCHEDULE_TICK_MS），
+        // 所以这里能真的等它到点，而不必假装时间过去了。
+        if (!string.IsNullOrEmpty(adminToken))
+        {
+            using var scheduleHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            scheduleHttp.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, adminToken);
+
+            // —— 越权：没被授权的班级不能排定时（否则它就是绕过授权的一条侧门）——
+            using var teacherScheduleHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            teacherScheduleHttp.DefaultRequestHeaders.TryAddWithoutValidation(
+                RelayPaths.AuthTokenHeader, teacherSettings.AuthToken);
+
+            var unauthorized = await teacherScheduleHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.AuthSchedule}",
+                new ScheduleShoutRequest("越权的定时", DateTimeOffset.UtcNow.AddSeconds(5), [uuid]),
+                JsonOptions);
+
+            var unauthorizedBody = await unauthorized.Content.ReadAsStringAsync();
+
+            Check("没被授权的班级排不了定时（不能绕过授权）",
+                (int)unauthorized.StatusCode == 400 && unauthorizedBody.Contains("还没有授权"),
+                $"HTTP {(int)unauthorized.StatusCode}：{Trim(unauthorizedBody)}");
+
+            var unknownTarget = await scheduleHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.AuthSchedule}",
+                new ScheduleShoutRequest("发给不存在的班", DateTimeOffset.UtcNow.AddSeconds(5), [Guid.NewGuid().ToString()]),
+                JsonOptions);
+
+            var unknownBody = await unknownTarget.Content.ReadAsStringAsync();
+
+            Check("服务器上没有的班级排不了定时",
+                (int)unknownTarget.StatusCode == 400 && unknownBody.Contains("没有这些班级"),
+                $"HTTP {(int)unknownTarget.StatusCode}：{Trim(unknownBody)}");
+
+            // —— 文字定时：到点后教室端真的收到，且来源是老师那一份名字 ——
+            var scheduledText = $"服务器定时 {Guid.NewGuid():N}"[..20];
+            var scheduledReceived = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == scheduledText)
+                {
+                    scheduledReceived.TrySetResult(envelope);
+                }
+            };
+
+            var textCreate = await scheduleHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.AuthSchedule}",
+                new ScheduleShoutRequest(
+                    scheduledText,
+                    DateTimeOffset.UtcNow.AddSeconds(2),
+                    [uuid],
+                    Display: ShoutDisplayModes.Popup,
+                    FontSize: ShoutFontSizes.Large,
+                    HoldMs: 30_000,
+                    Speak: false),
+                JsonOptions);
+
+            var created = await textCreate.Content.ReadFromJsonAsync<ScheduleShoutResponse>(JsonOptions);
+
+            Check("能排一条服务器定时",
+                textCreate.IsSuccessStatusCode && created is { Ok: true, Item: not null },
+                created?.Error ?? $"id={created?.Item?.Id}");
+
+            Check("排进去的时候带回目标班级名（老师要看得出排给了谁）",
+                created?.Item?.TargetNames.Count == 1 && created.Item.TargetNames[0] == "中继测试教室",
+                string.Join("、", created?.Item?.TargetNames ?? []));
+
+            Check("排进去的时候把展示参数一并存下",
+                created?.Item is { Display: ShoutDisplayModes.Popup, FontSize: ShoutFontSizes.Large, HoldMs: 30_000, Speak: false },
+                $"{created?.Item?.Display} / {created?.Item?.FontSize} / {created?.Item?.HoldMs}ms / 朗读={created?.Item?.Speak}");
+
+            var delivered = await Task.WhenAny(scheduledReceived.Task, Task.Delay(20_000)) == scheduledReceived.Task
+                ? scheduledReceived.Task.Result
+                : null;
+
+            Check("到点后教室端收到了这条定时喊话（应用根本不在场）",
+                delivered is not null,
+                delivered is null ? "20 秒内没收到" : $"内容=「{delivered.Text}」");
+
+            Check("定时喊话的来源是排这条的人（管理员就是管理员）",
+                delivered?.From == "管理员",
+                $"From={delivered?.From ?? "(没收到)"}");
+
+            Check("定时喊话把展示参数一起带到了教室端",
+                delivered is { Display: ShoutDisplayModes.Popup, HoldMs: 30_000, Speak: false },
+                $"{delivered?.Display} / {delivered?.HoldMs}ms / 朗读={delivered?.Speak}");
+
+            // 发完之后状态要变成"已发出"，并留下逐间的结果
+            var afterFire = await scheduleHttp.GetFromJsonAsync<List<ScheduledShoutDto>>(
+                $"{root}{RelayPaths.AuthSchedule}", JsonOptions) ?? [];
+
+            var fired = afterFire.FirstOrDefault(item => item.Id == created?.Item?.Id);
+
+            Check("发完之后状态变成已发出，并留下逐间结果",
+                fired is { Status: ServerScheduleStatus.Sent } && fired.Results.Count > 0,
+                fired is null ? "列表里找不到这条" : $"{fired.Status}：{string.Join("；", fired.Results)}");
+
+            // —— 语音定时：录好的一段 PCM 到点被原样放出去 ——
+            var clipFormat = AudioFormat.Default;
+            var clipSeconds = 0.5;
+            var clipPcm = new byte[clipFormat.BytesForDuration((int)(clipSeconds * 1000))];
+
+            for (var i = 0; i < clipPcm.Length; i++)
+            {
+                clipPcm[i] = (byte)(i % 251);
+            }
+
+            var audioStartSeen = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var audioEndSeen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var audioChunks = new List<byte[]>();
+
+            classroom.ShoutReceived += envelope =>
+            {
+                switch (envelope.Kind)
+                {
+                    case RelayKinds.AudioStart:
+                        audioStartSeen.TrySetResult(envelope);
+                        break;
+
+                    case RelayKinds.Audio when !string.IsNullOrEmpty(envelope.AudioBase64):
+                        lock (audioChunks)
+                        {
+                            audioChunks.Add(Convert.FromBase64String(envelope.AudioBase64));
+                        }
+
+                        break;
+
+                    case RelayKinds.AudioEnd:
+                        audioEndSeen.TrySetResult(true);
+                        break;
+                }
+            };
+
+            using var voiceContent = new MultipartFormDataContent
+            {
+                { new StringContent(DateTimeOffset.UtcNow.AddSeconds(2).ToString("O")), "sendAt" },
+                { new StringContent(uuid), "targetUuids" },
+                { new StringContent("这条是定时的语音"), "text" },
+            };
+
+            var audioPart = new ByteArrayContent(WavCodec.Encode(clipFormat, clipPcm));
+            audioPart.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("audio/wav");
+            voiceContent.Add(audioPart, "audio", "clip.wav");
+
+            var voiceCreate = await scheduleHttp.PostAsync($"{root}{RelayPaths.AuthSchedule}/voice", voiceContent);
+            var voiceBody = await voiceCreate.Content.ReadAsStringAsync();
+            var voiceCreated = JsonSerializer.Deserialize<ScheduleShoutResponse>(voiceBody, JsonOptions);
+
+            Check("能排一条带语音的服务器定时",
+                voiceCreate.IsSuccessStatusCode && voiceCreated is { Ok: true },
+                voiceCreated?.Error ?? Trim(voiceBody));
+
+            Check("语音时长被记下来（列表里要显示得出来）",
+                voiceCreated?.Item is { } voiceItem &&
+                string.Equals(voiceItem.Kind, ScheduledShoutKinds.Voice, StringComparison.Ordinal) &&
+                Math.Abs(voiceItem.AudioSeconds - clipSeconds) < 0.1,
+                $"{voiceCreated?.Item?.Kind} / {voiceCreated?.Item?.AudioSeconds:0.##} 秒");
+
+            var startEnvelope = await Task.WhenAny(audioStartSeen.Task, Task.Delay(20_000)) == audioStartSeen.Task
+                ? audioStartSeen.Task.Result
+                : null;
+
+            await Task.WhenAny(audioEndSeen.Task, Task.Delay(15_000));
+
+            Check("到点后教室端收到了语音开始",
+                startEnvelope is { SampleRate: > 0, Channels: > 0, BitsPerSample: > 0 },
+                startEnvelope is null
+                    ? "20 秒内没收到"
+                    : $"{startEnvelope.SampleRate} Hz / {startEnvelope.Channels} 声道 / {startEnvelope.BitsPerSample} bit");
+
+            Check("语音的采集格式与录的时候一致",
+                startEnvelope is not null &&
+                startEnvelope.SampleRate == clipFormat.SampleRate &&
+                startEnvelope.Channels == clipFormat.Channels &&
+                startEnvelope.BitsPerSample == clipFormat.BitsPerSample,
+                startEnvelope is null ? "(没收到)" : $"{startEnvelope.SampleRate}/{startEnvelope.Channels}/{startEnvelope.BitsPerSample}");
+
+            byte[] reassembled;
+            lock (audioChunks)
+            {
+                reassembled = audioChunks.SelectMany(chunk => chunk).ToArray();
+            }
+
+            Check("定时语音的字节逐字节一致（没有被截断或改写）",
+                reassembled.Length == clipPcm.Length && reassembled.AsSpan().SequenceEqual(clipPcm),
+                $"发出 {clipPcm.Length} 字节，收到 {reassembled.Length} 字节");
+
+            Check("定时语音分了多片推（按实时节奏，而不是一口气塞进去）",
+                audioChunks.Count > 1,
+                $"共 {audioChunks.Count} 片");
+
+            Check("语音发完之后收了尾（教室端知道该结束播放了）",
+                audioEndSeen.Task.IsCompleted,
+                audioEndSeen.Task.IsCompleted ? "已收尾" : "没收到 audioEnd");
+
+            // —— 老师自己排的那条：来源要用**他的**名字（而且按班级取科目）——
+            //
+            // 这一段才是真实用法：老师在自己的手机上排一条，然后关掉手机。
+            var teacherProfile = (await scheduleHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [])
+                .FirstOrDefault(u => u.Username == accountName);
+
+            await scheduleHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.ConsoleBindings}",
+                new GrantBindingRequest(teacherProfile?.Id ?? string.Empty, uuid),
+                JsonOptions);
+
+            var byTeacherText = $"老师排的定时 {Guid.NewGuid():N}"[..22];
+            var byTeacherReceived = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == byTeacherText)
+                {
+                    byTeacherReceived.TrySetResult(envelope.From ?? string.Empty);
+                }
+            };
+
+            var teacherCreate = await teacherScheduleHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.AuthSchedule}",
+                new ScheduleShoutRequest(byTeacherText, DateTimeOffset.UtcNow.AddSeconds(2), [uuid]),
+                JsonOptions);
+
+            Check("授权之后老师能自己排定时",
+                teacherCreate.IsSuccessStatusCode,
+                Trim(await teacherCreate.Content.ReadAsStringAsync()));
+
+            var teacherFrom = await Task.WhenAny(byTeacherReceived.Task, Task.Delay(20_000)) == byTeacherReceived.Task
+                ? byTeacherReceived.Task.Result
+                : null;
+
+            Check("老师排的定时用的是他自己的名字（服务器贴的，客户端冒充不了）",
+                teacherFrom == "数学张老师",
+                $"From={teacherFrom ?? "(20 秒内没收到)"}");
+
+            // —— 取消：取消掉的不该发出去 ——
+            var cancelTarget = await scheduleHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.AuthSchedule}",
+                new ScheduleShoutRequest(
+                    $"这条会被取消 {Guid.NewGuid():N}"[..24],
+                    DateTimeOffset.UtcNow.AddSeconds(6),
+                    [uuid]),
+                JsonOptions);
+
+            var cancelItem = (await cancelTarget.Content.ReadFromJsonAsync<ScheduleShoutResponse>(JsonOptions))?.Item;
+
+            var cancelledText = cancelItem?.Text ?? string.Empty;
+            var cancelledArrived = false;
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == cancelledText)
+                {
+                    cancelledArrived = true;
+                }
+            };
+
+            var cancelResponse = await scheduleHttp.DeleteAsync(
+                $"{root}{string.Format(RelayPaths.AuthScheduleItem, cancelItem?.Id)}");
+
+            Check("能取消服务器上的一条定时", cancelResponse.IsSuccessStatusCode, $"HTTP {(int)cancelResponse.StatusCode}");
+
+            await Task.Delay(7000);
+
+            Check("取消掉的定时不会到点发出去", !cancelledArrived, "教室里没有出现这条");
+
+            var afterCancel = await scheduleHttp.GetFromJsonAsync<List<ScheduledShoutDto>>(
+                $"{root}{RelayPaths.AuthSchedule}", JsonOptions) ?? [];
+
+            Check("取消之后列表里标成已取消",
+                afterCancel.FirstOrDefault(item => item.Id == cancelItem?.Id)?.Status == ServerScheduleStatus.Cancelled,
+                afterCancel.FirstOrDefault(item => item.Id == cancelItem?.Id)?.Status ?? "(找不到)");
+        }
+
+        // ---------- 8d. 控制台集体喊话 ----------
         //
         // "所有在线教室"这个概念得真的压一遍：判在线的依据是教室记录上的最近活动时间，
         // 而两间教室此刻都在长轮询 —— 少发一间是那种当场就会被发现的尴尬。
@@ -1864,6 +2257,178 @@ internal static class Program
         Check("常用语：默认里没有重复",
             fallback.Phrases.Distinct(StringComparer.Ordinal).Count() == fallback.Phrases.Count,
             "没有重复项");
+    }
+
+    /// <summary>
+    /// 按班级的任教科目。
+    ///
+    /// 这条规则错起来特别安静：名字照样显示，只是科目那两个字不对 ——
+    /// 而"是谁在说话"正是这个字段存在的全部理由。两端（服务器贴来源、
+    /// 教师端局域网直连自己贴来源）必须算出同一个名字，所以规则放在 Core 里共用。
+    /// </summary>
+    private static void AssertTeachingSubjects()
+    {
+        var byClassroom = new Dictionary<string, string?>
+        {
+            ["uuid-junior-2"] = "化学",
+            ["uuid-junior-3"] = " 物理 ",   // 首尾空白要裁掉
+            ["uuid-empty"] = "   ",          // 只有空白＝没指定
+            [""] = "地理",                    // 空 UUID 丢掉
+        };
+
+        var normalized = TeachingSubjects.Normalize(byClassroom);
+
+        Check("按班级的科目表：裁掉空白、丢掉空条目",
+            normalized.Count == 2 && normalized["uuid-junior-3"] == "物理",
+            $"剩 {normalized.Count} 条：{string.Join("、", normalized.Select(kv => $"{kv.Key}={kv.Value}"))}");
+
+        Check("有单独指定的班用那一份",
+            TeachingSubjects.For("数学", normalized, "uuid-junior-2") == "化学",
+            TeachingSubjects.For("数学", normalized, "uuid-junior-2") ?? "(空)");
+
+        Check("没单独指定的班回落到默认科目",
+            TeachingSubjects.For("数学", normalized, "uuid-unknown") == "数学",
+            TeachingSubjects.For("数学", normalized, "uuid-unknown") ?? "(空)");
+
+        Check("UUID 大小写不同也算同一间",
+            TeachingSubjects.For("数学", normalized, "UUID-JUNIOR-2") == "化学",
+            TeachingSubjects.For("数学", normalized, "UUID-JUNIOR-2") ?? "(空)");
+
+        Check("没有默认科目又没单独指定时，不编一个出来",
+            TeachingSubjects.For(null, normalized, "uuid-unknown") is null,
+            "返回了空");
+
+        Check("连科目都没有时来源只报姓名",
+            TeachingSubjects.ShoutName("张老师", null, null, null) == "张老师",
+            TeachingSubjects.ShoutName("张老师", null, null, null));
+
+        Check("有科目时来源是「科目＋姓名」",
+            TeachingSubjects.ShoutName("张老师", "数学", normalized, "uuid-junior-2") == "化学张老师",
+            TeachingSubjects.ShoutName("张老师", "数学", normalized, "uuid-junior-2"));
+
+        // 存下来的那份与"可以往里写 null"的那份要能互转：读写共用同一个形状
+        var asNullable = TeachingSubjects.AsNullable(normalized);
+        Check("存下来的表能转成可写 null 的那一份（读写同一个形状）",
+            asNullable is { Count: 2 } && asNullable["uuid-junior-2"] == "化学",
+            asNullable is null ? "返回了 null" : $"{asNullable.Count} 条");
+
+        Check("空表转出来是 null 而不是空字典（少一种状态要判断）",
+            TeachingSubjects.AsNullable(new Dictionary<string, string>()) is null,
+            "返回了 null");
+    }
+
+    /// <summary>
+    /// WAV 编解码。
+    ///
+    /// 定时语音要落盘再读回来，而**格式丢了就没法播**：教室端把 16 kHz 的字节
+    /// 当成 48 kHz 放出来，是一段快进的声音 —— 不会报错，只是很难听出是人话。
+    /// </summary>
+    private static void AssertWavCodec()
+    {
+        var format = new AudioFormat(16000, 1, 16);
+        var pcm = new byte[format.BytesForDuration(700)];
+
+        for (var i = 0; i < pcm.Length; i++)
+        {
+            pcm[i] = (byte)(i % 253);
+        }
+
+        var wav = WavCodec.Encode(format, pcm);
+
+        Check("包出来的 WAV 带 RIFF/WAVE 头",
+            wav.Length == WavCodec.HeaderBytes + pcm.Length
+            && System.Text.Encoding.ASCII.GetString(wav, 0, 4) == "RIFF"
+            && System.Text.Encoding.ASCII.GetString(wav, 8, 4) == "WAVE",
+            $"{wav.Length} 字节（PCM {pcm.Length} + 头 {WavCodec.HeaderBytes}）");
+
+        Check("读得回来的格式与写进去的一致",
+            WavCodec.TryDecode(wav, out var decodedFormat, out var decodedPcm)
+            && decodedFormat.SampleRate == format.SampleRate
+            && decodedFormat.Channels == format.Channels
+            && decodedFormat.BitsPerSample == format.BitsPerSample,
+            "16000 Hz / 1 声道 / 16 bit");
+
+        Check("读回来的 PCM 逐字节一致",
+            decodedPcm.Length == pcm.Length && decodedPcm.AsSpan().SequenceEqual(pcm),
+            $"发出 {pcm.Length} 字节，读回 {decodedPcm.Length} 字节");
+
+        Check("时长算得对（用来卡 60 秒上限）",
+            Math.Abs(format.DurationMsOf(pcm.Length) / 1000.0 - 0.7) < 0.01,
+            $"{format.DurationMsOf(pcm.Length) / 1000.0:0.###} 秒");
+
+        Check("不是 WAV 的东西不会被当成 WAV",
+            !WavCodec.TryDecode("这不是音频"u8.ToArray(), out _, out _),
+            "被拒了");
+
+        // 非 PCM（比如 8 位的 A-law）宁可拒收，也不要放出一段噪声
+        var alaw = WavCodec.Encode(format, pcm);
+        alaw[20] = 6;
+        alaw[21] = 0;
+
+        Check("非 PCM 编码的 WAV 被拒收（而不是放出噪声）",
+            !WavCodec.TryDecode(alaw, out _, out _),
+            "被拒了");
+
+        // 别的软件写出来的 WAV 常在 fmt 与 data 之间塞 LIST/fact 块，要能跳过去
+        var withExtra = new List<byte>(WavCodec.Encode(format, pcm));
+        withExtra.InsertRange(WavCodec.HeaderBytes, [.. "LIST"u8.ToArray(), 4, 0, 0, 0, 1, 2, 3, 4]);
+
+        Check("中间的额外块（LIST 之类）能跳过",
+            WavCodec.TryDecode(withExtra.ToArray(), out _, out var extraPcm) && extraPcm.Length == pcm.Length,
+            $"读回 {extraPcm.Length} 字节");
+    }
+
+    /// <summary>
+    /// 定时喊话的两种形态（文字 / 语音）在列表里要说得清。
+    ///
+    /// "（空）"和"语音 12 秒"混起来的话，老师看到一条空条目会以为是坏了。
+    /// </summary>
+    private static void AssertScheduledShoutModel()
+    {
+        var voice = new ScheduledShout
+        {
+            Kind = ScheduledShoutKinds.Voice,
+            AudioSeconds = 12.4,
+            AudioFile = "abc.wav",
+        };
+
+        Check("语音定时的摘要是时长，不是空内容",
+            voice.SummaryText == "语音 12.4 秒",
+            voice.SummaryText);
+
+        Check("认得出这是语音定时",
+            ScheduledShoutKinds.IsVoice(voice.Kind) && !ScheduledShoutKinds.IsVoice(ScheduledShoutKinds.Text),
+            $"{voice.Kind} / {ScheduledShoutKinds.Text}");
+
+        var text = new ScheduledShout { Text = "下课前五分钟提醒交作业，别忘了把实验报告带上并交给课代表" };
+
+        Check("文字定时的摘要会被截断（列表里一行放得下）",
+            text.SummaryText.Length <= 25 && text.SummaryText.EndsWith('…'),
+            text.SummaryText);
+
+        var at = new DateTimeOffset(2026, 9, 26, 8, 0, 0, TimeSpan.Zero);
+        var pending = new ScheduledShout { SendAt = at };
+
+        Check("到点了才算 due（差一秒都不算）",
+            pending.IsDue(at) && !pending.IsDue(at.AddSeconds(-1)),
+            "到点那一刻算，前一秒不算");
+
+        Check("错过超过宽限窗口就不再补发",
+            pending.IsMissedBeyond(at.AddMinutes(3).AddSeconds(1), TimeSpan.FromMinutes(3))
+            && !pending.IsMissedBeyond(at.AddMinutes(2), TimeSpan.FromMinutes(3)),
+            "三分钟以内还发，超过就不发");
+
+        var sent = new ScheduledShout { SendAt = at, SentAt = at };
+
+        Check("已经发过的不再算 due（不会重复发）",
+            !sent.IsDue(at.AddMinutes(1)),
+            "发过就不再发");
+
+        var cancelled = new ScheduledShout { SendAt = at, Cancelled = true };
+
+        Check("取消掉的不算 due",
+            !cancelled.IsDue(at),
+            "取消优先于时间");
     }
 
     /// <summary>

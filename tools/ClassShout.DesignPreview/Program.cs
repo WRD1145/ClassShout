@@ -52,6 +52,44 @@ internal sealed record Scene(
     int Height,
     Func<bool, IReadOnlyList<(string Name, uint Rgb)>?> Expectations);
 
+/// <summary>
+/// 预览用的假录音器。
+///
+/// 只为了让"定时语音"那一块界面能画出来 —— 它自己不采任何数据，
+/// 场景里需要的那段语音是直接塞进视图模型的。真机上这块由各平台头实现。
+/// </summary>
+internal sealed class PreviewAudioRecorder : ClassShout.Core.Audio.IAudioRecorder
+{
+    public bool IsRecording { get; private set; }
+
+    public ClassShout.Core.Audio.AudioFormat Format => ClassShout.Core.Audio.AudioFormat.Default;
+
+    public event EventHandler<float>? LevelChanged;
+
+    public event EventHandler<string>? Failed;
+
+    public Task StartAsync(Action<ReadOnlyMemory<byte>> onData, CancellationToken cancellationToken = default)
+    {
+        IsRecording = true;
+
+        // 电平给一点：那一块界面上的电平条要看得见才有意义
+        LevelChanged?.Invoke(this, 0.35f);
+
+        _ = onData;
+        _ = Failed;
+        _ = cancellationToken;
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync()
+    {
+        IsRecording = false;
+        return Task.CompletedTask;
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
 internal static class Program
 {
     /// <summary>
@@ -912,6 +950,12 @@ internal static class Program
 
         Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", previewDataDir);
 
+        // 注册一个"打不开的麦克风"实现：定时语音那一块界面只在
+        // TeacherPlatform.HasRecorder 为真时才画得出来，而预览进程里没人注册过 ——
+        // 不注册的话，那一整块 UI 在 42 张图里一次都不会出现，等于没验过。
+        ClassShout.Teacher.Services.TeacherPlatform.RegisterAudioRecorder(
+            static () => new PreviewAudioRecorder());
+
         AppBuilder.Configure<PreviewApp>()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions
             {
@@ -1173,6 +1217,111 @@ internal static class Program
             // 编辑态：每一行变成输入框 + 删除按钮，并顺手加一条空的，
             // 好看清"新增的那一行"长什么样（水位提示只在空行上才看得到）。
             new("teacher-phrases-edit", () => CreatePhrasePage(editing: true), 430, 1400, _ => null),
+
+            // 教师端「设备」页上的「任教科目」：一位老师在不同班教不同科目。
+            // 种一间教室 + 一份按班级的科目表，才画得出那些输入框。
+            new("teacher-subjects",
+                () =>
+                {
+                    var path = Path.Combine(LocalSettings.Directory, "teacher.json");
+                    var had = File.Exists(path);
+                    var backup = had ? File.ReadAllText(path) : null;
+
+                    try
+                    {
+                        var settings = new TeacherRelaySettings
+                        {
+                            ServerUrl = "https://relay.example.com",
+                            DisplayName = "张老师",
+                            Subject = "数学",
+                            SubjectByClassroom = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                            {
+                                ["uuid-a"] = "信息技术",
+                            },
+                        };
+
+                        TeacherRelaySettings.Remember(settings.RecentClassrooms,
+                            new BoundClassroom("uuid-a", "三年二班", DateTimeOffset.UtcNow, settings.ServerUrl, "secret-a"));
+                        TeacherRelaySettings.Remember(settings.RecentClassrooms,
+                            new BoundClassroom("uuid-b", "三年三班", DateTimeOffset.UtcNow, settings.ServerUrl, "secret-b"));
+
+                        LocalSettings.SaveTeacher(settings);
+
+                        var vm = new TeacherShellViewModel();
+                        vm.NavigateDevicesCommand.Execute(null);
+
+                        return new TeacherView { DataContext = vm };
+                    }
+                    finally
+                    {
+                        if (had && backup is not null)
+                        {
+                            File.WriteAllText(path, backup);
+                        }
+                        else
+                        {
+                            File.Delete(path);
+                        }
+                    }
+                }, 430, 2100,
+                _ => null),
+
+            // 定时通知：一条本机排的语音 + 一条交给服务器的。
+            // 两种来源在界面上合成一个列表，但说明文字完全不同 ——
+            // "关掉手机也会发"和"要开着应用"是老师最需要看清的一件事。
+            new("teacher-schedule",
+                () =>
+                {
+                    var path = Path.Combine(LocalSettings.Directory, "teacher-schedule.json");
+                    var had = File.Exists(path);
+                    var backup = had ? File.ReadAllText(path) : null;
+
+                    try
+                    {
+                        var settings = new TeacherScheduleSettings();
+                        var due = DateTimeOffset.Now.AddHours(1);
+
+                        settings.Add(new ScheduledShout
+                        {
+                            SendAt = due,
+                            Text = "下课前五分钟提醒交作业",
+                            HoldMs = 30_000,
+                        });
+
+                        settings.Add(new ScheduledShout
+                        {
+                            SendAt = due.AddMinutes(20),
+                            Kind = ScheduledShoutKinds.Voice,
+                            AudioSeconds = 8.5,
+                            AudioFile = "preview.wav",
+                            Speak = true,
+                        });
+
+                        LocalSettings.SaveSchedule(settings);
+
+                        var vm = new TeacherShellViewModel();
+
+                        // 录好一段但还没排进定时：那一块只在有这个状态时才画得出来
+                        var partialFormat = ClassShout.Core.Audio.AudioFormat.Default;
+                        vm.PendingClip = new ClassShout.Teacher.Services.VoiceClip(
+                            partialFormat,
+                            new byte[partialFormat.BytesForDuration(4200)]);
+
+                        return new TeacherView { DataContext = vm };
+                    }
+                    finally
+                    {
+                        if (had && backup is not null)
+                        {
+                            File.WriteAllText(path, backup);
+                        }
+                        else
+                        {
+                            File.Delete(path);
+                        }
+                    }
+                }, 430, 1250,
+                _ => null),
 
             // 教室端窗口自带尺寸，这里传 0 表示用窗口自己的
             new("classroom",

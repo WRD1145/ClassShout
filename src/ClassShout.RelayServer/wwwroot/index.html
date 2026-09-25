@@ -175,9 +175,11 @@
     <h2>任教科目</h2>
     <p>「<span id="subjectName"></span>」的任教科目。填了之后，教室里的喊话来源会显示成
       「数学张老师」；留空即清掉，来源回到只报姓名。</p>
+    <p>同一位老师在不同班教不同科目时，在下面按班级各填一份 —— 那间教室看到的就是那个科目。</p>
     <div id="subjectError" class="hidden"></div>
-    <label for="subjectInput">任教科目（可留空）</label>
+    <label for="subjectInput">默认科目（所有没单独指定的班级都用它）</label>
     <input id="subjectInput" type="text" autocomplete="off" placeholder="例如 数学">
+    <div id="subjectClassrooms"></div>
     <div class="actions">
       <button class="outlined" data-action="close-subject">取消</button>
       <button class="primary" data-action="submit-subject">保存</button>

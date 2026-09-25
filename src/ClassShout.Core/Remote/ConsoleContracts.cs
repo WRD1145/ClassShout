@@ -30,9 +30,16 @@ public sealed record ImportUsersResponse(int Created, int Failed, IReadOnlyList<
 
 /// <summary>
 /// 控制台改一位老师的任教科目。
-/// <paramref name="Value"/> 留空（或只有空白）表示清掉科目，喊话来源回到只报姓名。
+/// <paramref name="Value"/> 留空（或只有空白）表示清掉默认科目，喊话来源回到只报姓名。
 /// </summary>
-public sealed record ConsoleSubjectRequest(string? Value);
+/// <param name="Value">默认科目（没被 <paramref name="ByClassroom"/> 覆盖的班级用它）。</param>
+/// <param name="ByClassroom">
+/// 按班级覆盖：教室 UUID → 科目。传 null 表示只改默认科目、不动覆盖表；
+/// 传一份表（可以是空表）则整表替换。
+/// </param>
+public sealed record ConsoleSubjectRequest(
+    string? Value,
+    IReadOnlyDictionary<string, string?>? ByClassroom = null);
 
 /// <summary>管理员在控制台上直接对某个班级喊话。</summary>
 /// <param name="Uuid">教室 UUID。</param>

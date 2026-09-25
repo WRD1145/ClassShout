@@ -45,6 +45,12 @@ $env:CLASSSHOUT_CONFIG = Join-Path $state 'relay-config.json'
 $env:CLASSSHOUT_USER_STATE = Join-Path $state 'relay-users.json'
 $env:CLASSSHOUT_RELAY_STATE = Join-Path $state 'relay-state.json'
 $env:CLASSSHOUT_BINDING_STATE = Join-Path $state 'relay-bindings.json'
+$env:CLASSSHOUT_SCHEDULE_STATE = Join-Path $state 'relay-schedule.json'
+$env:CLASSSHOUT_SCHEDULE_AUDIO = Join-Path $state 'relay-schedule-audio'
+
+# 服务器定时默认每 5 秒扫一次，而自检要真的等到"到点发出去"这件事发生 ——
+# 压到 200 毫秒，一个用例才不用干等五秒。生产上没必要更密：定时精确到分钟。
+$env:CLASSSHOUT_SCHEDULE_TICK_MS = '200'
 
 $log = Join-Path $state 'server.log'
 $proc = Start-Process -FilePath $srv -ArgumentList '--urls', "http://127.0.0.1:$Port" `

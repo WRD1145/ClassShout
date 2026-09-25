@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Threading.RateLimiting;
+using ClassShout.Core.Audio;
 using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
 using ClassShout.RelayServer;
@@ -50,6 +51,21 @@ builder.Services.AddSingleton(sp => new ShareStore(shareStatePath, sp.GetRequire
 builder.Services.AddSingleton<UserSessions>();
 builder.Services.AddSingleton<RelaySessions>();
 builder.Services.AddSingleton<MessageHub>();
+
+// 服务器上的定时喊话：表 + 音频目录都在服务器自己的数据目录里。
+// 这是"教师端不必在后台运行"的落点 —— 任务交给一个一直开着的进程看着。
+var scheduleStatePath = Environment.GetEnvironmentVariable("CLASSSHOUT_SCHEDULE_STATE")
+    ?? Path.Combine(AppContext.BaseDirectory, "relay-schedule.json");
+
+var scheduleAudioPath = Environment.GetEnvironmentVariable("CLASSSHOUT_SCHEDULE_AUDIO")
+    ?? Path.Combine(AppContext.BaseDirectory, "relay-schedule-audio");
+
+builder.Services.AddSingleton(sp => new ScheduledShoutStore(
+    sp.GetRequiredService<ILogger<ScheduledShoutStore>>(),
+    scheduleStatePath,
+    scheduleAudioPath));
+
+builder.Services.AddHostedService<ScheduledShoutService>();
 
 // ======================== 限速 ========================
 //
@@ -125,6 +141,9 @@ var shares = app.Services.GetRequiredService<ShareStore>();
 var userSessions = app.Services.GetRequiredService<UserSessions>();
 var sessions = app.Services.GetRequiredService<RelaySessions>();
 var hub = app.Services.GetRequiredService<MessageHub>();
+
+// 服务器上的定时喊话：由后台调度服务到点发出去
+var schedule = app.Services.GetRequiredService<ScheduledShoutStore>();
 var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Relay");
 
 // 内置管理员的 Id。它不是用户库里的一条记录，所以给一个不会与真实用户冲突的固定值。
@@ -258,6 +277,272 @@ app.MapPost(RelayPaths.AuthLogout, ([FromHeader(Name = RelayPaths.AuthTokenHeade
     return Results.Ok(new { ok = true });
 });
 
+// ======================== 教师端：自己的任教科目 ========================
+//
+// 老师自己改自己那份：他在哪个班教什么，本人最清楚，不该事事都找管理员。
+// 只能改自己的 —— 令牌决定改谁，请求体里没有"改谁"这个字段，
+// 所以即便令牌泄露也改不了别人（而贴到喊话上的来源仍然由服务器算，冒充不了）。
+
+app.MapGet(RelayPaths.AuthSubjects, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+
+    return profile is null
+        ? Results.Unauthorized()
+        : Results.Ok(new TeachingSubjectsDto(
+            profile.Subject,
+            TeachingSubjects.AsNullable(profile.SubjectByClassroom)));
+});
+
+app.MapPost(RelayPaths.AuthSubjects, (
+    TeachingSubjectsDto request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    if (!users.SetSubject(profile.Id, request.Subject, request.SubjectByClassroom))
+    {
+        return Results.Json(new { error = "服务器写不进去，改动未生效。" }, statusCode: 500);
+    }
+
+    var updated = users.FindById(profile.Id);
+
+    logger.LogInformation("教师 {Display} 更新了自己的任教科目：默认 {Subject}，按班级 {Count} 条",
+        profile.DisplayName, request.Subject ?? "(空)", updated?.SubjectByClassroom?.Count ?? 0);
+
+    return Results.Ok(new TeachingSubjectsDto(
+        updated?.Subject,
+        TeachingSubjects.AsNullable(updated?.SubjectByClassroom)));
+});
+
+// ======================== 教师端：把定时喊话交给服务器 ========================
+//
+// 为什么值得单独一套端点：本机定时的边界是"应用得开着"，而老师把手机划掉、
+// 或者干脆关机过周末，是很正常的事。任务交给服务器之后，到点由服务器自己发。
+//
+// 归账号所有（用登录令牌），而不是挂某一条教室绑定上：一条定时可以发给好几个班，
+// 而绑定令牌是"这一间教室"的。
+
+/// <summary>这位老师能不能往这间教室发。与绑定用的是同一套授权规则。</summary>
+bool CanShoutInto(UserProfile profile, string uuid)
+    => profile.Id == AdminUserId || bindings.ClassroomsOf(profile.Id)
+        .Any(authorized => string.Equals(authorized, uuid, StringComparison.OrdinalIgnoreCase));
+
+app.MapGet(RelayPaths.AuthSchedule, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var items = schedule.OfOwner(profile.Id)
+        .OrderBy(item => item.IsPending ? 0 : 1)
+        .ThenBy(item => item.SendAt)
+        .Select(ToScheduleDto)
+        .ToList();
+
+    return Results.Ok(items);
+});
+
+app.MapPost(RelayPaths.AuthSchedule, (
+    ScheduleShoutRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    return CreateSchedule(profile, request, audio: null, audioSeconds: 0, audioFormat: null);
+}).RequireRateLimiting("auth");
+
+/// <summary>
+/// 带语音的定时：音频用 multipart 传，字段与上面的 JSON 同名。
+///
+/// 为什么不塞进 JSON：一段 30 秒的语音是约 1 MB 的 PCM，base64 之后还要再大三成，
+/// 而 multipart 本来就是为了传文件存在的。
+/// </summary>
+app.MapPost(RelayPaths.AuthSchedule + "/voice", async (
+    HttpRequest http,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    if (!http.HasFormContentType)
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, "语音要以 multipart/form-data 提交。"));
+    }
+
+    var form = await http.ReadFormAsync();
+
+    var sendAtRaw = form["sendAt"].ToString();
+    if (!DateTimeOffset.TryParse(sendAtRaw, out var sendAt))
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, "缺少或读不懂发送时间。"));
+    }
+
+    var targets = form["targetUuids"].ToString()
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .ToList();
+
+    var file = form.Files.GetFile("audio") ?? form.Files.FirstOrDefault();
+    if (file is null || file.Length == 0)
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, "没有收到语音文件。"));
+    }
+
+    using var stream = new MemoryStream();
+    await file.CopyToAsync(stream);
+
+    if (!WavCodec.TryDecode(stream.ToArray(), out var format, out var pcm))
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, "这段语音读不出来（需要 PCM 的 WAV）。"));
+    }
+
+    var seconds = format.DurationMsOf(pcm.Length) / 1000.0;
+    if (seconds > ServerScheduledShout.MaxVoiceSeconds)
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null,
+            $"语音最长 {ServerScheduledShout.MaxVoiceSeconds} 秒，这条是 {seconds:0.#} 秒。"));
+    }
+
+    var request = new ScheduleShoutRequest(form["text"].ToString(), sendAt, targets);
+    return CreateSchedule(profile, request, pcm, seconds, format);
+}).RequireRateLimiting("auth").DisableAntiforgery();
+
+app.MapDelete(string.Format(RelayPaths.AuthScheduleItem, "{id}"), (
+    string id,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var error = schedule.Cancel(id, profile.Id, asAdmin: profile.Id == AdminUserId);
+    return error is null
+        ? Results.Ok(new { ok = true })
+        : Results.BadRequest(new { error });
+});
+
+IResult CreateSchedule(
+    UserProfile profile,
+    ScheduleShoutRequest request,
+    byte[]? audio,
+    double audioSeconds,
+    AudioFormat? audioFormat)
+{
+    if (request.SendAt <= DateTimeOffset.UtcNow)
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, "这个时间已经过去了，请选一个将来的时间。"));
+    }
+
+    // 只排未来的两小时以内？不限制那么死，但太远的排进来多半是打错了年份
+    if (request.SendAt > DateTimeOffset.UtcNow.AddDays(60))
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, "最远只能排到 60 天以后。"));
+    }
+
+    if (request.TargetUuids.Count == 0)
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, "请至少选择一个班级。"));
+    }
+
+    if (audio is null && string.IsNullOrWhiteSpace(request.Text))
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, "文字定时需要内容。"));
+    }
+
+    var unknown = request.TargetUuids
+        .Where(uuid => store.Get(uuid) is null)
+        .ToList();
+
+    if (unknown.Count > 0)
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, $"服务器上没有这些班级：{string.Join("、", unknown)}"));
+    }
+
+    var forbidden = request.TargetUuids
+        .Where(uuid => !CanShoutInto(profile, uuid))
+        .ToList();
+
+    if (forbidden.Count > 0)
+    {
+        // 与绑定同一条规则：没被授权的班不能喊，定时也不例外 ——
+        // 否则"排一条以后发的"就成了绕过授权的一条侧门。
+        return Results.BadRequest(new ScheduleShoutResponse(false, null,
+            $"这些班级还没有授权给你：{string.Join("、", forbidden.Select(uuid => store.Get(uuid)?.Name ?? uuid))}"));
+    }
+
+    var item = new ServerScheduledShout
+    {
+        OwnerUserId = profile.Id,
+        OwnerDisplayName = profile.DisplayName,
+        SendAt = request.SendAt.ToUniversalTime(),
+        Kind = audio is null ? ScheduledShoutKinds.Text : ScheduledShoutKinds.Voice,
+        Text = request.Text,
+        AudioSeconds = audioSeconds,
+        AudioSampleRate = audioFormat?.SampleRate ?? 0,
+        AudioChannels = audioFormat?.Channels ?? 0,
+        AudioBitsPerSample = audioFormat?.BitsPerSample ?? 0,
+        Display = request.Display,
+        FontSize = request.FontSize,
+        HoldMs = request.HoldMs,
+        Speak = request.Speak,
+        TargetUuids = request.TargetUuids.ToList(),
+    };
+
+    if (audio is not null)
+    {
+        item.AudioFile = schedule.SaveAudio(item.Id, audio);
+        if (item.AudioFile is null)
+        {
+            return Results.Json(new ScheduleShoutResponse(false, null, "服务器暂时写不进磁盘，这条定时没有排上。"),
+                statusCode: 500);
+        }
+    }
+
+    var error = schedule.Add(item);
+    if (error is not null)
+    {
+        return Results.BadRequest(new ScheduleShoutResponse(false, null, error));
+    }
+
+    logger.LogInformation("新的服务器定时：{Owner} 排了 {Kind}，{Count} 个班，{SendAt:u}",
+        profile.DisplayName, item.Kind, item.TargetUuids.Count, item.SendAt);
+
+    return Results.Ok(new ScheduleShoutResponse(true, ToScheduleDto(item)));
+}
+
+ScheduledShoutDto ToScheduleDto(ServerScheduledShout item)
+    => new(
+        item.Id,
+        item.Kind,
+        item.Text,
+        item.AudioSeconds,
+        item.SendAt,
+        item.Status,
+        item.HandledAt,
+        item.Error,
+        item.TargetUuids,
+        item.TargetUuids.Select(uuid => store.Get(uuid)?.Name ?? uuid).ToList(),
+        item.Results,
+        item.Display,
+        item.FontSize,
+        item.HoldMs,
+        item.Speak);
+
 // ======================== 教室端：注册与查询 ========================
 
 app.MapGet(RelayPaths.Route(RelayPaths.LookupClassroom), (string uuid) =>
@@ -380,7 +665,8 @@ app.MapPost(RelayPaths.BindTeacher, (
 
         // 喊话来源用"科目 + 姓名"（"数学张老师"）：同一间教室一天里有好几位老师来喊，
     // 只报姓名往往对不上人。没填科目就还是只报姓名。
-    var teacherName = profile is null ? request.TeacherName : profile.ShoutName;
+    // 科目按**这间教室**取：同一位老师在不同班可能教不同科目。
+    var teacherName = profile is null ? request.TeacherName : profile.ShoutNameFor(record.Uuid);
 
     var binding = sessions.BindTeacher(record.Uuid, teacherName, profile?.Id);
     store.Touch(record.Uuid);
@@ -410,10 +696,13 @@ app.MapDelete(RelayPaths.Route(RelayPaths.TeacherUnbind, "token"), (string token
 /// 要等老师下次打开教师端重新绑定才会变。既然绑定记录里留着账号 Id，
 /// 这里就按账号**当前**的信息现算一遍；只有账号查不到（未登录或已被删）
 /// 才退回绑定时的快照。
+///
+/// 注意科目是**按这条喊话要去的那个班**取的：一位老师在不同班教不同科目，
+/// 用账号上那份默认科目会给其中一个班贴错科目。
 /// </summary>
 string FromOf(TeacherBinding binding)
     => binding.UserId is { } userId && users.FindById(userId) is { } profile
-        ? profile.ShoutName
+        ? profile.ShoutNameFor(binding.ClassroomUuid)
         : binding.TeacherName;
 
 app.MapPost(RelayPaths.Route(RelayPaths.TeacherText, "token"), (string token, TextShoutRequest request) =>
@@ -1406,7 +1695,7 @@ app.MapPost("/api/console/users/{id}/subject", (
         return Results.BadRequest(new { error = "内置管理员不是老师账号，没有任教科目。" });
     }
 
-    if (!users.SetSubject(id, request.Value))
+    if (!users.SetSubject(id, request.Value, request.ByClassroom))
     {
         return Results.NotFound(new { error = "找不到这个账号，或服务器写不进去。" });
     }
@@ -1631,7 +1920,17 @@ bool IsAdminIdentity(string? value)
 }
 
 UserProfileDto ToDto(UserProfile profile)
-    => new(profile.Id, profile.Username, profile.Email, profile.DisplayName, profile.CreatedAt, profile.LastLoginAt, profile.Disabled, false, profile.Subject);
+    => new(
+        profile.Id,
+        profile.Username,
+        profile.Email,
+        profile.DisplayName,
+        profile.CreatedAt,
+        profile.LastLoginAt,
+        profile.Disabled,
+        false,
+        profile.Subject,
+        profile.SubjectByClassroom);
 
 /// <summary>内置管理员的档案。它不是用户库里的一条记录，而是由配置文件描述的。</summary>
 UserProfileDto ToAdminDto()

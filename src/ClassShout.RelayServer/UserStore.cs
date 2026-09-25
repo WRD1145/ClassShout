@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using ClassShout.Core.Remote;
 
 namespace ClassShout.RelayServer;
 
@@ -30,6 +31,16 @@ public sealed class UserRecord
     /// </summary>
     public string? Subject { get; set; }
 
+    /// <summary>
+    /// 按班级覆盖的任教科目：教室 UUID → 科目。
+    ///
+    /// 一位老师常常在不同班教不同科目（信息技术老师给三个班上信息课、
+    /// 顺手还给一个班带数学），而 <see cref="Subject"/> 只有一份。
+    /// 这里没列到的班级就用 <see cref="Subject"/> 那份默认值。
+    /// 键按大小写不敏感比较：UUID 从不同地方来，大小写可能不一样。
+    /// </summary>
+    public Dictionary<string, string> SubjectByClassroom { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     public string PasswordHash { get; set; } = string.Empty;
 
     public string PasswordSalt { get; set; } = string.Empty;
@@ -50,10 +61,20 @@ public sealed record UserProfile(
     DateTimeOffset CreatedAt,
     DateTimeOffset? LastLoginAt,
     bool Disabled,
-    string? Subject = null)
+    string? Subject = null,
+    IReadOnlyDictionary<string, string>? SubjectByClassroom = null)
 {
     /// <summary>喊话来源里显示的名字：有科目就带上（"数学张老师"），没有就只报姓名。</summary>
-    public string ShoutName => string.IsNullOrWhiteSpace(Subject) ? DisplayName : $"{Subject}{DisplayName}";
+    public string ShoutName => TeachingSubjects.Format(Subject, DisplayName);
+
+    /// <summary>
+    /// 这位老师在**某一间**教室里的喊话来源。
+    ///
+    /// 服务器贴来源时用的一定是这个方法而不是 <see cref="ShoutName"/>：
+    /// 喊话是发给某个班的，科目就该取那个班的那一份。
+    /// </summary>
+    public string ShoutNameFor(string? classroomUuid)
+        => TeachingSubjects.ShoutName(DisplayName, Subject, SubjectByClassroom, classroomUuid);
 }
 
 /// <summary>用户名与邮箱的格式校验。集中在一处，注册与改资料共用同一套规则。</summary>
@@ -293,8 +314,13 @@ public sealed class UserStore
     /// 之所以需要它：科目是在注册那一刻写进去的，而注册页上它是选填的 ——
     /// 老师当时随手留空，之后他自己和管理员都没有地方再补，于是喊话来源里
     /// 永远只有姓名。开学后管理员在控制台上补一次，比让老师重新注册一遍合理。
+    ///
+    /// <paramref name="byClassroom"/> 传 null 表示"只动默认科目"，
+    /// 传一份表则**整表替换**按班级的覆盖（表里没有的班级回到默认科目）。
+    /// 做成整表替换而不是逐条增删：界面上是一张表，一次改动提交一次，
+    /// 逐条增删会多出"删到一半失败"这种中间状态。
     /// </summary>
-    public bool SetSubject(string id, string? subject)
+    public bool SetSubject(string id, string? subject, IReadOnlyDictionary<string, string?>? byClassroom = null)
     {
         lock (_lock)
         {
@@ -304,12 +330,20 @@ public sealed class UserStore
                 return false;
             }
 
-            var previous = user.Subject;
+            var previousSubject = user.Subject;
+            var previousMap = user.SubjectByClassroom;
+
             user.Subject = string.IsNullOrWhiteSpace(subject) ? null : subject.Trim();
+
+            if (byClassroom is not null)
+            {
+                user.SubjectByClassroom = TeachingSubjects.Normalize(byClassroom);
+            }
 
             if (!SaveLocked())
             {
-                user.Subject = previous;
+                user.Subject = previousSubject;
+                user.SubjectByClassroom = previousMap;
                 return false;
             }
 
@@ -357,7 +391,21 @@ public sealed class UserStore
     }
 
     private static UserProfile ToProfile(UserRecord user)
-        => new(user.Id, user.Username, user.Email, user.DisplayName, user.CreatedAt, user.LastLoginAt, user.Disabled, user.Subject);
+        => new(
+            user.Id,
+            user.Username,
+            user.Email,
+            user.DisplayName,
+            user.CreatedAt,
+            user.LastLoginAt,
+            user.Disabled,
+            user.Subject,
+
+            // 空表就给 null 而不是空字典：JSON 里少一个字段比多一个空对象干净，
+            // 客户端也少一种"有键但没内容"的状态要判断。
+            user.SubjectByClassroom.Count == 0
+                ? null
+                : new Dictionary<string, string>(user.SubjectByClassroom, StringComparer.OrdinalIgnoreCase));
 
     // ======================== 口令处理 ========================
 

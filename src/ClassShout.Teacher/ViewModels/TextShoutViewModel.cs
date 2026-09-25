@@ -107,6 +107,17 @@ public partial class TextShoutViewModel : ObservableObject
     /// <summary>喊话时用的老师姓名（服务器以账号里的姓名为准，这里只是兜底）。</summary>
     public string TeacherName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 「这位老师在某个班叫什么」。
+    ///
+    /// 按班级取，是因为一位老师在不同班可能教不同科目 —— 教室里看到的来源
+    /// （"数学张老师"／"信息技术张老师"）是跟着那个班走的。
+    /// 为 null 时一律用 <see cref="TeacherName"/>（自检与预览里就是这样）。
+    /// </summary>
+    public Func<string?, string>? ShoutNameFor { get; set; }
+
+    private string NameFor(string? uuid) => ShoutNameFor?.Invoke(uuid) ?? TeacherName;
+
     /// <summary>多班发送结束后抛一句结果给外壳去提示。</summary>
     public event Action<string>? BroadcastFinished;
 
@@ -658,7 +669,7 @@ public partial class TextShoutViewModel : ObservableObject
         try
         {
             var results = await Broadcaster
-                .SendTextAsync(selected, message, TeacherName, cancellationToken)
+                .SendTextAsync(selected, message, target => NameFor(target.Uuid), cancellationToken)
                 .ConfigureAwait(true);
 
             var sentCount = results.Count(r => r.Ok);
