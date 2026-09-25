@@ -146,8 +146,16 @@ try {
     git push origin HEAD
     if ($LASTEXITCODE -ne 0) { throw "推送分支失败 —— 标签尚未创建，可以先修好网络再重跑。" }
 
-    git tag -a $Version -m $Version
-    if ($LASTEXITCODE -ne 0) { throw "创建标签失败" }
+    # 标签可能已经存在：上一次跑到一半被中断（大附件上传很慢，超时是常事），
+    # 重跑时不该因为"标签已存在"就停在这里 —— 那会逼人先手工删标签再重来一遍。
+    git rev-parse $Version 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[标签] $Version 已存在，复用它" -ForegroundColor Yellow
+    }
+    else {
+        git tag -a $Version -m $Version
+        if ($LASTEXITCODE -ne 0) { throw "创建标签失败" }
+    }
 
     git push origin $Version
     if ($LASTEXITCODE -ne 0) { throw "推送标签失败" }
@@ -165,11 +173,27 @@ try {
         prerelease = $false
     } | ConvertTo-Json -Depth 4
 
-    $release = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$slug/releases" `
-        -Headers $headers -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
-        -ContentType 'application/json; charset=utf-8' @http
+    # 发行版同理：已存在就复用它、往上面补附件。
+    # 这一段与上面"标签已存在就复用"是同一个理由 —— 上传几百兆被中断之后，
+    # 重跑应该只补缺的那几个，而不是从头再来。
+    $release = $null
+    try {
+        $release = Invoke-RestMethod -Method Get `
+            -Uri "https://api.github.com/repos/$slug/releases/tags/$Version" -Headers $headers @http
 
-    Write-Host "[发行版] 已创建 id=$($release.id)" -ForegroundColor Green
+        Write-Host "[发行版] 已存在 id=$($release.id)（现有 $($release.assets.Count) 个附件），补传缺的" -ForegroundColor Yellow
+    }
+    catch {
+        $release = $null
+    }
+
+    if (-not $release) {
+        $release = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$slug/releases" `
+            -Headers $headers -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
+            -ContentType 'application/json; charset=utf-8' @http
+
+        Write-Host "[发行版] 已创建 id=$($release.id)" -ForegroundColor Green
+    }
 
     # ---------- 上传附件，并逐个核对 ----------
 
@@ -177,6 +201,24 @@ try {
     Write-Host '[上传] 开始…' -ForegroundColor Yellow
 
     foreach ($file in $files) {
+        # 已经传好且大小一致的跳过，省得把几百兆重来一遍。
+        # Releases 允许同名附件并存，所以"传了一半"的那种必须先删掉：
+        # 留着它下载的人会不知道该选哪个。
+        $existing = $release.assets | Where-Object { $_.name -eq $file.Name }
+
+        if ($existing -and $existing.size -eq $file.Length) {
+            Write-Host ("    [已存在] {0,-46} {1,8:N1} MB" -f $existing.name, ($existing.size / 1MB))
+            continue
+        }
+
+        if ($existing) {
+            Invoke-RestMethod -Method Delete `
+                -Uri "https://api.github.com/repos/$slug/releases/assets/$($existing.id)" `
+                -Headers $headers @http | Out-Null
+
+            Write-Host "    [替换] $($file.Name)（原有附件大小不符）" -ForegroundColor Yellow
+        }
+
         $uri = "https://uploads.github.com/repos/$slug/releases/$($release.id)/assets?name=$($file.Name)"
         $asset = Invoke-RestMethod -Method Post -Uri $uri -Headers $headers `
             -InFile $file.FullName -ContentType 'application/octet-stream' @http
