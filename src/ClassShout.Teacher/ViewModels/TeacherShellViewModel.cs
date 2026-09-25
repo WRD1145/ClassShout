@@ -148,6 +148,19 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         // 用本地令牌尝试恢复登录；失败也只是回到未登录，不阻塞界面
         _ = RestoreSessionAsync();
+
+        // 从分享链接启动（或者应用在前台时又点了一条链接）时自动兑现。
+        // 挂在构造里而不是页面的事件上：链接可能在任何一个页面打开时到达。
+        TeacherPlatform.ShareLinkReceived += link => Post(() =>
+        {
+            ShareLinkInput = link;
+            ActivePage = TeacherPage.Devices;
+
+            // 登录态可能还在恢复中（RestoreSessionAsync 是异步的），
+            // 所以兑现失败时把原因如实显示出来，老师重试一次就好 ——
+            // 比"先自己判断登录没登录、再决定要不要处理"简单得多，也不会漏掉链接。
+            _ = ClaimShareAsync();
+        });
     }
 
     public TextShoutViewModel Text { get; }

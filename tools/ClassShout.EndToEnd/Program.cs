@@ -203,7 +203,10 @@ internal static class Program
         // ---------- 3i. 定时通知 ----------
         await AssertSchedulerAsync();
 
-        // ---------- 3j. 发送队列 ----------
+        // ---------- 3j. 分享链接的解析 ----------
+        AssertShareLinkParsing();
+
+        // ---------- 3k. 发送队列 ----------
         await AssertShoutQueueAsync();
 
         // ---------- 4. 语音流 ----------
@@ -1564,6 +1567,55 @@ internal static class Program
         Check($"待发最多保留 {TeacherScheduleSettings.MaxItems} 条",
             settings.Items.Count <= TeacherScheduleSettings.MaxItems,
             $"{settings.Items.Count} 条");
+    }
+
+    /// <summary>
+    /// 分享链接的解析与启动参数提取。
+    ///
+    /// 这几条纯函数决定了"老师点开链接之后有没有反应"。出错的两种表现都不会报错：
+    /// 一种是把普通文字误当成令牌（于是弹一句莫名其妙的失败提示），
+    /// 另一种是链接明明对、却因为系统多给了一个带引号的参数而认不出来。
+    /// </summary>
+    private static void AssertShareLinkParsing()
+    {
+        const string token = "0123456789abcdef0123456789abcdef";
+
+        // 形态一：管理台复制出来的网页链接
+        var web = ShareLink.TryExtractToken($"https://relay.example.com/share/{token}", out var webServer);
+        Check("认得出网页链接里的令牌",
+            web == token, web ?? "没认出来");
+        Check("网页链接里的服务器地址也取了出来",
+            webServer == "https://relay.example.com", webServer ?? "(空)");
+
+        // 形态二：点"用教师端打开"时的应用链接（地址在查询串里，且被转义过）
+        var app = ShareLink.TryExtractToken(
+            $"classshout://claim?token={token}&server=https%3A%2F%2Frelay.example.com%3A8443",
+            out var appServer);
+
+        Check("认得出应用链接里的令牌", app == token, app ?? "没认出来");
+        Check("应用链接里的服务器地址（含端口）也取了出来",
+            appServer == "https://relay.example.com:8443", appServer ?? "(空)");
+
+        // 形态三：老师从聊天记录里挑出来复制的那个令牌
+        var bare = ShareLink.TryExtractToken(token, out _);
+        Check("光秃秃一个令牌也认", bare == token, bare ?? "没认出来");
+
+        // 反面：普通文字不能被当成令牌 —— 否则老师随手粘贴一句话会得到一句莫名其妙的报错
+        Check("普通文字不会被当成令牌",
+            ShareLink.TryExtractToken("同学们请安静", out _) is null
+            && ShareLink.TryExtractToken("https://relay.example.com/", out _) is null
+            && ShareLink.TryExtractToken("", out _) is null,
+            "三句都不是链接的都返回了 null");
+
+        // 启动参数：Windows 把协议链接作为普通参数交过来，且可能带引号
+        Check("从启动参数里认出分享链接",
+            TeacherPlatform.FindShareLink(["ClassShout.Teacher.Desktop.exe", $"\"classshout://claim?token={token}\""])
+                == $"classshout://claim?token={token}",
+            "连引号一起剥掉了");
+
+        Check("参数里没有链接时返回 null",
+            TeacherPlatform.FindShareLink(["app.exe", "--foo", "bar"]) is null,
+            "不会把普通参数当链接");
     }
 
     /// <summary>

@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using ClassShout.Core.Remote;
+using ClassShout.Teacher.Services;
 using ClassShout.Teacher.ViewModels;
 using ClassShout.Teacher.Views;
 
@@ -46,7 +47,23 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+
+        // 视图模型已经订阅好了，这时再把"启动时收到的那条分享链接"补发出去。
+        // 早一步发就没人接：链接是在 Main 里解析的，而那会儿应用还没起来。
+        if (PendingShareLink is { Length: > 0 } startupLink)
+        {
+            PendingShareLink = null;
+            TeacherPlatform.NotifyShareLink(startupLink);
+        }
     }
+
+    /// <summary>
+    /// 启动时收到、还没交给界面层的分享链接。由平台头在启动早期设置。
+    ///
+    /// 放在 App 上而不是直接调 TeacherPlatform：事件的订阅者在视图模型构造函数里才建立，
+    /// 而启动参数是在那之前解析的 —— 直接发会石沉大海。
+    /// </summary>
+    public static string? PendingShareLink { get; set; }
 
     private void DisposeViewModel()
     {

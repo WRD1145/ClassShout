@@ -1,4 +1,5 @@
 using Android.App;
+using Android.Content;
 using Android.Content.PM;
 using Android.OS;
 using Avalonia;
@@ -17,6 +18,14 @@ namespace ClassShout.Teacher.Android;
     LaunchMode = LaunchMode.SingleTop,
     ScreenOrientation = ScreenOrientation.Portrait,
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.UiMode)]
+// 让浏览器里的"用教师端打开"按钮能叫起本应用。
+// 这必须声明在 Activity 上（而不是只写清单文件）：清单里的 Activity 是构建系统
+// 按这个特性生成的，手写一份会和它打架。
+[IntentFilter(
+    [global::Android.Content.Intent.ActionView],
+    Categories = [global::Android.Content.Intent.CategoryDefault, global::Android.Content.Intent.CategoryBrowsable],
+    DataSchemes = [ClassShout.Core.Remote.ShareLink.Scheme],
+    DataHosts = ["claim"])]
 public class MainActivity : AvaloniaMainActivity<App>
 {
     private const int RecordAudioRequestCode = 1001;
@@ -38,6 +47,45 @@ public class MainActivity : AvaloniaMainActivity<App>
         // 麦克风属于危险权限，Android 6 起必须运行时申请，
         // 只写进清单是不够的 —— 不申请的话 AudioRecord 会直接抛异常。
         EnsureRecordAudioPermission();
+
+        // 应用被一条 classshout:// 链接启动
+        HandleShareIntent(Intent);
+    }
+
+    /// <summary>
+    /// 应用已在前台时又点了一条链接。
+    ///
+    /// 这一条最容易被漏掉：LaunchMode.SingleTop 下系统不会新建 Activity，
+    /// 只把新的 Intent 交给已有的那个 —— 不在这里处理的话，
+    /// 表现就是"第二次点链接没反应"，而第一次是好的。
+    /// </summary>
+    protected override void OnNewIntent(Intent? intent)
+    {
+        base.OnNewIntent(intent);
+
+        // 基类会用新 Intent 更新 Activity.Intent，这里显式设一遍以免依赖基类细节
+        if (intent is not null)
+        {
+            Intent = intent;
+        }
+
+        HandleShareIntent(intent);
+    }
+
+    /// <summary>把 Intent 里的分享链接交给共享 UI 层。</summary>
+    private static void HandleShareIntent(Intent? intent)
+    {
+        if (intent?.Data is not { } data)
+        {
+            return;
+        }
+
+        if (!string.Equals(data.Scheme, ClassShout.Core.Remote.ShareLink.Scheme, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        TeacherPlatform.NotifyShareLink(data.ToString() ?? string.Empty);
     }
 
     protected override void OnStop()
