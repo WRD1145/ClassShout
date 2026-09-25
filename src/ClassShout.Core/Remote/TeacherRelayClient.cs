@@ -35,10 +35,20 @@ public sealed class TeacherRelayClient : IAsyncDisposable
     private string? _token;
     private long _since;
 
-    public TeacherRelayClient(HttpClient http, TeacherRelaySettings settings)
+    /// <summary>
+    /// 指定这条客户端用哪台服务器；为空则用配置里那台。
+    ///
+    /// 需要它是因为"一次发给多个班级"：那些班级可能绑在不同的服务器上
+    /// （换了学校，或者学校换了服务器）。如果只能读全局配置，
+    /// 给别的服务器上的班级发消息就会打到当前那台上 —— 而错误的表现只是"没收到"。
+    /// </summary>
+    private readonly string? _serverUrlOverride;
+
+    public TeacherRelayClient(HttpClient http, TeacherRelaySettings settings, string? serverUrlOverride = null)
     {
         _http = http;
         _settings = settings;
+        _serverUrlOverride = string.IsNullOrWhiteSpace(serverUrlOverride) ? null : serverUrlOverride;
     }
 
     /// <summary>收到教室端事件（状态、上线/离线通知）。</summary>
@@ -50,8 +60,12 @@ public sealed class TeacherRelayClient : IAsyncDisposable
 
     public bool IsBound => _token is not null;
 
+    /// <summary>这台客户端的服务器地址（覆盖值优先）。</summary>
+    private string ServerUrl =>
+        _serverUrlOverride ?? _settings.ServerUrl ?? string.Empty;
+
     /// <summary>把线路路径拼成绝对地址。服务器地址用户可随时改，所以每次现拼。</summary>
-    private string Url(string path) => $"{(_settings.ServerUrl ?? string.Empty).TrimEnd('/')}{path}";
+    private string Url(string path) => $"{ServerUrl.TrimEnd('/')}{path}";
 
     public bool IsConnected { get; private set; }
 
@@ -66,9 +80,10 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         string uuid,
         string secret,
         string teacherName,
+        bool remember = true,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(_settings.ServerUrl))
+        if (string.IsNullOrWhiteSpace(ServerUrl))
         {
             return (false, "尚未填写中继服务器地址。");
         }
@@ -111,8 +126,15 @@ public sealed class TeacherRelayClient : IAsyncDisposable
 
             // 把这次绑定记下来：教室名、服务器地址、以及口令。
             // 老师教好几个班时，这几条记录就是"切过去就能喊"的全部依据。
+            //
+            // remember=false 用在"一次发给多个班级"那条路上：那些绑定是临时的，
+            // 让它们把保存列表重排一遍（最后发的那间跑到最前）没有任何意义。
             _settings.LastUuid = BoundUuid;
-            RememberClassroom(BoundUuid, result.ClassroomName ?? "教室", secret);
+
+            if (remember)
+            {
+                RememberClassroom(BoundUuid, result.ClassroomName ?? "教室", secret);
+            }
 
             Log?.Invoke($"已绑定教室「{result.ClassroomName}」");
             return (true, null);
@@ -143,7 +165,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
     public async Task<IReadOnlyList<AuthorizedClassroom>> GetAuthorizedClassroomsAsync(
         CancellationToken cancellationToken = default)
     {
-        if (!_settings.IsSignedIn || string.IsNullOrWhiteSpace(_settings.ServerUrl))
+        if (!_settings.IsSignedIn || string.IsNullOrWhiteSpace(ServerUrl))
         {
             return [];
         }

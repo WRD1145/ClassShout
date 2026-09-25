@@ -74,6 +74,9 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     private readonly ShoutQueue _shoutQueue = new();
     private readonly TeacherRelaySettings _relaySettings;
 
+    /// <summary>一次发给多个班级时用的发送器。它自己维护临时绑定，不占"当前绑定"那条连接。</summary>
+    private readonly ClassroomBroadcaster _broadcaster;
+
     private readonly AccountClient _account;
 
     private TeacherRelayClient? _relay;
@@ -102,6 +105,16 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         _shoutQueue.Changed += () => Post(Text.RefreshQueueStatus);
         _shoutQueue.Sent += (text, ok) => Post(() => Text.OnQueueSent(text, ok));
         Voice = new VoiceShoutViewModel(_transport);
+
+        // 多班喊话：选中多个班级时逐个经中继发送，结果回到这里提示。
+        _broadcaster = new ClassroomBroadcaster(_http, _relaySettings);
+        _broadcaster.Log += message => Post(() => AddLog(message));
+        Text.Broadcaster = _broadcaster;
+        Text.BroadcastFinished += summary => Post(() =>
+        {
+            AddLog(summary);
+            ShowSnackbar(summary);
+        });
 
         _channel.Log += message => Post(() => AddLog(message));
         _channel.ConnectionChanged += connected => Post(() => OnConnectionChanged(connected));
@@ -607,6 +620,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             }
 
             await _account.LogoutAsync().ConfigureAwait(true);
+
+            // 多班发送器里那些临时绑定也是挂在账号上的，一并断掉 ——
+            // 不然登出之后还能靠它们把消息发进教室，而界面上已经显示"未登录"了。
+            await _broadcaster.ResetAsync().ConfigureAwait(true);
+
             OnAccountChanged();
             AddLog("已退出登录。");
         }
@@ -628,6 +646,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         // 已登录就用账号里的姓名；未登录回退到设备名，保证局域网直连仍可用
         TeacherName = IsSignedIn ? SignedInName : TeacherPlatform.DeviceName;
+        Text.TeacherName = TeacherName;
 
         BindServerCommand.NotifyCanExecuteChanged();
 
@@ -1262,6 +1281,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
             SavedClassrooms.Add(new SavedClassroomItem(record, isCurrent, SwitchClassroomAsync, RemoveSavedClassroom));
         }
+
+        // 文字页的"发给谁"用的就是这批数据，跟着一起刷新
+        Text.SyncTargets(_relaySettings.RecentClassrooms, IsServerBound ? BindUuid : null);
+        Text.TeacherName = TeacherName;
 
         OnPropertyChanged(nameof(HasSavedClassrooms));
         OnPropertyChanged(nameof(SavedClassroomsHint));

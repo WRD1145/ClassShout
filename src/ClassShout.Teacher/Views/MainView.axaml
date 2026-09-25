@@ -149,6 +149,41 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!-- 发给谁：只保存了一间教室时整块不显示（只有一间的话，"选择"没有意义） -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding Text.HasMultipleTargets}">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="这条发给谁" Margin="0" />
+                  <TextBlock Grid.Column="1" Classes="bodySmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding Text.TargetSummaryText}" />
+                </Grid>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="勾选多个班级时，这一条会同时发到每一间（经中继服务器）。语音喊话不受影响，仍然只发当前绑定的那间 —— 声音是从某一个教室的喇叭出来的，同时往几个班播没有意义。" />
+
+                <ItemsControl ItemsSource="{Binding Text.Targets}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ShoutTargetItem">
+                      <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,4">
+                        <CheckBox IsChecked="{Binding IsSelected}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Classes="bodyMedium" Margin="6,0,0,0"
+                                   VerticalAlignment="Center" Text="{Binding Name}" />
+                        <Border Grid.Column="2" IsVisible="{Binding IsCurrent}"
+                                CornerRadius="9999" Padding="7,1" VerticalAlignment="Center"
+                                Background="{DynamicResource Md3.PrimaryContainer}">
+                          <TextBlock Classes="labelSmall"
+                                     Foreground="{DynamicResource Md3.OnPrimaryContainer}"
+                                     Text="当前绑定" />
+                        </Border>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </md3:Md3Card>
+
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="12">
                 <TextBlock Classes="cardTitle" Text="这条怎么显示" />

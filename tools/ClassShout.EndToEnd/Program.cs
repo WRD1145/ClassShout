@@ -732,6 +732,63 @@ internal static class Program
 
         Check("另一间教室未收到不属于它的喊话", !otherGotShout, "多班级互相隔离");
 
+        // ---------- 8b. 一次发给多个班级 ----------
+        //
+        // 老师教好几个班时，最常要的一句话是"两个班都通知一下"。
+        // 这里压的就是那条路：逐个经中继绑定并发送，两边都要真的收到。
+        var firstTexts = new List<string>();
+        classroom.ShoutReceived += envelope =>
+        {
+            if (envelope.Kind == RelayKinds.TextShout)
+            {
+                firstTexts.Add(envelope.Text ?? string.Empty);
+            }
+        };
+
+        var otherTexts = new List<string>();
+        otherClassroom.ShoutReceived += envelope =>
+        {
+            if (envelope.Kind == RelayKinds.TextShout)
+            {
+                otherTexts.Add(envelope.Text ?? string.Empty);
+            }
+        };
+
+        var multiTargets = new List<BoundClassroom>
+        {
+            new(uuid, "中继测试教室", DateTimeOffset.UtcNow, root, secret),
+            new(otherSettings.Uuid, "隔壁班", DateTimeOffset.UtcNow, root, otherSettings.Secret),
+        };
+
+        const string multiText = "两个班都通知一下：明天带实验报告。";
+
+        var broadcaster = new ClassroomBroadcaster(http, teacherSettings);
+        var multiResults = await broadcaster.SendTextAsync(
+            multiTargets,
+            new TextShoutMessage { Text = multiText, Rate = 1, Volume = 90 },
+            "端到端张老师");
+
+        await Task.Delay(2500);
+
+        Check("多班喊话：两间都报告发送成功",
+            multiResults.Count == 2 && multiResults.All(r => r.Ok),
+            string.Join("、", multiResults.Select(r => $"{r.Classroom.Name}={(r.Ok ? "成功" : r.Error)}")));
+
+        Check("多班喊话：第一间收到了",
+            firstTexts.Contains(multiText),
+            firstTexts.Count == 0 ? "第一间一条都没收到" : $"第一间收到 {firstTexts.Count} 条");
+
+        Check("多班喊话：第二间也收到了",
+            otherTexts.Contains(multiText),
+            otherTexts.Count == 0 ? "第二间一条都没收到" : $"第二间收到 {otherTexts.Count} 条");
+
+        // 教室名要能对上：结果里报的是哪一间，老师看到的就该是哪一间
+        Check("多班喊话的结果带上教室名（失败时能说清是哪一间）",
+            multiResults.All(r => !string.IsNullOrWhiteSpace(r.Classroom.Name)),
+            string.Join("、", multiResults.Select(r => r.Classroom.Name)));
+
+        await broadcaster.ResetAsync();
+
         // ---------- 9. 服务端安全加固 ----------
         //
         // 这一节的检查刻意放在最后：限速那一条会把当前 IP 的令牌桶用光，

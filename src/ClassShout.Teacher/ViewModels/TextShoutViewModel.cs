@@ -31,6 +31,39 @@ public sealed class TextPreset
 }
 
 /// <summary>
+/// 「这一条发给谁」里的一个班级。
+///
+/// 做成可观察对象而不是直接用 BoundClassroom：选中状态是界面状态，
+/// 列表每次重建都会重来，所以它得挂在条目自己身上。
+/// </summary>
+public sealed partial class ShoutTargetItem : ObservableObject
+{
+    public ShoutTargetItem(BoundClassroom record, bool isSelected)
+    {
+        Record = record;
+        _isSelected = isSelected;
+    }
+
+    public BoundClassroom Record { get; }
+
+    public string Uuid => Record.Uuid;
+
+    public string Name => Record.Name;
+
+    /// <summary>
+    /// 是不是当前正绑着的那一间。标出来，免得老师不知道自己正在对谁说话。
+    ///
+    /// 可写是为了让渲染校验把它摆出来 —— 否则那个徽标只有真的连上服务器绑一次才会被画到，
+    /// 而"排版有没有走样"恰恰要在图上才看得出来。
+    /// </summary>
+    [ObservableProperty]
+    private bool _isCurrent;
+
+    [ObservableProperty]
+    private bool _isSelected;
+}
+
+/// <summary>
 /// 文字喊话页。
 /// 输入的文字会发到教室端，由教室端的系统 TTS 朗读 —— 手机端不发声，
 /// 这样声音一定从教室的音响/投影喇叭出来，符合"喊话"的实际场景。
@@ -53,6 +86,86 @@ public partial class TextShoutViewModel : ObservableObject
         }
 
         LoadHistory();
+    }
+
+    // ======================== 一次发给哪几个班 ========================
+
+    /// <summary>可选的班级。和"已保存的教室"是同一批数据，只是带上勾选状态。</summary>
+    public ObservableCollection<ShoutTargetItem> Targets { get; } = [];
+
+    /// <summary>多班发送器。由外壳注入；为 null 时退化成"只发当前绑定那间"。</summary>
+    public ClassroomBroadcaster? Broadcaster { get; set; }
+
+    /// <summary>喊话时用的老师姓名（服务器以账号里的姓名为准，这里只是兜底）。</summary>
+    public string TeacherName { get; set; } = string.Empty;
+
+    /// <summary>多班发送结束后抛一句结果给外壳去提示。</summary>
+    public event Action<string>? BroadcastFinished;
+
+    /// <summary>列表里超过一间教室时才需要"选择发给谁"——只有一间的话，选它没有意义。</summary>
+    public bool HasMultipleTargets => Targets.Count > 1;
+
+    /// <summary>当前这一条会发给哪几间。</summary>
+    public string TargetSummaryText
+    {
+        get
+        {
+            var selected = Targets.Where(t => t.IsSelected).ToList();
+
+            return selected.Count switch
+            {
+                0 => "当前绑定的教室",
+                1 => selected[0].Name,
+                _ => $"{selected.Count} 个班级：{string.Join("、", selected.Select(t => t.Name))}",
+            };
+        }
+    }
+
+    /// <summary>
+    /// 用最新的"已保存的教室"刷新勾选列表。
+    ///
+    /// 保留原来的勾选：老师勾了两个班、又去设备页切了个教室回来，
+    /// 不该发现自己的勾选被清空了。第一次填充时默认只勾当前绑定的那一间。
+    /// </summary>
+    public void SyncTargets(IEnumerable<BoundClassroom> records, string? currentUuid)
+    {
+        var previous = Targets
+            .Where(t => t.IsSelected)
+            .Select(t => t.Uuid)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var isFirstFill = Targets.Count == 0;
+
+        Targets.Clear();
+
+        foreach (var record in records)
+        {
+            var isCurrent = currentUuid is not null &&
+                            string.Equals(record.Uuid, currentUuid, StringComparison.OrdinalIgnoreCase);
+
+            var selected = isFirstFill ? isCurrent : previous.Contains(record.Uuid);
+
+            var item = new ShoutTargetItem(record, selected) { IsCurrent = isCurrent };
+            item.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(ShoutTargetItem.IsSelected))
+                {
+                    OnPropertyChanged(nameof(TargetSummaryText));
+                }
+            };
+
+            Targets.Add(item);
+        }
+
+        // 一个都没勾上时兜个底：发送按钮不该因为"没勾任何班"而变成什么都不做。
+        if (Targets.Count > 0 && Targets.All(t => !t.IsSelected))
+        {
+            var fallback = Targets.FirstOrDefault(t => t.IsCurrent) ?? Targets[0];
+            fallback.IsSelected = true;
+        }
+
+        OnPropertyChanged(nameof(HasMultipleTargets));
+        OnPropertyChanged(nameof(TargetSummaryText));
     }
 
     /// <summary>最近喊话（本机保存，最多二十条，最新在前）。</summary>
@@ -296,11 +409,51 @@ public partial class TextShoutViewModel : ObservableObject
             return;
         }
 
-        _myTicket = Queue.Enqueue(sent, ct => _channel.SendTextAsync(message, ct));
+        _myTicket = Queue.Enqueue(sent, ct => SendToTargetsAsync(message, ct));
 
         // 立刻清空输入框：排队的意义就是让老师可以连着喊好几条
         Text = string.Empty;
         RefreshQueueStatus();
+    }
+
+    /// <summary>
+    /// 把这一条发出去。勾了一间就走原来的链路（局域网直连仍然优先）；
+    /// 勾了多间则逐个经中继发送，并把"哪几间没送到"如实报出来。
+    /// </summary>
+    private async Task<bool> SendToTargetsAsync(TextShoutMessage message, CancellationToken cancellationToken)
+    {
+        var selected = Targets.Where(t => t.IsSelected).Select(t => t.Record).ToList();
+
+        // 单目标（或没有多班发送器）时保持原样：这条路上有局域网直连优先的逻辑，
+        // 而多班喊话必然跨网络 —— 老师不可能同时待在两个班的局域网里。
+        if (selected.Count <= 1 || Broadcaster is null)
+        {
+            return await _channel.SendTextAsync(message, cancellationToken).ConfigureAwait(true);
+        }
+
+        try
+        {
+            var results = await Broadcaster
+                .SendTextAsync(selected, message, TeacherName, cancellationToken)
+                .ConfigureAwait(true);
+
+            var sentCount = results.Count(r => r.Ok);
+            var failed = results.Where(r => !r.Ok).ToList();
+
+            var summary = failed.Count == 0
+                ? $"已发给 {sentCount} 个班级。"
+                : $"已发给 {sentCount} 个班级，{failed.Count} 个没送到：{string.Join("、", failed.Select(r => r.Classroom.Name))}。";
+
+            BroadcastFinished?.Invoke(summary);
+
+            // 全都失败了才算这条没发出去（历史记录只记真的送到的）
+            return sentCount > 0;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        {
+            BroadcastFinished?.Invoke($"多班喊话失败：{ex.Message}");
+            return false;
+        }
     }
 
     private async Task SendDirectAsync(TextShoutMessage message)

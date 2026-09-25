@@ -369,6 +369,23 @@ internal static class Program
             Check("被移除的那间的口令也一起删了",
                 onDisk.RecentClassrooms.All(item => item.Secret != "secret-of-三年三班"),
                 "口令未残留在配置里");
+
+            // 文字页的"发给谁"用的是同一批数据
+            Check("文字页拿到的目标班级与保存列表一致",
+                vm.Text.Targets.Count == onDisk.RecentClassrooms.Count,
+                $"文字页 {vm.Text.Targets.Count} 个，列表里 {onDisk.RecentClassrooms.Count} 个");
+
+            Check("多于一间时才会显示「发给谁」",
+                vm.Text.HasMultipleTargets == vm.Text.Targets.Count > 1,
+                $"{vm.Text.Targets.Count} 个目标，HasMultipleTargets={vm.Text.HasMultipleTargets}");
+
+            Check("一个都没勾时兜底勾上一间（否则发送按钮等于什么都不做）",
+                vm.Text.Targets.Count(t => t.IsSelected) >= 1,
+                $"已勾 {vm.Text.Targets.Count(t => t.IsSelected)} 个");
+
+            Check("摘要里列出了会发给哪几间",
+                !string.IsNullOrWhiteSpace(vm.Text.TargetSummaryText),
+                vm.Text.TargetSummaryText);
         }
         finally
         {
@@ -819,6 +836,53 @@ internal static class Program
                         }
                     }
                 }, 430, 1900,
+                _ => null),
+
+            // 教师端文字页的「这条发给谁」：保存了三间教室时才会出现的那一块。
+            //
+            // 它是条件显示的（只有一间时整块不画），所以默认那张 teacher 图里根本看不到它 ——
+            // 而勾选框、当前绑定徽标、摘要那一行都只在有条目时才画得出来。
+            new("teacher-targets",
+                () =>
+                {
+                    var dataPath = Path.Combine(LocalSettings.Directory, "teacher.json");
+                    var hadFile = File.Exists(dataPath);
+                    var backup = hadFile ? File.ReadAllText(dataPath) : null;
+
+                    try
+                    {
+                        SeedSavedClassrooms();
+
+                        var vm = new TeacherShellViewModel();
+
+                        // 标一间为"当前绑定"、再勾上第二间，把两种状态都画出来。
+                        // 渲染校验不该依赖真的连上服务器。
+                        if (vm.Text.Targets.Count > 0)
+                        {
+                            vm.Text.Targets[0].IsCurrent = true;
+                        }
+
+                        if (vm.Text.Targets.Count > 1)
+                        {
+                            vm.Text.Targets[1].IsSelected = true;
+                        }
+
+                        vm.Text.Text = "明天带实验报告，两个班都通知一下。";
+
+                        return new TeacherView { DataContext = vm };
+                    }
+                    finally
+                    {
+                        if (hadFile)
+                        {
+                            File.WriteAllText(dataPath, backup!);
+                        }
+                        else
+                        {
+                            File.Delete(dataPath);
+                        }
+                    }
+                }, 430, 1150,
                 _ => null),
 
             // 教师端文字页 + 排队提示。刻意真的往队列里塞两条卡住的喊话，
