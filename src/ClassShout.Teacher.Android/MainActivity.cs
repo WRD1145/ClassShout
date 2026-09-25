@@ -42,7 +42,9 @@ public class MainActivity : AvaloniaMainActivity<App>
         // 点下载却什么都不会发生。
         ClassShout.Design.PlatformLinks.Register(url =>
         {
-            var intent = new Intent(Intent.ActionView, Android.Net.Uri.Parse(url));
+            // 注意 global:: —— 本文件的命名空间是 ClassShout.Teacher.Android，
+            // 直接写 Android.Net.Uri 会被解析成"这个命名空间下的 Net"。
+            var intent = new Intent(Intent.ActionView, global::Android.Net.Uri.Parse(url));
             intent.AddFlags(ActivityFlags.NewTask);
             StartActivity(intent);
             return Task.CompletedTask;
