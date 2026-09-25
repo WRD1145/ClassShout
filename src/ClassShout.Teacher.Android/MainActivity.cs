@@ -37,6 +37,17 @@ public class MainActivity : AvaloniaMainActivity<App>
         TeacherPlatform.DeviceName = $"{Build.Model}（手机）";
         TeacherPlatform.RegisterAudioRecorder(() => new AndroidAudioRecorder(this));
 
+        // "在浏览器里打开下载地址"：Android 上桌面那套 Process.Start 用不了，
+        // 得走一个 ACTION_VIEW 的 Intent。不注册的话，检查更新查到了新版本、
+        // 点下载却什么都不会发生。
+        ClassShout.Design.PlatformLinks.Register(url =>
+        {
+            var intent = new Intent(Intent.ActionView, Android.Net.Uri.Parse(url));
+            intent.AddFlags(ActivityFlags.NewTask);
+            StartActivity(intent);
+            return Task.CompletedTask;
+        });
+
         return base.CustomizeAppBuilder(builder);
     }
 

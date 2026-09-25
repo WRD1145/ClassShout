@@ -1110,7 +1110,11 @@ internal static class Program
                     var vm = new TeacherShellViewModel();
                     vm.NavigateDevicesCommand.Execute(null);
                     return new TeacherView { DataContext = vm };
-                }, 430, 1750,
+
+                    // 高度跟着设置项一起长：这一页已经排到「版本与更新」和「关于」，
+                    // 窗口矮了的话最后两张卡片根本不会被渲染，
+                    // 而它们恰恰是新加的、最需要看一眼排版的东西。
+                }, 430, 2900,
                 _ => null),
 
             // 教师端「名单」页：导入区 + 名单里的学生。
@@ -1356,7 +1360,7 @@ internal static class Program
             // 若按窗口默认高度导出，导出图里永远只看得到头两张卡片，
             // 审阅的人会以为后面没做。这里让它一屏看全。
             new("classroom-settings",
-                () => new ClassroomSettings { DataContext = new ClassroomViewModel(), Height = 2600 }, 0, 0,
+                () => new ClassroomSettings { DataContext = new ClassroomViewModel(), Height = 4300 }, 0, 0,
                 _ => null),
 
             // 语音转文字卡片展开的样子。

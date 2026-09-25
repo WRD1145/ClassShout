@@ -319,4 +319,11 @@ public static class LocalSettings
 
     public static bool SavePhrases(TeacherPhraseSettings settings)
         => Save("teacher-phrases.json", settings);
+
+    /// <summary>检查更新的设置（仓库、镜像源、上次检查的结果）。两端共用同一个文件。</summary>
+    public static UpdateSettings LoadUpdate()
+        => Load("update.json", static () => new UpdateSettings()).Normalized();
+
+    public static bool SaveUpdate(UpdateSettings settings)
+        => Save("update.json", settings.Normalized());
 }

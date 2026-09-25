@@ -194,6 +194,10 @@ app.MapGet(RelayPaths.Health, () => Results.Ok(new
 {
     ok = true,
     service = "ClassShout.RelayServer",
+
+    // 带上版本号：升级完服务器之后，"新版本到底部署上去了没有"是第一件要确认的事，
+    // 而在此之前只能去翻程序目录里的文件时间。
+    version = ReadServerVersion(),
     protocol = 1,
     classrooms = store.Count,
     users = users.Count,

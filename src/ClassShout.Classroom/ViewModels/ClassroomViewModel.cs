@@ -173,6 +173,22 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         _relaySettings = LocalSettings.LoadClassroom();
         _relaySettings.EnsureUuid();
 
+        // 检查更新：与教师端共用同一张卡片（设计层里），这边只补上"我是哪个包"。
+        // 教室里那台机器常常没有外网，所以它只是"想查的时候查一下"，
+        // 绝不在后台自动去问 —— 查不到也不影响任何功能。
+        Update = new ClassShout.Design.UpdateCardViewModel(
+            _http,
+            LocalSettings.LoadUpdate(),
+            ClassShout.Design.PlatformLinks.OpenAsync)
+        {
+            CurrentVersion = ClassShout.Design.DeveloperMode.Version,
+            BuildDescription = ClassShout.Design.DeveloperMode.BuildDescription,
+
+            // 教室端在 Windows 上是单文件 exe；Linux 上按后缀挑不到就先只给页面
+            PreferredAssetName = OperatingSystem.IsWindows() ? "ClassShout.Classroom.exe" : null,
+            PreferredAssetSuffix = OperatingSystem.IsWindows() ? null : "ClassShout.Classroom-linux-x64",
+        };
+
         // 注意方向：是把已保存的名字读进字段，不是把字段写进已存配置。
         //
         // 原来是 _relaySettings.ClassroomName = ClassroomName，方向反了：
@@ -890,6 +906,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             AddLog("系统", $"系统 TTS 语音：{SelectedVoice}");
         }
     }
+
+    // ======================== 版本与更新 ========================
+
+    /// <summary>
+    /// 检查更新那张卡片的状态（与教师端共用设计层里那一份）。
+    ///
+    /// 镜像源可自定义：GitHub 在校园网里常常慢到不能用，而每所学校能用的
+    /// 加速镜像不一样。检查只在你按下按钮时发生。
+    /// </summary>
+    public ClassShout.Design.UpdateCardViewModel Update { get; }
 
     private ClassroomAnnouncement BuildAnnouncement() => new()
     {

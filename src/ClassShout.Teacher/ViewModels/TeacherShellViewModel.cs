@@ -135,6 +135,16 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         _account = new AccountClient(_http, _relaySettings);
 
+        // 检查更新：与教室端共用同一张卡片（设计层里），这边只补上"我是哪个包"
+        Update = new ClassShout.Design.UpdateCardViewModel(_http, LocalSettings.LoadUpdate(), ClassShout.Design.PlatformLinks.OpenAsync)
+        {
+            CurrentVersion = ClassShout.Design.DeveloperMode.Version,
+            BuildDescription = ClassShout.Design.DeveloperMode.BuildDescription,
+
+            // 附件名里带着版本号，所以按后缀挑：老师端的手机包是 .apk
+            PreferredAssetSuffix = ".apk",
+        };
+
         // 已保存的教室要在构造里就读进来：老师打开应用看到的第一件事，
         // 应该是"我上次用的那间教室在这儿"，而不是一个空列表。
         RefreshSavedClassrooms();
@@ -1588,6 +1598,17 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             Post(() => AddLog("登录状态已失效，请重新登录。"));
         }
     }
+
+    // ======================== 版本与更新 ========================
+
+    /// <summary>
+    /// 检查更新那张卡片的状态。
+    ///
+    /// 镜像源可自定义：GitHub 在校园网里常常慢到不能用，而每个学校能用的加速镜像
+    /// 不一样（今天能用的明天可能就没了），所以预置几个、也允许自己填。
+    /// **检查只在你按下按钮时发生** —— 不做后台轮询，否则每次开应用都等于向外面报一次到。
+    /// </summary>
+    public ClassShout.Design.UpdateCardViewModel Update { get; }
 
     // ======================== 任教科目（默认 + 按班级） ========================
 

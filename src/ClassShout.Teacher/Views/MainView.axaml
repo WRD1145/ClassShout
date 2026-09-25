@@ -1357,6 +1357,73 @@
             </md3:Md3Card>
 
             <!--
+              检查更新：GitHub 在校园网里常常慢到不能用，所以镜像源可自定义。
+              检查只在你按下去的时候发生 —— 不做后台轮询。
+            -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="版本与更新" VerticalAlignment="Center" />
+                  <Button Grid.Column="1" Classes="tonal small" Content="检查更新"
+                          Command="{Binding Update.CheckCommand}" />
+                </Grid>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding Update.CurrentVersionText}" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           IsVisible="{Binding Update.Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           Foreground="{DynamicResource Md3.Primary}"
+                           Text="{Binding Update.Status}" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           IsVisible="{Binding Update.Notes, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding Update.Notes}" />
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Classes="tonal small" Content="下载新版"
+                          IsVisible="{Binding Update.HasDownload}"
+                          Command="{Binding Update.OpenDownloadCommand}" />
+                  <Button Classes="outlined small" Content="打开发行版页面"
+                          IsVisible="{Binding Update.CanOpenPage}"
+                          Command="{Binding Update.OpenPageCommand}" />
+                </StackPanel>
+
+                <TextBlock Classes="bodySmall"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding Update.LastCheckedText}" />
+
+                <!-- 镜像源：预置几个常用的，也可以自己填 -->
+                <ComboBox HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding Update.Mirrors}"
+                          SelectedItem="{Binding Update.SelectedMirror}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="remote:UpdateMirror">
+                      <TextBlock Text="{Binding Label}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <TextBox Classes="outlined dense"
+                         Watermark="下载地址模板，例如 https://ghproxy.net/{url}"
+                         Text="{Binding Update.DownloadTemplate}" />
+
+                <TextBox Classes="outlined dense"
+                         Watermark="GitHub API 地址（镜像自带 API 时填它的）"
+                         Text="{Binding Update.ApiBase}" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="模板里 {url} 是原始下载地址、{path} 是去掉 github.com/ 之后的部分；留空表示直连 GitHub。" />
+
+                <Button Classes="text small" HorizontalAlignment="Left" Content="保存设置"
+                        Command="{Binding Update.SaveCommand}" />
+              </StackPanel>
+            </md3:Md3Card>
+
+            <!--
               「关于」：版本号、运行环境，以及藏在版本号后面的开发者模式。
               在版本号上连点 10 次即可解锁（手势借自 ClassIsland）。
             -->

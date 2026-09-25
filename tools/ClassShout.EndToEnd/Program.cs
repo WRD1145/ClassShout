@@ -245,6 +245,9 @@ internal static class Program
         // ---------- 3q. 定时模型的摘要与形态 ----------
         AssertScheduledShoutModel();
 
+        // ---------- 3r. 检查更新与镜像源 ----------
+        await AssertUpdateCheckerAsync();
+
         // ---------- 3n. 发送队列 ----------
         await AssertShoutQueueAsync();
 
@@ -2429,6 +2432,198 @@ internal static class Program
         Check("取消掉的不算 due",
             !cancelled.IsDue(at),
             "取消优先于时间");
+    }
+
+    /// <summary>
+    /// 检查更新与自定义镜像源。
+    ///
+    /// 这一段刻意不碰真网络：自检要在没有外网、或者校园网把 GitHub 拦掉的机器上
+    /// 也能跑。HTTP 那一层用一个假的处理器，于是"请求打到哪个地址、拿到什么之后算出什么"
+    /// 全都能断言 —— 而这两件事恰恰是这个功能里最容易错的（镜像拼错、版本比反）。
+    /// </summary>
+    private static async Task AssertUpdateCheckerAsync()
+    {
+        // —— 版本比对 ——
+        Check("版本比对：1.8.1 比 1.8.0 新",
+            UpdateChecker.IsNewer("1.8.1", "1.8.0"),
+            "1.8.1 > 1.8.0");
+
+        // 按字符串比会得出相反的结论，而这种错要到第 10 个次版本才显形
+        Check("版本比对：1.10.0 比 1.9.0 新（按段比数字，不是按字符串）",
+            UpdateChecker.IsNewer("1.10.0", "1.9.0"),
+            "1.10.0 > 1.9.0");
+
+        Check("版本比对：同版本不算新",
+            !UpdateChecker.IsNewer("1.8.0", "1.8.0") && !UpdateChecker.IsNewer("v1.8.0", "1.8.0"),
+            "带不带 v 都一样");
+
+        Check("版本比对：旧版本不算新",
+            !UpdateChecker.IsNewer("1.7.0", "1.8.0"),
+            "1.7.0 < 1.8.0");
+
+        Check("版本比对：预发布比同号正式版旧",
+            !UpdateChecker.IsNewer("1.9.0-rc1", "1.9.0"),
+            "rc 不算正式版");
+
+        // —— 镜像模板 ——
+        var rawUrl = "https://github.com/WRD1145/ClassShout/releases/download/v1.9.0/ClassShout.Classroom.exe";
+
+        Check("镜像模板：留空就用原始地址（直连 GitHub）",
+            UpdateSettings.ApplyTemplate(string.Empty, rawUrl) == rawUrl,
+            "原样返回");
+
+        Check("镜像模板：{url} 是整段原始地址（前缀式镜像）",
+            UpdateSettings.ApplyTemplate("https://ghproxy.net/{url}", rawUrl)
+                == "https://ghproxy.net/" + rawUrl,
+            UpdateSettings.ApplyTemplate("https://ghproxy.net/{url}", rawUrl));
+
+        Check("镜像模板：{path} 是去掉 github.com/ 之后的部分（换域名式镜像）",
+            UpdateSettings.ApplyTemplate("https://kkgithub.com/{path}", rawUrl)
+                == "https://kkgithub.com/WRD1145/ClassShout/releases/download/v1.9.0/ClassShout.Classroom.exe",
+            UpdateSettings.ApplyTemplate("https://kkgithub.com/{path}", rawUrl));
+
+        Check("仓库名容错：整条 GitHub 地址也能认",
+            UpdateSettings.NormalizeRepository("https://github.com/WRD1145/ClassShout.git/") == "WRD1145/ClassShout",
+            UpdateSettings.NormalizeRepository("https://github.com/WRD1145/ClassShout.git/"));
+
+        Check("仓库名容错：空值回落到默认仓库",
+            UpdateSettings.NormalizeRepository("  ") == UpdateSettings.DefaultRepository,
+            UpdateSettings.DefaultRepository);
+
+        Check("预置了几个镜像，且第一个是直连",
+            UpdateSettings.Presets.Count >= 3 && UpdateSettings.Presets[0].DownloadTemplate.Length == 0,
+            string.Join("、", UpdateSettings.Presets.Select(m => m.Label)));
+
+        // —— 端到端：请求打到哪、拿到什么、算出什么 ——
+        const string releaseJson = """
+            {
+              "tag_name": "v1.9.0",
+              "body": "这一版修了几个问题。",
+              "html_url": "https://github.com/WRD1145/ClassShout/releases/tag/v1.9.0",
+              "assets": [
+                { "name": "ClassShout.Classroom.exe", "size": 1234, "browser_download_url": "https://github.com/WRD1145/ClassShout/releases/download/v1.9.0/ClassShout.Classroom.exe" },
+                { "name": "classshout-teacher-1.9.0-universal.apk", "size": 5678, "browser_download_url": "https://github.com/WRD1145/ClassShout/releases/download/v1.9.0/classshout-teacher-1.9.0-universal.apk" }
+              ]
+            }
+            """;
+
+        var handler = new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(releaseJson, System.Text.Encoding.UTF8, "application/json"),
+        });
+
+        using var stubHttp = new HttpClient(handler);
+        var settings = new UpdateSettings
+        {
+            DownloadTemplate = "https://ghproxy.net/{url}",
+        };
+
+        var found = await new UpdateChecker(stubHttp, settings).CheckAsync("1.8.0");
+
+        Check("检查更新：查得到新版本",
+            found is { Ok: true, HasUpdate: true } && found.LatestVersion == "1.9.0",
+            found.Error ?? $"最新 {found.LatestVersion}");
+
+        Check("检查更新：请求打到了正确的 API 地址",
+            handler.LastUri == "https://api.github.com/repos/WRD1145/ClassShout/releases/latest",
+            handler.LastUri ?? "(没请求)");
+
+        Check("检查更新：带上 User-Agent（缺了 GitHub 直接 403）",
+            handler.LastUserAgent == "ClassShout-Updater",
+            handler.LastUserAgent ?? "(没有)");
+
+        Check("检查更新：附件地址已经过镜像换算",
+            found.FindAsset("ClassShout.Classroom.exe")?.Url
+                == "https://ghproxy.net/https://github.com/WRD1145/ClassShout/releases/download/v1.9.0/ClassShout.Classroom.exe",
+            found.FindAsset("ClassShout.Classroom.exe")?.Url ?? "(没找到)");
+
+        Check("检查更新：按后缀也能挑到附件（附件名里带着版本号）",
+            found.FindAssetEndingWith(".apk")?.Name == "classshout-teacher-1.9.0-universal.apk",
+            found.FindAssetEndingWith(".apk")?.Name ?? "(没找到)");
+
+        Check("检查更新：带上发行说明与页面地址",
+            found.Notes?.Contains("修了几个问题") == true && found.PageUrl?.Contains("releases/tag") == true,
+            "说明与页面都在");
+
+        // —— 已经是最新 ——
+        var upToDate = await new UpdateChecker(stubHttp, settings).CheckAsync("1.9.0");
+
+        Check("已经是最新时不报有新版本",
+            upToDate is { Ok: true, HasUpdate: false },
+            $"最新 {upToDate.LatestVersion}");
+
+        // —— 换镜像：API 也跟着走 ——
+        var mirrorSettings = new UpdateSettings
+        {
+            ApiBase = "https://api.kkgithub.com",
+            DownloadTemplate = "https://kkgithub.com/{path}",
+        };
+
+        await new UpdateChecker(stubHttp, mirrorSettings).CheckAsync("1.8.0");
+
+        Check("换镜像时 API 地址也跟着换（自带 API 的镜像）",
+            handler.LastUri == "https://api.kkgithub.com/repos/WRD1145/ClassShout/releases/latest",
+            handler.LastUri ?? "(没请求)");
+
+        // —— 失败路径：要给人话，不要异常 ——
+        var missing = new UpdateChecker(
+            new HttpClient(new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound))),
+            settings);
+
+        var notFound = await missing.CheckAsync("1.8.0");
+
+        Check("仓库不存在时给一句人话（而不是抛异常）",
+            !notFound.Ok && notFound.Error?.Contains("没找到") == true,
+            notFound.Error ?? "(没有原因)");
+
+        var throttled = new UpdateChecker(
+            new HttpClient(new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden))),
+            settings);
+
+        var limited = await throttled.CheckAsync("1.8.0");
+
+        Check("被限流时说清是限流（换个镜像还能救）",
+            !limited.Ok && limited.Error?.Contains("频率限制") == true,
+            limited.Error ?? "(没有原因)");
+
+        var broken = new UpdateChecker(
+            new HttpClient(new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("这不是 JSON", System.Text.Encoding.UTF8, "application/json"),
+            })),
+            settings);
+
+        var garbled = await broken.CheckAsync("1.8.0");
+
+        Check("返回内容被中间层改过时给一句人话（而不是把 JSON 解析异常甩出来）",
+            !garbled.Ok && garbled.Error?.Contains("看不懂") == true,
+            garbled.Error ?? "(没有原因)");
+    }
+
+    /// <summary>
+    /// 一个只回固定响应的 HTTP 处理器，顺便记下最后一次请求的地址与 User-Agent。
+    ///
+    /// 自检机器上没有外网也要能跑，所以"检查更新"这一段完全不打真网络。
+    /// </summary>
+    private sealed class StubHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _respond;
+
+        public StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) => _respond = respond;
+
+        public string? LastUri { get; private set; }
+
+        public string? LastUserAgent { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastUri = request.RequestUri?.ToString();
+            LastUserAgent = request.Headers.TryGetValues("User-Agent", out var values)
+                ? values.FirstOrDefault()
+                : null;
+
+            return Task.FromResult(_respond(request));
+        }
     }
 
     /// <summary>
