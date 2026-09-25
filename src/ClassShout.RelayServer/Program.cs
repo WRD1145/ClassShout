@@ -402,6 +402,20 @@ app.MapDelete(RelayPaths.Route(RelayPaths.TeacherUnbind, "token"), (string token
 
 // ======================== 教师端：发喊话 ========================
 
+/// <summary>
+/// 这条喊话在教室里显示成谁说的。
+///
+/// 绑定成功时服务器已经把"科目+姓名"记在会话上了，但那份快照会过时：
+/// 管理员刚在控制台给某位老师补上任教科目，教室里却还是只显示姓名 ——
+/// 要等老师下次打开教师端重新绑定才会变。既然绑定记录里留着账号 Id，
+/// 这里就按账号**当前**的信息现算一遍；只有账号查不到（未登录或已被删）
+/// 才退回绑定时的快照。
+/// </summary>
+string FromOf(TeacherBinding binding)
+    => binding.UserId is { } userId && users.FindById(userId) is { } profile
+        ? profile.ShoutName
+        : binding.TeacherName;
+
 app.MapPost(RelayPaths.Route(RelayPaths.TeacherText, "token"), (string token, TextShoutRequest request) =>
 {
     if (!sessions.TryGetTeacher(token, out var binding))
@@ -414,7 +428,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherText, "token"), (string token, Te
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.TextShout,
-        From = binding.TeacherName,
+        From = FromOf(binding),
         Text = request.Text,
         Rate = request.Rate,
         Volume = request.Volume,
@@ -429,7 +443,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherText, "token"), (string token, Te
     });
 
     logger.LogInformation("{Teacher} → {Uuid}：文字喊话 {Length} 字",
-        binding.TeacherName, binding.ClassroomUuid, request.Text?.Length ?? 0);
+        FromOf(binding), binding.ClassroomUuid, request.Text?.Length ?? 0);
 
     return Results.Ok(new { ok = true });
 });
@@ -446,7 +460,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherAudioStart, "token"), (string tok
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.AudioStart,
-        From = binding.TeacherName,
+        From = FromOf(binding),
         SampleRate = request.SampleRate,
         Channels = request.Channels,
         BitsPerSample = request.BitsPerSample,
@@ -511,7 +525,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherAudio, "token"), async (string to
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.Audio,
-        From = binding.TeacherName,
+        From = FromOf(binding),
         AudioBase64 = Convert.ToBase64String(pcm),
     });
 
@@ -530,11 +544,11 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherAudioEnd, "token"), (string token
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.AudioEnd,
-        From = binding.TeacherName,
+        From = FromOf(binding),
     });
 
     logger.LogInformation("{Teacher} → {Uuid}：语音结束，累计 {Bytes:N0} 字节",
-        binding.TeacherName, binding.ClassroomUuid, binding.AudioBytes);
+        FromOf(binding), binding.ClassroomUuid, binding.AudioBytes);
 
     return Results.Ok(new { ok = true });
 });
@@ -565,7 +579,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherImageStart, "token"), (string tok
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.ImageStart,
-        From = binding.TeacherName,
+        From = FromOf(binding),
         ImageId = request.Id,
         ImageTotalBytes = request.TotalBytes,
         ImageContentType = request.ContentType,
@@ -579,7 +593,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherImageStart, "token"), (string tok
     });
 
     logger.LogInformation("{Teacher} → {Uuid}：图片开始，{Bytes:N0} 字节",
-        binding.TeacherName, binding.ClassroomUuid, request.TotalBytes);
+        FromOf(binding), binding.ClassroomUuid, request.TotalBytes);
 
     return Results.Ok(new { ok = true });
 });
@@ -629,7 +643,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherImageChunk, "token"), async (stri
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.Image,
-        From = binding.TeacherName,
+        From = FromOf(binding),
         ImageId = body.Id,
         ImageBase64 = body.DataBase64,
     });
@@ -649,7 +663,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherImageEnd, "token"), (string token
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.ImageEnd,
-        From = binding.TeacherName,
+        From = FromOf(binding),
         ImageId = request.Id,
     });
 
@@ -668,7 +682,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherStop, "token"), (string token) =>
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.Stop,
-        From = binding.TeacherName,
+        From = FromOf(binding),
         Reason = "教师端请求停止",
     });
 
@@ -916,7 +930,7 @@ app.MapPost("/api/console/users", (
         return Results.BadRequest(new { error = "该账号名由服务器内置管理员保留，请换一个。" });
     }
 
-    var (profile, error) = users.Register(request.Username, request.Email, subject: null, request.DisplayName ?? string.Empty, request.Password);
+    var (profile, error) = users.Register(request.Username, request.Email, request.Subject, request.DisplayName ?? string.Empty, request.Password);
     if (profile is null)
     {
         return Results.BadRequest(new { error = error ?? "创建失败。" });
@@ -929,7 +943,8 @@ app.MapPost("/api/console/users", (
 /// <summary>
 /// 按 CSV 批量创建账号，用于开学时一次录入一批老师。
 ///
-/// 格式：每行 用户名,邮箱,姓名,口令。用户名与邮箱至少填一个（另一个留空即可）。
+/// 格式：每行 用户名,邮箱,姓名,口令[,任教科目]。用户名与邮箱至少填一个（另一个留空即可），
+/// 科目可留空。
 /// 允许空行，允许以 # 开头的注释行，允许一行带表头 —— 管理员多半是从 Excel 里
 /// 直接复制出来的，格式太严会逼着他手工清理。
 ///
@@ -966,11 +981,13 @@ app.MapPost("/api/console/users/import", (
             continue;
         }
 
-        var fields = line.Split(',').Select(f => f.Trim().Trim('"')).ToArray();
+        // 认引号：Excel 在字段里带逗号时会自动加引号，硬切会让后面几列全部错位。
+        // 与学生名单的导入共用同一份实现（见 CsvLine）。
+        var fields = CsvLine.Split(line);
         if (fields.Length < 4)
         {
             failed++;
-            details.Add($"第 {lineNumber} 行：需要 4 列（用户名,邮箱,姓名,口令），实际 {fields.Length} 列。");
+            details.Add($"第 {lineNumber} 行：至少需要 4 列（用户名,邮箱,姓名,口令），实际 {fields.Length} 列。");
             continue;
         }
 
@@ -1363,6 +1380,39 @@ app.MapPost("/api/console/users/{id}/disabled", (    string id,
     }
 
     return Results.Ok(new { ok });
+});
+
+/// <summary>
+/// 改一位老师的任教科目。
+///
+/// 注册页上科目是选填的，老师随手留空之后就没有地方再补了 —— 教师端没有"改资料"
+/// 这一页，控制台原来也没有这个动作。于是教室里的喊话来源永远只有姓名，
+/// 而"是哪位老师说的"恰恰是同一间教室一天里好几位老师来喊时最需要的信息。
+/// 管理员在开学初对着名单补一次，比让老师重新注册一遍合理得多。
+/// </summary>
+app.MapPost("/api/console/users/{id}/subject", (
+    string id,
+    ConsoleSubjectRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    if (!userSessions.IsAdminSession(authToken))
+    {
+        return Results.Unauthorized();
+    }
+
+    // 内置管理员不是老师，也没有"任教科目"可言
+    if (id == AdminUserId)
+    {
+        return Results.BadRequest(new { error = "内置管理员不是老师账号，没有任教科目。" });
+    }
+
+    if (!users.SetSubject(id, request.Value))
+    {
+        return Results.NotFound(new { error = "找不到这个账号，或服务器写不进去。" });
+    }
+
+    logger.LogInformation("管理员修改账号 {Id} 的任教科目：{Subject}", id, request.Value ?? "(清空)");
+    return Results.Ok(new { ok = true });
 });
 
 /// <summary>班级授权列表。</summary>

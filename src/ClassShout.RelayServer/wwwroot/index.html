@@ -83,6 +83,8 @@
       <div class="card">
         <h2>用户账号</h2>
         <p>面向任课老师的账号。口令以 PBKDF2 派生值保存，忘记后只能由这里重置。</p>
+        <p>「任教科目」是老师注册时自己填的（也可以在这里建号时替他填上）。它会拼在喊话来源前面 ——
+          教室里看到的是「数学张老师」，好让同一间教室里的学生和值班老师知道是谁在说话。</p>
         <p>列表第一行是服务器内置的管理员账号，它不在用户库里，口令以明文存在服务器本地的
           <span class="mono">relay-config.json</span> 里，可以在这里改。它默认就可以使用所有班级，
           不需要逐条授权。</p>
@@ -156,6 +158,8 @@
     <input id="newEmail" type="text" autocomplete="off" placeholder="例如 zhangsan@school.edu.cn">
     <label for="newDisplayName">姓名（教室端弹窗显示的就是它）</label>
     <input id="newDisplayName" type="text" autocomplete="off" placeholder="例如 张老师">
+    <label for="newSubject">任教科目（可留空；填了会在喊话来源里显示成「数学张老师」）</label>
+    <input id="newSubject" type="text" autocomplete="off" placeholder="例如 数学">
     <label for="newUserPassword">初始口令（至少 6 位）</label>
     <input id="newUserPassword" type="text" autocomplete="off" placeholder="例如 Class@2026">
     <div class="actions">
@@ -165,16 +169,35 @@
   </div>
 </div>
 
+<!-- 改任教科目对话框 -->
+<div id="subjectOverlay" class="overlay hidden">
+  <div class="dialog">
+    <h2>任教科目</h2>
+    <p>「<span id="subjectName"></span>」的任教科目。填了之后，教室里的喊话来源会显示成
+      「数学张老师」；留空即清掉，来源回到只报姓名。</p>
+    <div id="subjectError" class="hidden"></div>
+    <label for="subjectInput">任教科目（可留空）</label>
+    <input id="subjectInput" type="text" autocomplete="off" placeholder="例如 数学">
+    <div class="actions">
+      <button class="outlined" data-action="close-subject">取消</button>
+      <button class="primary" data-action="submit-subject">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- 批量导入对话框 -->
 <div id="importOverlay" class="overlay hidden">
   <div class="dialog">
     <h2>批量导入账号</h2>
-    <p>每行一个账号，格式：<span class="mono">用户名,邮箱,姓名,口令</span>。
-      用户名与邮箱至少填一个（另一个留空即可）。可以直接从 Excel 里复制粘贴，带表头与空行都会自动跳过。
+    <p>每行一个账号，格式：<span class="mono">用户名,邮箱,姓名,口令[,任教科目]</span>。
+      用户名与邮箱至少填一个（另一个留空即可），第 5 列科目可留空 —— 填了的话，
+      这位老师的喊话来源会显示成「数学张老师」。
+      可以直接从 Excel 里复制粘贴，带表头与空行都会自动跳过，
+      带引号的字段（Excel 遇到逗号会自动加引号）也认。
       某一行为格式不对只会跳过那一行，不影响其他行。</p>
     <div id="importError" class="hidden"></div>
     <textarea id="importCsv" rows="9" spellcheck="false"
-              placeholder="用户名,邮箱,姓名,口令&#10;zhangsan,,张老师,Class@2026&#10;,lisi@school.edu.cn,李老师,Class@2026"></textarea>
+              placeholder="用户名,邮箱,姓名,口令,任教科目&#10;zhangsan,,张老师,Class@2026,数学&#10;,lisi@school.edu.cn,李老师,Class@2026,语文"></textarea>
     <div class="actions">
       <button class="outlined" data-action="close-import">取消</button>
       <button class="primary" data-action="submit-import">开始导入</button>

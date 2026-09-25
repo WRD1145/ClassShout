@@ -288,6 +288,36 @@ public sealed class UserStore
     }
 
     /// <summary>
+    /// 改一位老师的任教科目（留空即清掉）。返回 false 表示账号不存在或写盘失败。
+    ///
+    /// 之所以需要它：科目是在注册那一刻写进去的，而注册页上它是选填的 ——
+    /// 老师当时随手留空，之后他自己和管理员都没有地方再补，于是喊话来源里
+    /// 永远只有姓名。开学后管理员在控制台上补一次，比让老师重新注册一遍合理。
+    /// </summary>
+    public bool SetSubject(string id, string? subject)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null)
+            {
+                return false;
+            }
+
+            var previous = user.Subject;
+            user.Subject = string.IsNullOrWhiteSpace(subject) ? null : subject.Trim();
+
+            if (!SaveLocked())
+            {
+                user.Subject = previous;
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
     /// 重置某个账号的口令（管理控制台用）。
     /// 重置后该账号的旧口令立即失效，但已签发的登录令牌仍然有效，
     /// 所以调用方还应当顺带撤销它的会话。

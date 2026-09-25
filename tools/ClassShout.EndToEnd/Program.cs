@@ -742,24 +742,37 @@ internal static class Program
 
                 // ---------- 7c. 控制台的账号管理与喊话 ----------
 
-            // 手动创建账号
+            // 手动创建账号（顺手填上任教科目，与管理员开学时录账号的做法一致）
             var createdName = "ctl" + Guid.NewGuid().ToString("N")[..8];
             var createResponse = await adminHttp.PostAsJsonAsync($"{root}/api/console/users",
-                new CreateUserRequest(createdName, null, "控制台创建的张老师", "Init12345"), JsonOptions);
+                new CreateUserRequest(createdName, null, "控制台创建的张老师", "Init12345", Subject: "数学"), JsonOptions);
             var createBody = await createResponse.Content.ReadAsStringAsync();
             Check("控制台能手动创建账号", createResponse.IsSuccessStatusCode, Trim(createBody));
 
             // 新建的账号应当立刻出现在用户列表里
             var afterCreate = await adminHttp.GetFromJsonAsync<List<UserProfileDto>>(
                 $"{root}/api/console/users", JsonOptions) ?? [];
+            var createdProfile = afterCreate.FirstOrDefault(u => u.Username == createdName);
+
             Check("新建的账号出现在用户列表里",
-                afterCreate.Any(u => u.Username == createdName),
+                createdProfile is not null,
                 $"列表共 {afterCreate.Count} 个账号");
 
-            // CSV 批量导入：一行合法、一行列数不足、一行重名、一行与管理员冲突
+            // 控制台建号时填的科目要真的落到账号上：它会拼在喊话来源前面，
+            // 而"界面上有个输入框、后台却把它丢了"正是最容易发生的一种漏
+            Check("控制台建号时填的任教科目存下来了",
+                createdProfile?.Subject == "数学",
+                createdProfile is null ? "账号没建出来" : $"科目={createdProfile.Subject ?? "(空)"}");
+
+            // CSV 批量导入：两行合法（其中一行的姓名里带逗号、按 Excel 的习惯套着引号），
+            // 外加列数不足、重名、与管理员冲突各一行
+            var csvUserA = $"csvok{Guid.NewGuid():N}"[..12];
+            var csvUserB = $"csvqt{Guid.NewGuid():N}"[..12];
+
             var importCsv = string.Join('\n',
-                "用户名,邮箱,姓名,口令",
-                $"csvok{Guid.NewGuid():N}"[..12] + ",,CSV 老师甲,Init12345",
+                "用户名,邮箱,姓名,口令,任教科目",
+                $"{csvUserA},,CSV 老师甲,Init12345,语文",
+                $"{csvUserB},,\"CSV, 老师乙\",Init12345,数学",
                 "只有一列",
                 $"{createdName},,重复账号,Init12345",
                 "admin,,冒名管理员,Init12345");
@@ -769,12 +782,108 @@ internal static class Program
             var import = await importResponse.Content.ReadFromJsonAsync<ImportUsersResponse>(JsonOptions);
 
             Check("CSV 批量导入逐行处理（成功的建成、失败的不拖累其他行）",
-                import is { Created: 1, Failed: 3 },
+                import is { Created: 2, Failed: 3 },
                 import is null ? "解析失败" : $"成功 {import.Created} 条、失败 {import.Failed} 条");
 
             Check("CSV 导入会挡掉与内置管理员重名的行",
                 import?.Details.Any(d => d.Contains("内置管理员")) == true,
                 import?.Details.LastOrDefault(d => d.Contains("内置管理员")) ?? "没有相关说明");
+
+            var afterImport = await adminHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [];
+
+            Check("CSV 导入的第 5 列被当成任教科目",
+                afterImport.FirstOrDefault(u => u.Username == csvUserA)?.Subject == "语文",
+                afterImport.FirstOrDefault(u => u.Username == csvUserA)?.Subject ?? "(空)");
+
+            // Excel 遇到字段里有逗号会自己加引号。硬切的话这一行会从引号里的
+            // 那个逗号裂开：姓名只剩前半截，科目挪到第 5 列之外直接丢掉 ——
+            // 而且是静默的，管理员只会发现"有几个人的科目没录上"。
+            var quotedProfile = afterImport.FirstOrDefault(u => u.Username == csvUserB);
+
+            Check("CSV 里带引号的字段不会被逗号切开",
+                quotedProfile?.DisplayName == "CSV, 老师乙" && quotedProfile.Subject == "数学",
+                quotedProfile is null
+                    ? "账号没建出来"
+                    : $"姓名=「{quotedProfile.DisplayName}」科目={quotedProfile.Subject ?? "(空)"}");
+
+            // 补填任教科目：注册时它是选填的，老师随手留空之后，教师端没有"改资料"
+            // 这一页、控制台原来也没有这个动作 —— 于是喊话来源里永远只有姓名。
+            var teacherProfile = afterImport.FirstOrDefault(u => u.Username == accountName);
+
+            Check("控制台上能找到刚注册的那位老师",
+                teacherProfile is not null,
+                teacherProfile is null ? "没找到" : $"id={teacherProfile.Id}");
+
+            var setSubjectResponse = await adminHttp.PostAsJsonAsync(
+                $"{root}/api/console/users/{teacherProfile?.Id}/subject",
+                new ConsoleSubjectRequest("化学"),
+                JsonOptions);
+
+            Check("控制台能补填任教科目",
+                setSubjectResponse.IsSuccessStatusCode,
+                Trim(await setSubjectResponse.Content.ReadAsStringAsync()));
+
+            var afterSubject = await adminHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [];
+
+            Check("补填的科目进了用户列表",
+                afterSubject.FirstOrDefault(u => u.Username == accountName)?.Subject == "化学",
+                afterSubject.FirstOrDefault(u => u.Username == accountName)?.Subject ?? "(空)");
+
+            // 改完立刻影响喊话来源 —— 这才是这个动作存在的全部意义：
+            // 名单上补两个字，教室里从此听得出是谁在说话。
+            var subjectShoutText = $"改科目后的喊话 {Guid.NewGuid():N}"[..26];
+            var subjectShoutReceived = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == subjectShoutText)
+                {
+                    subjectShoutReceived.TrySetResult(envelope);
+                }
+            };
+
+            await teacher.SendTextAsync(subjectShoutText, 1, 90, interrupt: true);
+
+            var subjectShout = await Task.WhenAny(subjectShoutReceived.Task, Task.Delay(15000)) == subjectShoutReceived.Task
+                ? subjectShoutReceived.Task.Result
+                : null;
+
+            Check("改完科目后喊话来源立刻变成「化学张老师」",
+                subjectShout?.From == "化学张老师",
+                $"From={subjectShout?.From ?? "(15 秒内没收到)"}");
+
+            // 留空即清掉：来源回到只报姓名，而不是留下一个空的「张老师」前缀
+            await adminHttp.PostAsJsonAsync(
+                $"{root}/api/console/users/{teacherProfile?.Id}/subject",
+                new ConsoleSubjectRequest("   "),
+                JsonOptions);
+
+            var afterClear = await adminHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [];
+
+            Check("科目留空即清掉（不会留下空白科目）",
+                afterClear.FirstOrDefault(u => u.Username == accountName)?.Subject is null,
+                afterClear.FirstOrDefault(u => u.Username == accountName)?.Subject ?? "(已清空)");
+
+            var adminSubjectResponse = await adminHttp.PostAsJsonAsync(
+                $"{root}/api/console/users/builtin-admin/subject",
+                new ConsoleSubjectRequest("数学"),
+                JsonOptions);
+
+            Check("内置管理员没有任教科目可言（会被明确拒绝）",
+                (int)adminSubjectResponse.StatusCode == 400,
+                $"HTTP {(int)adminSubjectResponse.StatusCode}");
+
+            var missingSubjectResponse = await adminHttp.PostAsJsonAsync(
+                $"{root}/api/console/users/nonexistent-id/subject",
+                new ConsoleSubjectRequest("数学"),
+                JsonOptions);
+
+            Check("给不存在的账号改科目返回 404（而不是假装成功）",
+                (int)missingSubjectResponse.StatusCode == 404,
+                $"HTTP {(int)missingSubjectResponse.StatusCode}");
 
             // 管理员直接对教室喊话
             var consoleShoutText = $"控制台喊话测试 {Guid.NewGuid():N}"[..24];

@@ -231,7 +231,7 @@ async function loadUsers() {
 
   host.innerHTML =
     '<table><thead><tr>' +
-    '<th>姓名</th><th>用户名</th><th>邮箱</th><th>状态</th><th>注册时间</th><th>最后登录</th><th></th>' +
+    '<th>姓名</th><th>任教科目</th><th>用户名</th><th>邮箱</th><th>状态</th><th>注册时间</th><th>最后登录</th><th></th>' +
     '</tr></thead><tbody>' +
     list.map(u => {
       const status = u.disabled
@@ -250,15 +250,26 @@ async function loadUsers() {
             ' data-disabled="' + (!u.disabled) + '">' +
             (u.disabled ? '启用' : '停用') + '</button>');
 
+      // 科目是教师端注册时填的，喊话来源会显示成"数学张老师"。
+      // 控制台上单列一列，是因为同一所学校里重名的老师很常见，
+      // 光看姓名分不清哪个账号该授权哪间教室。
+      // 「改科目」这个动作也是为它准备的：注册时留空之后，别处就没地方补了。
+      const subjectAction = u.isAdmin ? '' :
+        '<button class="outlined small" data-action="subject"' +
+          ' data-id="' + escapeAttr(u.id) + '"' +
+          ' data-name="' + escapeAttr(u.displayName) + '"' +
+          ' data-subject="' + escapeAttr(u.subject || '') + '">改科目</button>';
+
       return '<tr>' +
         '<td>' + escapeHtml(u.displayName) +
           (u.isAdmin ? ' <span class="chip info">内置管理员</span>' : '') + '</td>' +
+        '<td>' + (u.subject ? escapeHtml(u.subject) : '—') + '</td>' +
         '<td class="mono">' + (u.username ? escapeHtml(u.username) : '—') + '</td>' +
         '<td class="mono">' + (u.email ? escapeHtml(u.email) : '—') + '</td>' +
         '<td>' + status + '</td>' +
         '<td>' + (u.isAdmin ? '—' : fmtTime(u.createdAt)) + '</td>' +
         '<td>' + fmtTime(u.lastLoginAt) + '</td>' +
-        '<td class="cell-actions">' + rowActions + '</td>' +
+        '<td class="cell-actions">' + rowActions + subjectAction + '</td>' +
       '</tr>';
     }).join('') +
     '</tbody></table>';
@@ -323,6 +334,8 @@ function openGrant(uuid, name) {
   } else {
     select.innerHTML = candidates.map(u =>
       '<option value="' + u.id + '">' + escapeHtml(u.displayName) +
+      // 带上科目：同一所学校里重名的老师很常见，只列姓名容易授错人
+      (u.subject ? '（' + escapeHtml(u.subject) + '）' : '') +
       (u.disabled ? '（已停用）' : '') + '</option>'
     ).join('');
   }
@@ -386,7 +399,7 @@ function fieldValue(id) {
 /* ---------- 添加账号 ---------- */
 
 function openCreateUser() {
-  ['newUsername', 'newEmail', 'newDisplayName', 'newUserPassword'].forEach(id => {
+  ['newUsername', 'newEmail', 'newDisplayName', 'newSubject', 'newUserPassword'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -402,6 +415,7 @@ async function submitCreateUser() {
   const username = fieldValue('newUsername').trim();
   const email = fieldValue('newEmail').trim();
   const displayName = fieldValue('newDisplayName').trim();
+  const subject = fieldValue('newSubject').trim();
   const password = fieldValue('newUserPassword');
 
   if (!username && !email) {
@@ -420,6 +434,7 @@ async function submitCreateUser() {
       username: username || null,
       email: email || null,
       displayName: displayName || null,
+      subject: subject || null,
       password: password
     })
   });
@@ -606,6 +621,42 @@ async function submitBroadcast() {
   }
 }
 
+/* ---------- 改任教科目对话框 ---------- */
+
+let subjectTarget = null;
+
+function openSubject(userId, name, subject) {
+  subjectTarget = userId;
+  document.getElementById('subjectName').textContent = name;
+  document.getElementById('subjectInput').value = subject || '';
+  setBanner('subjectError', '');
+  document.getElementById('subjectOverlay').classList.remove('hidden');
+  document.getElementById('subjectInput').focus();
+}
+
+function closeSubject() {
+  subjectTarget = null;
+  document.getElementById('subjectOverlay').classList.add('hidden');
+}
+
+async function submitSubject() {
+  const value = document.getElementById('subjectInput').value.trim();
+
+  const result = await apiJson('/api/console/users/' + encodeURIComponent(subjectTarget) + '/subject', {
+    method: 'POST',
+    body: JSON.stringify({ value: value || null })
+  });
+
+  if (result && result.ok) {
+    hideOverlay('subjectOverlay');
+    subjectTarget = null;
+    toast(value ? `已把任教科目改成「${value}」。` : '已清空任教科目。');
+    await loadUsers();
+  } else {
+    setBanner('subjectError', (result && result.error) || '修改失败。');
+  }
+}
+
 /* ---------- 重置口令对话框 ---------- */
 
 let resetTarget = null;
@@ -694,6 +745,10 @@ const actions = {
 
   reset: (el) => openReset(el.dataset.id, el.dataset.name),
   'toggle-disabled': (el) => toggleDisabled(el.dataset.id, el.dataset.disabled === 'true'),
+
+  subject: (el) => openSubject(el.dataset.id, el.dataset.name, el.dataset.subject),
+  'close-subject': () => closeSubject(),
+  'submit-subject': () => submitSubject(),
 
   revoke: (el) => revokeBinding(
     el.dataset.userId, el.dataset.uuid, el.dataset.userName, el.dataset.classroomName),
