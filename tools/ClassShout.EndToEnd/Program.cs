@@ -1659,6 +1659,36 @@ internal static class Program
         Check("空文本不会产出一份空名单",
             !RosterCsv.Parse("", "空").Ok && !RosterCsv.Parse(null, "空").Ok,
             "两次都返回了失败");
+
+        // Excel 在字段里出现逗号时会自动加引号。若按逗号硬切，这一行会从
+        // 引号里的那个逗号处裂开，后面几列**全部错位**（学号变成小组这一类），
+        // 而且是静默的：只有到教室里看见"李四（A组）"才会发现。
+        var quoted = RosterCsv.Parse("\"张三, 小张\",20250101,,A组", "带逗号的引号").Roster?.Students;
+
+        Check("引号里的逗号不会把这一行切开",
+            quoted is { Count: 1 } && quoted[0].Name == "张三, 小张",
+            quoted is { Count: 1 } ? $"姓名=「{quoted[0].Name}」" : $"解析出 {quoted?.Count ?? 0} 人");
+
+        Check("引号字段之后的几列仍然对得上",
+            quoted is { Count: 1 } && quoted[0].StudentNo == "20250101" && quoted[0].Group == "A组",
+            quoted is { Count: 1 } ? $"学号={quoted[0].StudentNo ?? "(空)"}，小组={quoted[0].Group ?? "(空)"}" : "取不到该学生");
+
+        // Excel 另存为 CSV 时会把每一格都套上引号
+        var excel = RosterCsv.Parse("\"李四\",\"20250102\",\"小李\",\"B组\"", "整行带引号").Roster?.Students;
+
+        Check("整行都套着引号时也能读（Excel 另存为 CSV 的样子）",
+            excel is { Count: 1 } && excel[0].Label == "李四（20250102，小李，B组）",
+            excel is { Count: 1 } ? excel[0].Label : $"解析出 {excel?.Count ?? 0} 人");
+
+        Check("引号里的一对引号表示一个引号本身",
+            RosterCsv.Parse("\"他说\"\"你好\"\"\",20250103", "带引号的名字").Roster?.Students is { Count: 1 } one
+                && one[0].Name == "他说\"你好\"",
+            RosterCsv.Parse("\"他说\"\"你好\"\"\",20250103", "带引号的名字").Roster?.Students.FirstOrDefault()?.Name ?? "(缺)");
+
+        Check("没配对的引号不会把整行丢掉",
+            RosterCsv.Parse("\"王五,20250105", "没配对的引号").Roster?.Students is { Count: 1 } half
+                && half[0].Name == "王五,20250105",
+            RosterCsv.Parse("\"王五,20250105", "没配对的引号").Roster?.Students.FirstOrDefault()?.Name ?? "(整行被丢掉了)");
     }
 
     /// <summary>

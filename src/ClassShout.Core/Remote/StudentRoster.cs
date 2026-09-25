@@ -175,7 +175,7 @@ public static class RosterCsv
                 continue;
             }
 
-            var fields = line.Split(',').Select(field => field.Trim().Trim('"').Trim()).ToArray();
+            var fields = SplitFields(line);
 
             // 表头行跳过：从 Excel 复制时几乎一定带着它
             if (lineNumber == 1 &&
@@ -207,4 +207,67 @@ public static class RosterCsv
     /// <summary>取第 n 列；没有或为空都返回 null（空字符串会被写成"填了但空着"）。</summary>
     private static string? At(string[] fields, int index)
         => index < fields.Length && !string.IsNullOrWhiteSpace(fields[index]) ? fields[index] : null;
+
+    /// <summary>
+    /// 按逗号切列，认双引号包裹。
+    ///
+    /// 不能直接 <c>Split(',')</c>：Excel 在字段里出现逗号时会自动给它加引号
+    /// （<c>"张三, 小张"</c>），直接切会把这个值切成两列，后面几列**全部错位** ——
+    /// 而错位是静默的：老师要到教室里看见「李四（A组）」才发现学号成了小组。
+    /// 引号里的一对连续引号表示一个引号本身（CSV 的老规矩）。
+    ///
+    /// 没配对的引号按"一直到行尾都是内容"处理，不报错：老师的名单是从别处粘来的，
+    /// 为一个引号把整行丢掉，比读进来一个多带引号的名字更糟。
+    /// </summary>
+    private static string[] SplitFields(string line)
+    {
+        var fields = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var inQuotes = false;
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+
+            if (inQuotes)
+            {
+                if (ch != '"')
+                {
+                    current.Append(ch);
+                    continue;
+                }
+
+                if (i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    current.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = false;
+                }
+
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '"':
+                    inQuotes = true;
+                    break;
+
+                case ',':
+                    fields.Add(current.ToString().Trim());
+                    current.Clear();
+                    break;
+
+                default:
+                    current.Append(ch);
+                    break;
+            }
+        }
+
+        fields.Add(current.ToString().Trim());
+        return [.. fields];
+    }
 }
