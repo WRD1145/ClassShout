@@ -104,8 +104,14 @@ try {
         throw "工作区不干净，拒绝发布。未提交的改动：`n$dirty"
     }
 
+    # 标签已存在不一定意味着"发过了"：上传几百兆被中断时，标签早就推上去了，
+    # 而发行版那边可能一个附件都没有。所以这里只提示，真正的判断交给后面
+    # "复用标签与发行版、只补缺的附件"那一段 —— 发布是否完整，最终以
+    # 末尾对发行版附件列表的核对为准。
     $existing = git tag --list $Version
-    if ($existing) { throw "标签 $Version 已存在" }
+    if ($existing) {
+        Write-Host "[标签] $Version 已存在，将复用它并补齐附件" -ForegroundColor Yellow
+    }
 
     Write-Host ''
     Write-Host "发布 $Version  →  $slug" -ForegroundColor Cyan
