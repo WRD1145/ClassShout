@@ -111,6 +111,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         _account = new AccountClient(_http, _relaySettings);
 
+        // 已保存的教室要在构造里就读进来：老师打开应用看到的第一件事，
+        // 应该是"我上次用的那间教室在这儿"，而不是一个空列表。
+        RefreshSavedClassrooms();
+
         // 用本地令牌尝试恢复登录；失败也只是回到未登录，不阻塞界面
         _ = RestoreSessionAsync();
     }
@@ -619,6 +623,9 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(SignedInName));
         OnPropertyChanged(nameof(AccountLabel));
 
+        // 已保存教室那段的两行说明要看登录状态（靠授权绑的那几间必须先登录）
+        OnPropertyChanged(nameof(SavedClassroomsHint));
+
         // 已登录就用账号里的姓名；未登录回退到设备名，保证局域网直连仍可用
         TeacherName = IsSignedIn ? SignedInName : TeacherPlatform.DeviceName;
 
@@ -689,27 +696,15 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
                 return;
             }
 
-            // 已登录时姓名以账号为准，这里的第三个参数只是兜底值
-            var (ok, error) = await _relay
-                .BindAsync(item.Uuid, secret: string.Empty, TeacherName)
-                .ConfigureAwait(true);
-
+            // 不传口令：服务器查到管理员已授权就直接放行。
+            // 绑定成功后同样会记进"已保存的教室"（口令为空，靠授权）。
+            var (ok, error) = await ConnectAndBindAsync(item.Uuid, secret: null).ConfigureAwait(true);
             if (!ok)
             {
                 ServerError = error;
                 return;
             }
 
-            _relayTransport = new RelayShoutTransport(_relay);
-            _transport.Active = _relayTransport;
-            IsServerBound = true;
-            IsConnected = true;
-            ClassroomName = _relay.BoundClassroomName ?? item.Name;
-            BindUuid = item.Uuid;
-            _relaySettings.LastUuid = item.Uuid;
-            LocalSettings.SaveTeacher(_relaySettings);
-
-            _relay.StartPolling();
             ShowSnackbar($"已绑定教室「{ClassroomName}」");
             ActivePage = TeacherPage.Text;
         }
@@ -867,8 +862,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     [NotifyPropertyChangedFor(nameof(HasServerError))]
     private string? _serverError;
 
-    /// <summary>最近绑定过的教室，点一下即可填入 UUID。</summary>
-    public ObservableCollection<BoundClassroom> RecentClassrooms { get; } = [];
+    /// <summary>
+    /// 已经绑定过的教室。点一下切过去，点右边的按钮可以把它从列表里移除。
+    /// </summary>
+    public ObservableCollection<SavedClassroomItem> SavedClassrooms { get; } = [];
 
     public bool HasServerError => !string.IsNullOrWhiteSpace(ServerError);
 
@@ -876,7 +873,23 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     public bool HasServerAddressNotice => !string.IsNullOrWhiteSpace(ServerAddressNotice);
 
-    public bool HasRecentClassrooms => RecentClassrooms.Count > 0;
+    public bool HasSavedClassrooms => SavedClassrooms.Count > 0;
+
+    /// <summary>已保存教室那一段的说明文字。</summary>
+    public string SavedClassroomsHint
+    {
+        get
+        {
+            if (IsSignedIn)
+            {
+                return "点一下即可切换过去，不用再输口令。";
+            }
+
+            // 未登录时：存了口令的教室照样能切（服务器只认口令），
+            // 而靠管理员授权的那些必须先登录 —— 授权是挂在账号上的。
+            return "点一下即可切换过去。存了口令的教室无需登录；靠管理员授权的教室要先登录。";
+        }
+    }
 
     /// <summary>
     /// 是否已经配置过服务器地址。
@@ -1084,39 +1097,17 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
                 return;
             }
 
-            // 换服务器或换教室前先拆掉旧连接，避免出现两条并存的会话
-            await TearDownRelayAsync().ConfigureAwait(true);
-
-            _relay = new TeacherRelayClient(_http, _relaySettings);
-            _relay.EventReceived += OnRelayEvent;
-            _relay.ConnectionChanged += connected => Post(() => AddLog(connected ? "服务器状态通道已连接。" : "服务器状态通道已断开。"));
-            _relay.Log += message => Post(() => AddLog(message));
-
-            var (ok, error) = await _relay.BindAsync(BindUuid.Trim(), BindSecret, TeacherName).ConfigureAwait(true);
+            var (ok, error) = await ConnectAndBindAsync(BindUuid.Trim(), BindSecret).ConfigureAwait(true);
             if (!ok)
             {
                 ServerError = error;
-                await TearDownRelayAsync().ConfigureAwait(true);
                 return;
             }
 
-            _relayTransport = new RelayShoutTransport(_relay);
-            _transport.Active = _relayTransport;
-            IsServerBound = true;
-
-            ClassroomName = _relay.BoundClassroomName ?? "教室";
-            IsConnected = true;
-            NotifyLinkChanged();
-
-            // 绑定成功后清掉口令输入框，并记住这台教室
+            // 绑定成功后清掉口令输入框：它已经存进"已保存的教室"里了，
+            // 再留在屏幕上只是把它多摆一份在别人眼前。
             BindSecret = string.Empty;
-            BindUuid = _relay.BoundUuid ?? BindUuid;
-            _relaySettings.LastUuid = BindUuid;
-            LocalSettings.SaveTeacher(_relaySettings);
 
-            RefreshRecentClassrooms();
-
-            _relay.StartPolling();
             ShowSnackbar($"已绑定教室「{ClassroomName}」");
             ActivePage = TeacherPage.Text;
         }
@@ -1128,6 +1119,48 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         {
             IsServerBusy = false;
         }
+    }
+
+    /// <summary>
+    /// 连上服务器并绑定一间教室。三个入口共用这一条路：
+    /// 手输 UUID 加口令、管理员授权的一键绑定、以及从"已保存的教室"里切过去。
+    ///
+    /// 抽出来不只是为了少写几行 —— 这三条路原来各写一遍，
+    /// 于是"绑定成功之后要做什么"（记录、刷新列表、开始轮询、切界面）在每一条里
+    /// 都可能漏掉一两件。切换教室这个新入口就是靠它才自动获得同样的收尾。
+    /// </summary>
+    private async Task<(bool Ok, string? Error)> ConnectAndBindAsync(string uuid, string? secret)
+    {
+        // 换服务器或换教室前先拆掉旧连接，避免出现两条并存的会话
+        await TearDownRelayAsync().ConfigureAwait(true);
+
+        _relay = new TeacherRelayClient(_http, _relaySettings);
+        _relay.EventReceived += OnRelayEvent;
+        _relay.ConnectionChanged += connected => Post(() => AddLog(connected ? "服务器状态通道已连接。" : "服务器状态通道已断开。"));
+        _relay.Log += message => Post(() => AddLog(message));
+
+        var (ok, error) = await _relay.BindAsync(uuid, secret ?? string.Empty, TeacherName).ConfigureAwait(true);
+        if (!ok)
+        {
+            await TearDownRelayAsync().ConfigureAwait(true);
+            return (false, error);
+        }
+
+        _relayTransport = new RelayShoutTransport(_relay);
+        _transport.Active = _relayTransport;
+        IsServerBound = true;
+        IsConnected = true;
+        ClassroomName = _relay.BoundClassroomName ?? "教室";
+
+        BindUuid = _relay.BoundUuid ?? uuid;
+        _relaySettings.LastUuid = BindUuid;
+
+        // 记下这间教室（含服务器地址与口令），下次切回来就不必再找管理员要口令
+        LocalSettings.SaveTeacher(_relaySettings);
+        RefreshSavedClassrooms();
+
+        _relay.StartPolling();
+        return (true, null);
     }
 
     [RelayCommand(CanExecute = nameof(CanUnbindServer))]
@@ -1142,6 +1175,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             IsServerBound = false;
             IsConnected = _channel.IsConnected;
             ClassroomName = _channel.IsConnected ? _channel.ClassroomName : "未连接";
+            RefreshSavedClassrooms();
             AddLog("已解除与教室的绑定。");
         }
         finally
@@ -1150,15 +1184,87 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    /// <summary>点击历史记录填入 UUID。</summary>
-    [RelayCommand]
-    private void UseRecentClassroom(BoundClassroom? item)
+    /// <summary>
+    /// 切换到另一间已经绑定过的教室。
+    ///
+    /// 它和"解除绑定"是两件事：解绑之后什么都不连，而切换是"松手一间、握住另一间"——
+    /// 老师下一节课走进另一个班，需要的是后者。
+    /// </summary>
+    private async Task SwitchClassroomAsync(SavedClassroomItem item)
     {
-        if (item is not null)
+        IsServerBusy = true;
+        ServerError = null;
+
+        try
         {
-            BindUuid = item.Uuid;
-            ServerError = null;
+            // 这间教室可能绑在另一台服务器上（换了学校，或者学校换了服务器）。
+            // 地址必须在建立连接之前换好 —— TeacherRelayClient 是照着配置里的地址发请求的。
+            if (!string.IsNullOrWhiteSpace(item.ServerUrl) &&
+                !string.Equals(item.ServerUrl, SavedServerUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                PersistServerUrl(item.ServerUrl);
+                AddLog($"已切换服务器地址：{item.ServerUrl}");
+            }
+
+            if (!IsServerConfigured)
+            {
+                ServerError = "这间教室没有留下服务器地址，请先在上面那张「中继服务器」卡片里填好。";
+                return;
+            }
+
+            var (ok, error) = await ConnectAndBindAsync(item.Uuid, item.Secret).ConfigureAwait(true);
+            if (!ok)
+            {
+                // 口令可能已经在教室那台机器上被换掉了。这是切换失败最常见的原因，
+                // 所以提示要直接指向"重新填一次口令"，而不是把服务器的原话丢出来。
+                ServerError = string.IsNullOrEmpty(item.Secret)
+                    ? $"{error}这间教室此前是靠管理员授权绑定的；若授权已被取消，请改用口令绑定。"
+                    : $"{error}口令可能已经变了，请在下方的输入框里重新填一次再绑定。";
+                return;
+            }
+
+            ShowSnackbar($"已切换到教室「{ClassroomName}」");
+            ActivePage = TeacherPage.Text;
         }
+        catch (Exception ex)
+        {
+            ServerError = $"切换教室出错：{ex.Message}";
+        }
+        finally
+        {
+            IsServerBusy = false;
+        }
+    }
+
+    /// <summary>把一间教室从保存列表里移除（连同它的口令）。</summary>
+    private void RemoveSavedClassroom(SavedClassroomItem item)
+    {
+        _relaySettings.RecentClassrooms.RemoveAll(
+            record => string.Equals(record.Uuid, item.Uuid, StringComparison.OrdinalIgnoreCase));
+
+        LocalSettings.SaveTeacher(_relaySettings);
+        RefreshSavedClassrooms();
+
+        // 移除的正好是当前这间时，刻意**不去动连接**：
+        // 老师可能正在这间教室里喊话，删掉一条记录不该把话筒也一起拿走。
+        AddLog($"已从列表里移除教室「{item.Name}」，它的口令也已一并删除。");
+    }
+
+    /// <summary>把已保存的教室读进界面，并标出当前绑的是哪一间。</summary>
+    private void RefreshSavedClassrooms()
+    {
+        SavedClassrooms.Clear();
+
+        foreach (var record in _relaySettings.RecentClassrooms)
+        {
+            var isCurrent = IsServerBound
+                            && string.Equals(record.Uuid, BindUuid, StringComparison.OrdinalIgnoreCase);
+
+            SavedClassrooms.Add(new SavedClassroomItem(record, isCurrent, SwitchClassroomAsync, RemoveSavedClassroom));
+        }
+
+        OnPropertyChanged(nameof(HasSavedClassrooms));
+        OnPropertyChanged(nameof(SavedClassroomsHint));
     }
 
     private async Task TearDownRelayAsync()
@@ -1174,17 +1280,6 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 回落到局域网；如果局域网也没连，就成了空操作，正是期望的行为
         _transport.Active = _channel.IsConnected ? _channel : null;
         NotifyLinkChanged();
-    }
-
-    private void RefreshRecentClassrooms()
-    {
-        RecentClassrooms.Clear();
-        foreach (var item in _relaySettings.RecentClassrooms)
-        {
-            RecentClassrooms.Add(item);
-        }
-
-        OnPropertyChanged(nameof(HasRecentClassrooms));
     }
 
     private void OnRelayEvent(RelayEnvelope envelope)
@@ -1321,6 +1416,70 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         await _channel.DisposeAsync().ConfigureAwait(false);
     }
+}
+
+/// <summary>
+/// 一条「保存下来的教室」。
+///
+/// 命令挂在条目自己身上，XAML 模板里就不必写父级转换绑定 ——
+/// 和 <see cref="ClassroomGrantItem"/> 同一个套路。
+/// </summary>
+public sealed partial class SavedClassroomItem : ObservableObject
+{
+    public SavedClassroomItem(
+        BoundClassroom record,
+        bool isCurrent,
+        Func<SavedClassroomItem, Task> switchTo,
+        Action<SavedClassroomItem> remove)
+    {
+        Uuid = record.Uuid;
+        Name = record.Name;
+        ServerUrl = record.ServerUrl ?? string.Empty;
+        Secret = record.Secret;
+        HasSecret = !string.IsNullOrWhiteSpace(record.Secret);
+        LastBoundText = record.LastBoundAt.ToLocalTime().ToString("MM-dd HH:mm");
+        IsCurrent = isCurrent;
+
+        SwitchCommand = new AsyncRelayCommand(() => switchTo(this));
+        RemoveCommand = new RelayCommand(() => remove(this));
+    }
+
+    public string Uuid { get; }
+
+    public string Name { get; }
+
+    /// <summary>绑定它时用的服务器地址。切换时若与当前不同，会先换地址。</summary>
+    public string ServerUrl { get; }
+
+    /// <summary>
+    /// 存下来的口令，切换时交给绑定流程用。
+    ///
+    /// 刻意是 internal 而不是 public：界面不该有任何一个绑定去显示它 ——
+    /// 这个值出现在屏幕上没有任何用处，只会多一份被旁人看到的机会。
+    /// </summary>
+    internal string? Secret { get; }
+
+    /// <summary>有没有存下口令。没有就说明这间是靠管理员授权绑定的。</summary>
+    public bool HasSecret { get; }
+
+    public string LastBoundText { get; }
+
+    /// <summary>
+    /// 是不是当前正绑着的那一间。
+    ///
+    /// 可写（而不是只在构造时定死）是为了让渲染校验能把它摆出来 ——
+    /// 否则那个「使用中」徽标只有真的连上服务器绑一次才会被画到，
+    /// 而"排版有没有走样"这种问题恰恰要在图上才看得出来。
+    /// </summary>
+    [ObservableProperty]
+    private bool _isCurrent;
+
+    /// <summary>副标题：说清这间教室凭什么能切过去，以及上次是什么时候用的。</summary>
+    public string DetailText => $"{(HasSecret ? "已存口令" : "管理员授权")} · 上次绑定 {LastBoundText}";
+
+    public IAsyncRelayCommand SwitchCommand { get; }
+
+    public IRelayCommand RemoveCommand { get; }
 }
 
 /// <summary>

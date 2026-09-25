@@ -1466,28 +1466,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    /// 重新生成 UUID。
-    /// 这等于把本机变成"另一间教室"：服务器上的旧记录与已绑定的教师端都会失效，
-    /// 必须重新注册并重新分发口令，所以界面要给出明确确认。
+    /// 本教室在服务器上的身份（UUID 与口令）只显示、可复制，**不提供重新生成**。
+    ///
+    /// 原来这里有一个"重新生成 UUID"的按钮。它看起来只是"重置一下"，
+    /// 实际含义却是"这台电脑从此变成另一间教室"：服务器上的旧记录作废，
+    /// 已经绑定的教师端全部失效，口令要重新抄一遍发给每一位任课老师。
+    /// 教室里那台机器是给值班老师和学生共用的，一个误触就能让整间教室从所有老师的
+    /// 列表里消失，而恢复它需要把口令一家一家重发 —— 这个代价和"重置"这个词
+    /// 给人的感觉完全不成比例。真要重来（比如这台机器换教室了），
+    /// 管理员在服务器的控制台上做，那里看得见影响范围，也能一次性通知到人。
     /// </summary>
-    [RelayCommand]
-    private async Task RegenerateUuidAsync()
-    {
-        if (IsRelayConnected)
-        {
-            await DisconnectRelayAsync().ConfigureAwait(true);
-        }
-
-        _relaySettings.Uuid = Guid.NewGuid().ToString("D");
-        _relaySettings.Secret = null;
-        LocalSettings.SaveClassroom(_relaySettings);
-
-        RelayUuid = _relaySettings.Uuid;
-        RelaySecret = null;
-        RelayError = null;
-
-        AddLog("服务器", "已生成新的 UUID 并清除口令，请重新连接服务器完成注册。");
-    }
 
     /// <summary>把中继投递的事件转成与局域网一致的呈现流程。</summary>
     private void OnRelayShoutReceived(RelayEnvelope envelope)

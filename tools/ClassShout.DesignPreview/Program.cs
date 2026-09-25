@@ -303,6 +303,112 @@ internal static class Program
     }
 
     /// <summary>
+    /// 「已保存的教室」列表：读进来、标出当前那间、移除时真的落盘。
+    ///
+    /// 这几件事都发生在视图模型里，跑不在场测不到 —— 而它们错了的表现还很隐蔽：
+    /// 列表少一条、或者删掉之后重启又回来了，都要等老师下一次换班才发现。
+    /// </summary>
+    private static bool VerifySavedClassrooms()
+    {
+        Console.WriteLine("教师端「已保存的教室」：");
+
+        var passed = true;
+
+        void Check(string label, bool ok, string detail)
+        {
+            passed &= ok;
+            Console.WriteLine($"  [{(ok ? "通过" : "失败")}] {label} —— {detail}");
+        }
+
+        var dataPath = Path.Combine(LocalSettings.Directory, "teacher.json");
+        var hadFile = File.Exists(dataPath);
+        var backup = hadFile ? File.ReadAllText(dataPath) : null;
+
+        try
+        {
+            SeedSavedClassrooms();
+
+            var vm = new TeacherShellViewModel();
+
+            Check("已保存的教室会读进界面",
+                vm.SavedClassrooms.Count == 3,
+                $"共 {vm.SavedClassrooms.Count} 条");
+
+            Check("有记录时列表可见", vm.HasSavedClassrooms, $"HasSavedClassrooms={vm.HasSavedClassrooms}");
+
+            Check("最近绑定的排在最前",
+                vm.SavedClassrooms.Count > 0 && vm.SavedClassrooms[0].Name == "三年二班",
+                vm.SavedClassrooms.Count == 0 ? "列表是空的" : $"首条={vm.SavedClassrooms[0].Name}");
+
+            Check("存了口令的教室标成「已存口令」",
+                vm.SavedClassrooms.Any(item => item.HasSecret && item.DetailText.Contains("已存口令", StringComparison.Ordinal)),
+                vm.SavedClassrooms.Count == 0 ? "无记录" : vm.SavedClassrooms[0].DetailText);
+
+            Check("靠授权绑定的教室标成「管理员授权」",
+                vm.SavedClassrooms.Any(item => !item.HasSecret && item.DetailText.Contains("管理员授权", StringComparison.Ordinal)),
+                "有一条没有口令的记录");
+
+            Check("没有绑定时没有任何一间被标成「使用中」",
+                vm.SavedClassrooms.All(item => !item.IsCurrent),
+                $"使用中 {vm.SavedClassrooms.Count(item => item.IsCurrent)} 条");
+
+            // 移除：列表要少一条，而且文件里也要真的少一条 ——
+            // 只改内存的话，重启之后被删掉的那间会自己回来。
+            var target = vm.SavedClassrooms[1];
+            target.RemoveCommand.Execute(null);
+
+            Check("移除后列表里少一条",
+                vm.SavedClassrooms.Count == 2 && vm.SavedClassrooms.All(item => item.Uuid != target.Uuid),
+                $"共 {vm.SavedClassrooms.Count} 条");
+
+            var onDisk = LocalSettings.LoadTeacher();
+            Check("移除会落盘（否则重启后它又回来了）",
+                onDisk.RecentClassrooms.All(item => item.Uuid != target.Uuid) && onDisk.RecentClassrooms.Count == 2,
+                $"文件里 {onDisk.RecentClassrooms.Count} 条");
+
+            Check("被移除的那间的口令也一起删了",
+                onDisk.RecentClassrooms.All(item => item.Secret != "secret-of-三年三班"),
+                "口令未残留在配置里");
+        }
+        finally
+        {
+            if (hadFile)
+            {
+                File.WriteAllText(dataPath, backup!);
+            }
+            else
+            {
+                File.Delete(dataPath);
+            }
+        }
+
+        Console.WriteLine();
+        return passed;
+    }
+
+    /// <summary>
+    /// 往临时数据目录里预置三条「已保存的教室」。
+    ///
+    /// 走的是真实配置文件而不是往视图模型里塞对象：这个功能的全部意义就是"存下来、
+    /// 下次打开还在"，所以验证也必须经过那一次落盘。
+    /// </summary>
+    private static void SeedSavedClassrooms()
+    {
+        var stamp = new DateTimeOffset(2026, 9, 24, 8, 0, 0, TimeSpan.Zero);
+        var settings = new TeacherRelaySettings { ServerUrl = "https://relay.example.com" };
+
+        // 倒着放：Remember 会把最新的排到最前，所以「三年二班」要最后入列
+        TeacherRelaySettings.Remember(settings.RecentClassrooms,
+            new BoundClassroom("uuid-c", "三年四班", stamp.AddMinutes(-30), "https://relay.example.com", null));
+        TeacherRelaySettings.Remember(settings.RecentClassrooms,
+            new BoundClassroom("uuid-b", "三年三班", stamp.AddMinutes(-20), "https://relay.example.com", "secret-of-三年三班"));
+        TeacherRelaySettings.Remember(settings.RecentClassrooms,
+            new BoundClassroom("uuid-a", "三年二班", stamp.AddMinutes(-10), "https://relay.example.com", "secret-of-三年二班"));
+
+        LocalSettings.SaveTeacher(settings);
+    }
+
+    /// <summary>
     /// 教师端"服务器地址"这条配置的断言。
     ///
     /// 锁的是一个具体的死锁：服务器地址原本和「教室 UUID / 口令」挤在同一张卡里，
@@ -660,6 +766,9 @@ internal static class Program
         // 教室端顶栏 chip 的状态（原本在服务器链路下恒为"未连接"）
         var linkChipPassed = VerifyClassroomLinkChip();
 
+        // 已保存的教室列表（读取、标记、移除落盘）—— 同样是视图模型里的逻辑
+        var savedClassroomsPassed = VerifySavedClassrooms();
+
         var scenes = new Scene[]
         {
             new("design-system",
@@ -669,6 +778,48 @@ internal static class Program
             new("teacher",
                 () => new TeacherView { DataContext = new TeacherShellViewModel() }, 430, 900,
                 isDark => isDark ? Combine(CommonDark, TeacherExtraDark) : Combine(CommonLight, TeacherExtraLight)),
+
+            // 教师端「设备」页里的「已保存的教室」：三间，其中一间标成"使用中"。
+            //
+            // 刻意种了数据再构造：空列表时那一段整个不可见（IsVisible 绑在数量上），
+            // 而"使用中"徽标、副标题、移除按钮都只在有条目时才画得出来 ——
+            // 折叠状态下这一块等于没渲染过。
+            new("teacher-classrooms",
+                () =>
+                {
+                    var dataPath = Path.Combine(LocalSettings.Directory, "teacher.json");
+                    var hadFile = File.Exists(dataPath);
+                    var backup = hadFile ? File.ReadAllText(dataPath) : null;
+
+                    try
+                    {
+                        SeedSavedClassrooms();
+
+                        var vm = new TeacherShellViewModel();
+                        vm.NavigateDevicesCommand.Execute(null);
+
+                        // 让列表里有一间是"当前正在用的"，好把那个徽标也画出来。
+                        // 这里只改界面状态、不去真的连服务器 —— 渲染校验不该依赖网络。
+                        if (vm.SavedClassrooms.Count > 0)
+                        {
+                            vm.SavedClassrooms[0].IsCurrent = true;
+                        }
+
+                        return new TeacherView { DataContext = vm };
+                    }
+                    finally
+                    {
+                        if (hadFile)
+                        {
+                            File.WriteAllText(dataPath, backup!);
+                        }
+                        else
+                        {
+                            File.Delete(dataPath);
+                        }
+                    }
+                }, 430, 1900,
+                _ => null),
 
             // 教师端文字页 + 排队提示。刻意真的往队列里塞两条卡住的喊话，
             // 好让"排队中"那块显示出来 —— {x:Static StringConverters.IsNotNullOrEmpty}
@@ -838,7 +989,7 @@ internal static class Program
                 }),
         };
 
-        var allPassed = fontsPassed && palettePassed && pickerPassed && serverAddressPassed && linkChipPassed;
+        var allPassed = fontsPassed && palettePassed && pickerPassed && serverAddressPassed && linkChipPassed && savedClassroomsPassed;
         var written = new List<string>();
         foreach (var scene in scenes)
         {

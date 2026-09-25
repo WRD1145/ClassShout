@@ -425,6 +425,33 @@ internal static class Program
         var (bindOk, bindError) = await teacher.BindAsync(uuid, secret, "这个字符串不该被采用");
         Check("正确 UUID + 口令绑定成功", bindOk, bindError ?? $"教室={teacher.BoundClassroomName}");
 
+        // ---------- 3b. 绑定后存下来的那间教室 ----------
+        //
+        // 老师教好几个班，"切过去就能喊"靠的就是这条记录：教室名、服务器地址、口令。
+        // 少了任何一项，切换时都得重新找管理员要一遍信息。
+        var saved = teacherSettings.RecentClassrooms;
+        Check("绑定后记下了这间教室", saved.Count == 1 && saved[0].Uuid == uuid,
+            saved.Count == 0 ? "列表是空的" : $"共 {saved.Count} 条");
+
+        Check("记录里带着口令（否则下次切换要重新找管理员要）",
+            saved.Count > 0 && saved[0].Secret == secret,
+            saved.Count == 0 ? "无记录" : (string.IsNullOrEmpty(saved[0].Secret) ? "没有口令" : "口令已存"));
+
+        Check("记录里带着服务器地址（换服务器后仍能切回来）",
+            saved.Count > 0 && saved[0].ServerUrl == root,
+            saved.Count == 0 ? "无记录" : $"地址={saved[0].ServerUrl}");
+
+        Check("记录里带着教室名", saved.Count > 0 && !string.IsNullOrWhiteSpace(saved[0].Name),
+            saved.Count == 0 ? "无记录" : $"教室名={saved[0].Name}");
+
+        // 再绑一次同一间：不能变成两条
+        await teacher.BindAsync(uuid, secret, "张老师");
+        Check("重复绑定同一间教室不会在列表里出现两条",
+            teacherSettings.RecentClassrooms.Count == 1,
+            $"共 {teacherSettings.RecentClassrooms.Count} 条");
+
+        AssertSavedClassroomList();
+
         var statusReceived = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
         teacher.EventReceived += envelope =>
         {
@@ -1030,6 +1057,67 @@ internal static class Program
             !(await client2.TranscribeAsync(pcm, AudioFormat.Default,
                 new SttSettings { Enabled = true, ApiKey = null })).Ok,
             "缺密钥时返回失败结果");
+    }
+
+    /// <summary>
+    /// 「已保存的教室」这个列表本身的规矩：去重、排序、上限。
+    ///
+    /// 纯本地逻辑，不需要服务器 —— 但它决定了老师换班上课时列表里还剩哪几间。
+    /// 写错的表现（同一间出现两条、刚绑过的那间被挤掉）都要等人用上一阵子才会发现，
+    /// 所以这里直接压。
+    /// </summary>
+    private static void AssertSavedClassroomList()
+    {
+        static BoundClassroom Make(string uuid, string name, int minute)
+            => new(uuid, name, new DateTimeOffset(2026, 9, 24, 8, minute, 0, TimeSpan.Zero));
+
+        var list = new List<BoundClassroom>();
+
+        TeacherRelaySettings.Remember(list, Make("A", "三年二班", 0));
+        TeacherRelaySettings.Remember(list, Make("B", "三年三班", 1));
+        Check("最新绑定的排在最前", list[0].Uuid == "B", $"首条={list[0].Name}");
+
+        // 同一间再次绑定：只留一条，并回到最前
+        TeacherRelaySettings.Remember(list, Make("A", "三年二班", 2));
+        Check("重复绑定只留一条", list.Count == 2, $"共 {list.Count} 条");
+        Check("重复绑定的那间回到最前", list[0].Uuid == "A", $"首条={list[0].Name}");
+
+        // 大小写不同的 UUID 是同一间教室
+        TeacherRelaySettings.Remember(list, Make("a", "三年二班", 3));
+        Check("UUID 大小写不同仍算同一间", list.Count == 2, $"共 {list.Count} 条");
+
+        // 上限：塞满再塞，最旧的被丢掉，且总条数不涨
+        for (var i = 0; i < TeacherRelaySettings.MaxSavedClassrooms + 5; i++)
+        {
+            TeacherRelaySettings.Remember(list, Make($"X{i}", $"教室 {i}", i));
+        }
+
+        Check($"最多保留 {TeacherRelaySettings.MaxSavedClassrooms} 间",
+            list.Count == TeacherRelaySettings.MaxSavedClassrooms,
+            $"共 {list.Count} 条");
+
+        var lastAdded = $"X{TeacherRelaySettings.MaxSavedClassrooms + 4}";
+        Check("超出上限时留下的是最近绑定的那几间",
+            list[0].Uuid == lastAdded,
+            $"首条={list[0].Name}");
+
+        // 落盘再读回来，确认这几个字段真的能存下来（record 用参数化构造，字段名写错会静默丢）
+        var path = Path.Combine(LocalSettings.Directory, "e2e-teacher-roundtrip.json");
+        var settings = new TeacherRelaySettings { ServerUrl = "https://relay.example.com" };
+        TeacherRelaySettings.Remember(settings.RecentClassrooms,
+            new BoundClassroom("UUID-1", "三年二班", DateTimeOffset.UtcNow, "https://relay.example.com", "SECRET-1"));
+
+        LocalSettings.Save("e2e-teacher-roundtrip.json", settings);
+        var back = LocalSettings.Load("e2e-teacher-roundtrip.json", static () => new TeacherRelaySettings());
+        File.Delete(path);
+
+        Check("口令能落盘再读回来",
+            back.RecentClassrooms.Count == 1 && back.RecentClassrooms[0].Secret == "SECRET-1",
+            back.RecentClassrooms.Count == 0 ? "读回来是空的" : $"口令={(string.IsNullOrEmpty(back.RecentClassrooms[0].Secret) ? "(丢失)" : "在")}");
+
+        Check("服务器地址能落盘再读回来",
+            back.RecentClassrooms.Count == 1 && back.RecentClassrooms[0].ServerUrl == "https://relay.example.com",
+            back.RecentClassrooms.Count == 0 ? "读回来是空的" : $"地址={back.RecentClassrooms[0].ServerUrl ?? "(丢失)"}");
     }
 
     /// <summary>

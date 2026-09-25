@@ -108,9 +108,10 @@ public sealed class TeacherRelayClient : IAsyncDisposable
             BoundUuid = uuid.Trim();
             BoundClassroomName = result.ClassroomName;
 
-            // 记住教室，但不记口令 —— 口令让老师自己保管
+            // 把这次绑定记下来：教室名、服务器地址、以及口令。
+            // 老师教好几个班时，这几条记录就是"切过去就能喊"的全部依据。
             _settings.LastUuid = BoundUuid;
-            RememberClassroom(BoundUuid, result.ClassroomName ?? "教室");
+            RememberClassroom(BoundUuid, result.ClassroomName ?? "教室", secret);
 
             Log?.Invoke($"已绑定教室「{result.ClassroomName}」");
             return (true, null);
@@ -121,15 +122,17 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         }
     }
 
-    private void RememberClassroom(string uuid, string name)
+    /// <summary>
+    /// 记下一间已绑定的教室。同一间只留一条（新的挤掉旧的），超出上限丢最旧的那条。
+    /// </summary>
+    private void RememberClassroom(string uuid, string name, string? secret)
     {
-        _settings.RecentClassrooms.RemoveAll(item => string.Equals(item.Uuid, uuid, StringComparison.OrdinalIgnoreCase));
-        _settings.RecentClassrooms.Insert(0, new BoundClassroom(uuid, name, DateTimeOffset.UtcNow));
-
-        while (_settings.RecentClassrooms.Count > 8)
-        {
-            _settings.RecentClassrooms.RemoveAt(_settings.RecentClassrooms.Count - 1);
-        }
+        TeacherRelaySettings.Remember(_settings.RecentClassrooms, new BoundClassroom(
+            uuid,
+            name,
+            DateTimeOffset.UtcNow,
+            _settings.ServerUrl,
+            string.IsNullOrWhiteSpace(secret) ? null : secret));
     }
 
     /// <summary>

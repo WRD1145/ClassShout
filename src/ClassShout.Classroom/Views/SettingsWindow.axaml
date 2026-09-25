@@ -325,9 +325,16 @@
                 </Grid>
               </StackPanel>
 
-              <Button Classes="text small" HorizontalAlignment="Left"
-                      Content="重新生成 UUID（会使已绑定的教师端全部失效）"
-                      Command="{Binding RegenerateUuidCommand}" />
+              <!--
+                这里原来有一个「重新生成 UUID」按钮，现在刻意没有。
+                它看起来只是"重置一下"，实际含义却是"这台电脑从此变成另一间教室"：
+                已绑定的教师端全部失效，口令要重新抄给每一位任课老师。
+                教室里那台机器是共用的，一个误触就要把口令重发一圈 ——
+                真要重来请到服务器控制台上做，那里看得见影响范围，也能一次性通知到人。
+              -->
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="身份信息只读：改它就等于把本机变成另一间教室，已绑定的教师端会全部失效。确需重置请在服务器控制台上操作。" />
             </StackPanel>
           </StackPanel>
         </md3:Md3Card>

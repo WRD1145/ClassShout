@@ -2,7 +2,6 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:md3="using:ClassShout.Design.Controls"
              xmlns:vm="using:ClassShout.Teacher.ViewModels"
-             xmlns:remote="using:ClassShout.Core.Remote"
              x:Class="ClassShout.Teacher.Views.MainView"
              x:DataType="vm:TeacherShellViewModel"
              Background="{DynamicResource Md3.Surface}">
@@ -546,7 +545,7 @@
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="向教室管理员索取 UUID 与口令。服务器地址在上面那张「中继服务器」卡片里单独配置 —— 这里只填「哪间教室」。" />
+                           Text="向教室管理员索取 UUID 与口令。服务器地址在上面那张「中继服务器」卡片里单独配置 —— 这里只填「哪间教室」。绑定过的教室会存在本机，之后在下面点一下就能切过去。" />
 
                 <TextBox Classes="outlined dense"
                          Watermark="教室 UUID"
@@ -577,26 +576,50 @@
                              Text="{Binding ServerError}" />
                 </Border>
 
-                <!-- 绑定过的教室：点一下填 UUID，口令仍要手输（刻意不落盘） -->
-                <StackPanel Spacing="6" IsVisible="{Binding HasRecentClassrooms}">
+                <!-- 已保存的教室：点一下切过去，右边的 × 把它连同口令一起删掉 -->
+                <StackPanel Spacing="6" IsVisible="{Binding HasSavedClassrooms}">
                   <TextBlock Classes="bodySmall"
                              Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                             Text="最近绑定过（点击填入 UUID，口令仍需输入）" />
-                  <ItemsControl ItemsSource="{Binding RecentClassrooms}">
+                             Text="已保存的教室" />
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding SavedClassroomsHint}" />
+                  <ItemsControl ItemsSource="{Binding SavedClassrooms}">
                     <ItemsControl.ItemTemplate>
-                      <DataTemplate x:DataType="remote:BoundClassroom">
-                        <Button Classes="tonal small block" Margin="0,0,0,6"
-                                HorizontalContentAlignment="Left"
-                                Command="{Binding $parent[ItemsControl].((vm:TeacherShellViewModel)DataContext).UseRecentClassroomCommand}"
-                                CommandParameter="{Binding}">
-                          <StackPanel Spacing="1">
-                            <TextBlock Classes="bodyMedium" Text="{Binding Name}" />
-                            <TextBlock Classes="bodySmall"
-                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                                       FontFamily="Consolas, monospace"
-                                       Text="{Binding Uuid}" />
-                          </StackPanel>
-                        </Button>
+                      <DataTemplate x:DataType="vm:SavedClassroomItem">
+                        <Border CornerRadius="10" Margin="0,0,0,6" Padding="4"
+                                Background="{DynamicResource Md3.SurfaceContainerHigh}">
+                          <Grid ColumnDefinitions="*,Auto">
+                            <Button Classes="text small" Padding="8,6"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Left"
+                                    IsEnabled="{Binding !IsCurrent}"
+                                    Command="{Binding SwitchCommand}">
+                              <StackPanel Spacing="1">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                  <TextBlock Classes="bodyMedium" Text="{Binding Name}" />
+                                  <!-- 当前这间标出来：切换教室里最要紧的信息就是"我现在喊的是哪个班" -->
+                                  <Border IsVisible="{Binding IsCurrent}"
+                                          CornerRadius="9999" Padding="7,1"
+                                          VerticalAlignment="Center"
+                                          Background="{DynamicResource Md3.PrimaryContainer}">
+                                    <TextBlock Classes="labelSmall"
+                                               Foreground="{DynamicResource Md3.OnPrimaryContainer}"
+                                               Text="使用中" />
+                                  </Border>
+                                </StackPanel>
+                                <TextBlock Classes="bodySmall"
+                                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                           Text="{Binding DetailText}" />
+                              </StackPanel>
+                            </Button>
+                            <Button Grid.Column="1" Classes="icon" Margin="4,0,0,0"
+                                    Command="{Binding RemoveCommand}"
+                                    ToolTip.Tip="从列表里移除（连同保存的口令）">
+                              <md3:Md3Icon Kind="DeleteOutline" Size="18" />
+                            </Button>
+                          </Grid>
+                        </Border>
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>

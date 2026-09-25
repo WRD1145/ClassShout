@@ -50,8 +50,7 @@ public sealed class TeacherRelaySettings
     public string? LastUuid { get; set; }
 
     /// <summary>
-    /// 最近成功绑定过的教室。
-    /// 刻意不保存口令：口令是敏感信息，让它留在老师脑子里比留在磁盘上安全。
+    /// 已经绑定过的教室。老师可能同时教好几个班，绑定过的都留在这里，切过去就能喊。
     /// </summary>
     public List<BoundClassroom> RecentClassrooms { get; set; } = [];
 
@@ -78,13 +77,69 @@ public sealed class TeacherRelaySettings
 
     [JsonIgnore]
     public bool IsSignedIn => !string.IsNullOrWhiteSpace(AuthToken) && !string.IsNullOrWhiteSpace(DisplayName);
+
+    /// <summary>
+    /// 保存的教室最多留几个。
+    ///
+    /// 不是随便定的：一位老师一学期的任课班级很少超过十来个，
+    /// 而留得太多会让列表长到需要滚动才能找到当前那间 ——
+    /// 这个列表是拿来"一眼选中下一节课的教室"的，不是一个档案库。
+    /// </summary>
+    public const int MaxSavedClassrooms = 12;
+
+    /// <summary>
+    /// 把一间教室写进保存列表：同一间只留一条（新的排到最前），超出上限丢最旧的那条。
+    ///
+    /// 做成静态方法是为了能直接测。这段逻辑没有界面、也不发请求，
+    /// 却决定了"老师换班上课时列表里还剩哪几间" —— 去重和上限写错，
+    /// 表现是列表里出现两条同名教室、或者刚绑过的那间被挤掉，
+    /// 而这两种都要等人用上一阵子才会发现。
+    /// </summary>
+    /// <param name="classrooms">要更新的列表（就是自己那份配置里的那一项）。</param>
+    /// <param name="record">这次要记下的教室。</param>
+    public static void Remember(IList<BoundClassroom> classrooms, BoundClassroom record)
+    {
+        // 按 UUID 判同一间，且不区分大小写：不同来源的 UUID 大小写可能不一样，
+        // 按序数比较会让同一间教室在列表里出现两条。
+        for (var i = classrooms.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(classrooms[i].Uuid, record.Uuid, StringComparison.OrdinalIgnoreCase))
+            {
+                classrooms.RemoveAt(i);
+            }
+        }
+
+        classrooms.Insert(0, record);
+
+        while (classrooms.Count > MaxSavedClassrooms)
+        {
+            classrooms.RemoveAt(classrooms.Count - 1);
+        }
+    }
 }
 
-/// <summary>教师端记住的一个教室（不含口令）。</summary>
-/// <param name="Uuid">教室 UUID。</param>
+/// <summary>
+/// 教师端保存下来的一间教室。
+///
+/// **这里保存口令是有意为之。** 原来刻意不存，理由是"口令留在老师脑子里更安全"。
+/// 但那个取舍在"一个老师教好几个班"面前站不住：口令是绑定的唯一凭据，
+/// 不存它，每次换班上课都要重新找管理员要一遍口令，这个功能就等于没做。
+///
+/// 代价说清楚：这台设备被拿走，就等于能绑定这几间教室并朝它们喊话。
+/// 不过同一个文件里本来就存着登录令牌（那同样是能喊话的凭据），
+/// 所以新增的暴露面其实很小。不想要哪一间，在列表里移除即可，口令一并删掉。
+/// </summary>
+/// <param name="Uuid">教室 UUID。它在服务器上定位这间教室。</param>
 /// <param name="Name">教室名，绑定成功后由服务器回传。</param>
 /// <param name="LastBoundAt">最近一次绑定时间。</param>
-public sealed record BoundClassroom(string Uuid, string Name, DateTimeOffset LastBoundAt);
+/// <param name="ServerUrl">绑定它时用的中继服务器地址。换服务器之后仍能切回去。</param>
+/// <param name="Secret">教室口令。为空表示这间是靠"管理员授权"绑定的，不需要口令。</param>
+public sealed record BoundClassroom(
+    string Uuid,
+    string Name,
+    DateTimeOffset LastBoundAt,
+    string? ServerUrl = null,
+    string? Secret = null);
 
 /// <summary>
 /// 本地设置文件的读写。
