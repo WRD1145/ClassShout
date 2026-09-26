@@ -252,3 +252,37 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: -1px; border
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* ---------- 展示参数那一行（三个下拉并排） ---------- */
+.param-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.param-row label { margin-top: 0; }
+/* 勾选框那一行：文字跟在框后面，别像输入框标题那样占一整行 */
+.inline-check {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--on-surface-variant);
+  margin: 0; cursor: pointer;
+}
+.inline-check input { width: auto; margin: 0; }
+/* 呼叫页的学生选择列表：一行一个，勾选框在左 */
+.pick-list {
+  border: 1px solid var(--outline); border-radius: var(--shape-sm);
+  max-height: 260px; overflow-y: auto; padding: 6px 10px;
+  margin-bottom: 4px;
+}
+.pick-list .pick-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 2px; font-size: 14px;
+}
+.pick-list .pick-row input { width: auto; margin: 0; }
+.pick-list .pick-row .pick-detail { color: var(--on-surface-variant); font-size: 12px; }
+/* 预览出来的那几句话：等宽一点，看得清标点与空格 */
+.call-preview {
+  margin-top: 12px; padding: 10px 12px;
+  background: var(--surface-container-high, rgba(0,0,0,.04));
+  border-radius: var(--shape-sm); font-size: 13px; line-height: 1.7;
+}

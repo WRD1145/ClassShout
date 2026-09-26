@@ -135,6 +135,7 @@ public sealed record TeacherRosterUpload(
 /// <param name="FontSize">字号档位。</param>
 /// <param name="HoldMs">停留时长。</param>
 /// <param name="Speak">是否朗读。</param>
+/// <param name="PreviewOnly">只拼不发的预览：把拼出来的句子回给界面看，一条都不投递。</param>
 public sealed record TeacherCallRequest(
     IReadOnlyList<string> TargetUuids,
     IReadOnlyList<string> StudentIds,
@@ -146,7 +147,8 @@ public sealed record TeacherCallRequest(
     string? Display = null,
     string? FontSize = null,
     int HoldMs = Protocol.ShoutHoldDurations.Unspecified,
-    bool Speak = true);
+    bool Speak = true,
+    bool PreviewOnly = false);
 
 /// <summary>WebUI 呼叫的结果。</summary>
 /// <param name="Ok">至少发出去一间。</param>

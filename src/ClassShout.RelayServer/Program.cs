@@ -882,7 +882,7 @@ app.MapPost(RelayPaths.TeacherCall, (
         return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "一个学生都没选。"));
     }
 
-    if (request.TargetUuids.Count == 0)
+    if (request.TargetUuids.Count == 0 && !request.PreviewOnly)
     {
         return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "请至少选择一个班级。"));
     }
@@ -896,6 +896,22 @@ app.MapPost(RelayPaths.TeacherCall, (
     {
         return Results.BadRequest(new TeacherCallResponse(
             false, 0, [], [], "选中的学生在服务器上的名单里找不到 —— 可能名单更新过，请刷新页面重选。"));
+    }
+
+    // 预览可以先不勾班级：整句话里与班级有关的只有"来源里的科目"一处，
+    // 这时按老师的默认科目拼一份给他看就行（真正发送仍然必须勾班级）。
+    if (request.PreviewOnly && request.TargetUuids.Count == 0)
+    {
+        var previewMessages = CallComposer.Compose(template, students, roster, profile.ShoutNameFor(null));
+
+        return Results.Ok(new TeacherCallResponse(
+            true,
+            0,
+            previewMessages,
+            [],
+            previewMessages.Count == 0
+                ? "这套模板拼不出内容。"
+                : $"预览（按你的默认科目「{profile.ShoutNameFor(null)}」拼的）：会喊出 {previewMessages.Count} 条。"));
     }
 
     var allowed = ShoutableClassrooms(profile).ToDictionary(record => record.Uuid, StringComparer.OrdinalIgnoreCase);
@@ -923,6 +939,13 @@ app.MapPost(RelayPaths.TeacherCall, (
 
         foreach (var text in messages)
         {
+            if (request.PreviewOnly)
+            {
+                // 预览：只把拼出来的句子回给界面（网页上先看一眼"到底会喊成什么样"），
+                // 一条都不投递 —— 拼装仍然只有 CallComposer 这一份实现。
+                continue;
+            }
+
             hub.Publish(MessageHub.ClassroomKey(classroom.Uuid), new RelayEnvelope
             {
                 Kind = RelayKinds.TextShout,
@@ -945,6 +968,16 @@ app.MapPost(RelayPaths.TeacherCall, (
 
         sent++;
         results.Add(new TeacherShoutResult(classroom.Uuid, classroom.Name, true, null));
+    }
+
+    if (request.PreviewOnly)
+    {
+        return Results.Ok(new TeacherCallResponse(
+            true,
+            0,
+            allMessages,
+            results,
+            allMessages.Count == 0 ? "这套模板拼不出内容。" : $"预览：会喊出 {allMessages.Count} 条。"));
     }
 
     logger.LogInformation("老师 {Teacher} 从网页呼叫：{Students} 位学生、{Messages} 条、{Count} 个班",

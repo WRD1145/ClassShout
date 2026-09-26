@@ -44,6 +44,18 @@ function setBanner(id, message, kind) {
   el.textContent = message;
 }
 
+/// 允许 HTML 的横幅。
+///
+/// 只给"要把拼出来的那几句话一条条摆出来"的地方用（见 submitTeacherCall），
+/// 而且调用方必须**逐段 escapeHtml 过** —— 这里不做转义，是因为它要的就是
+/// 分行的结构；把未转义的字符串传进来就是注入。
+function setBannerHtml(id, html) {
+  const el = document.getElementById(id);
+  if (!html) { el.className = 'hidden'; el.innerHTML = ''; return; }
+  el.className = 'banner ok';
+  el.innerHTML = html;
+}
+
 /* ---------- 登录 ---------- */
 
 async function doLogin() {
@@ -142,7 +154,41 @@ async function enterTeacherView() {
 
   setBanner('teacherError', '');
   setBanner('teacherResult', '');
+  setBanner('callError', '');
+  setBanner('callResult', '');
+
   await loadTeacherClassrooms();
+  await loadTeacherRoster();
+}
+
+/* ---------- 展示参数 ---------- */
+
+// 与 App 里"这条怎么显示"那四个选项同一套取值（见 Core 的 ShoutDisplayOptions）。
+// 空字符串表示"没指定"，由教室端用自己的默认值 —— 不填就不发送这个字段。
+function readDisplayParams() {
+  const display = document.getElementById('teacherDisplay').value;
+  const fontSize = document.getElementById('teacherFontSize').value;
+  const hold = document.getElementById('teacherHold').value;
+
+  const params = {
+    speak: document.getElementById('teacherSpeak').checked,
+    interrupt: document.getElementById('teacherInterrupt').checked,
+  };
+
+  if (display) {
+    params.display = display;
+  }
+
+  if (fontSize) {
+    params.fontSize = fontSize;
+  }
+
+  const holdMs = parseInt(hold, 10);
+  if (!isNaN(holdMs)) {
+    params.holdMs = holdMs;
+  }
+
+  return params;
 }
 
 async function loadTeacherClassrooms() {
@@ -189,12 +235,16 @@ function setTeacherSelection(value) {
   });
 }
 
+function selectedTeacherTargets() {
+  return Object.keys(teacherSelection).filter(uuid => teacherSelection[uuid]);
+}
+
 async function submitTeacherShout() {
   setBanner('teacherError', '');
   setBanner('teacherResult', '');
 
   const text = (document.getElementById('teacherText').value || '').trim();
-  const targets = Object.keys(teacherSelection).filter(uuid => teacherSelection[uuid]);
+  const targets = selectedTeacherTargets();
 
   if (!text) {
     setBanner('teacherError', '写一句要朗读的内容。');
@@ -206,9 +256,20 @@ async function submitTeacherShout() {
     return;
   }
 
+  // 展示参数与 App 里那一套一致：不选"按教室端默认"时才把字段发上去
+  const display = readDisplayParams();
+
   const result = await apiJson('/api/teacher/shout', {
     method: 'POST',
-    body: JSON.stringify({ targetUuids: targets, text: text })
+    body: JSON.stringify({
+      targetUuids: targets,
+      text: text,
+      speak: display.speak,
+      interrupt: display.interrupt,
+      display: display.display,
+      fontSize: display.fontSize,
+      holdMs: display.holdMs
+    })
   });
 
   if (!result || !result.ok) {
@@ -223,6 +284,137 @@ async function submitTeacherShout() {
 
   setBanner('teacherResult', result.message);
   await loadTeacherClassrooms();
+}
+
+/* ---------- 呼叫（名单与模板由教师端同步上来） ---------- */
+
+// 选中的学生（key 是学生 Id）。与学生名单一起刷新时保留勾选。
+let callSelection = {};
+let callRoster = null;
+
+async function loadTeacherRoster() {
+  const body = document.getElementById('callBody');
+  const empty = document.getElementById('callEmpty');
+  const list = document.getElementById('callStudents');
+  const templateSelect = document.getElementById('callTemplate');
+
+  const snapshot = await apiJson('/api/teacher/roster');
+  const rosters = snapshot && snapshot.rosters ? snapshot.rosters : [];
+
+  // 当前这份名单：服务器上标记为"当前"的那份，没有就用第一份
+  const active = rosters.find(r => r.id === snapshot.activeRosterId) || rosters[0];
+
+  if (!active || !active.students || active.students.length === 0) {
+    callRoster = null;
+    body.classList.add('hidden');
+    empty.classList.remove('hidden');
+    return;
+  }
+
+  callRoster = active;
+  body.classList.remove('hidden');
+  empty.classList.add('hidden');
+
+  const templates = snapshot.templates || [];
+  const activeTemplate = templates.find(t => t.id === snapshot.activeTemplateId) || templates[0];
+
+  templateSelect.innerHTML = templates.length === 0
+    ? '<option value="">（服务器上没有模板）</option>'
+    : templates.map(t => {
+        const selected = activeTemplate && t.id === activeTemplate.id ? ' selected' : '';
+        return '<option value="' + escapeAttr(t.id) + '"' + selected + '>' +
+          escapeHtml(t.name) + '</option>';
+      }).join('');
+
+  list.innerHTML = active.students.map(s => {
+    const checked = callSelection[s.id] ? ' checked' : '';
+    const detail = [s.studentNo, s.shortName, s.group].filter(Boolean).join('，');
+
+    return '<div class="pick-row">' +
+      '<input type="checkbox" data-call-student="' + escapeAttr(s.id) + '"' + checked + '>' +
+      '<span>' + escapeHtml(s.name) + '</span>' +
+      (detail ? '<span class="pick-detail">（' + escapeHtml(detail) + '）</span>' : '') +
+      '</div>';
+  }).join('');
+
+  list.querySelectorAll('input[data-call-student]').forEach(input => {
+    input.addEventListener('change', () => {
+      callSelection[input.dataset.callStudent] = input.checked;
+    });
+  });
+}
+
+function setCallSelection(value) {
+  document.querySelectorAll('input[data-call-student]').forEach(input => {
+    input.checked = value;
+    callSelection[input.dataset.callStudent] = value;
+  });
+}
+
+function selectedCallStudents() {
+  return Object.keys(callSelection).filter(id => callSelection[id]);
+}
+
+/// 拼一次呼叫。preview 为真时只拼不发（教室里不会有任何动静）。
+async function submitTeacherCall(preview) {
+  setBanner('callError', '');
+  setBanner('callResult', '');
+
+  const students = selectedCallStudents();
+  const targets = selectedTeacherTargets();
+  const templateId = document.getElementById('callTemplate').value;
+
+  if (students.length === 0) {
+    setBanner('callError', '先勾几位学生。');
+    return;
+  }
+
+  // 推送必须勾班级；预览可以先不勾 —— 服务器会用你的默认科目拼一份给你看
+  if (targets.length === 0 && !preview) {
+    setBanner('callError', '还没勾班级 —— 在上面「我的班级」里勾一个。');
+    return;
+  }
+
+  if (!templateId) {
+    setBanner('callError', '服务器上还没有呼叫模板：去 App 的「呼叫」页拼一个，再点「同步名单到服务器」。');
+    return;
+  }
+
+  const display = readDisplayParams();
+
+  const result = await apiJson('/api/teacher/call', {
+    method: 'POST',
+    body: JSON.stringify({
+      targetUuids: targets,
+      studentIds: students,
+      templateId: templateId,
+      previewOnly: !!preview,
+      speak: display.speak,
+      interrupt: display.interrupt,
+      display: display.display,
+      fontSize: display.fontSize,
+      holdMs: display.holdMs
+    })
+  });
+
+  if (!result || !result.ok) {
+    const detail = result && result.results
+      ? result.results.filter(r => !r.ok).map(r => r.classroomName + '：' + r.error).join('；')
+      : '';
+
+    setBanner('callError', ((result && result.message) || '呼叫失败。') + (detail ? ' ' + detail : ''));
+    return;
+  }
+
+  // 拼出来的那几句话原样摆出来：老师要能看见"到底喊了什么"，
+  // 而不是只看到一句"已发送"。每一段动态内容都先 escapeHtml。
+  const lines = (result.messages || [])
+    .map(m => '<div>' + escapeHtml(m) + '</div>')
+    .join('');
+
+  setBannerHtml('callResult',
+    escapeHtml(preview ? '预览（还没有发出去）' : (result.message || '已发送')) +
+    (lines ? '<div class="call-preview">' + lines + '</div>' : ''));
 }
 
 /* ---------- 标签页 ---------- */
@@ -949,6 +1141,13 @@ const actions = {
   'teacher-select-all': () => setTeacherSelection(true),
   'teacher-select-none': () => setTeacherSelection(false),
   'teacher-refresh': () => loadTeacherClassrooms(),
+
+  // 呼叫（名单与模板由教师端同步到服务器）
+  'call-preview': () => submitTeacherCall(true),
+  'call-send': () => submitTeacherCall(false),
+  'call-select-all': () => setCallSelection(true),
+  'call-select-none': () => setCallSelection(false),
+  'call-refresh': () => loadTeacherRoster(),
 
   'close-grant': () => closeGrant(),
   'submit-grant': () => submitGrant(),

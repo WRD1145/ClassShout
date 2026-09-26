@@ -48,14 +48,55 @@
   <main class="wrap">
     <section class="card">
       <h2>喊话</h2>
-      <p>写一句话，勾上要发给的班级，点发送 —— 教室电脑会用系统语音念出来。
-        语音播报、字号这些按教室端的默认设置走。</p>
+      <p>写一句话，勾上要发给的班级，点发送 —— 教室电脑会用系统语音念出来。</p>
 
       <div id="teacherError" class="banner error hidden"></div>
       <div id="teacherResult" class="banner ok hidden"></div>
 
       <label for="teacherText">要朗读的内容</label>
       <input id="teacherText" type="text" autocomplete="off" placeholder="例如 同学们请安静，现在讲第三题">
+
+      <!-- 展示参数：与 App 里文字页那一套完全一样（不填就走教室端默认值） -->
+      <div class="param-row">
+        <div>
+          <label for="teacherDisplay">展示方式</label>
+          <select id="teacherDisplay">
+            <option value="">按教室端默认</option>
+            <option value="window">窗口（占满大字区）</option>
+            <option value="popup">弹窗（屏幕一角）</option>
+          </select>
+        </div>
+        <div>
+          <label for="teacherFontSize">文字大小</label>
+          <select id="teacherFontSize">
+            <option value="">按教室端默认</option>
+            <option value="small">小</option>
+            <option value="medium">中</option>
+            <option value="large">大</option>
+            <option value="xlarge">特大字</option>
+          </select>
+        </div>
+        <div>
+          <label for="teacherHold">停留时间</label>
+          <select id="teacherHold">
+            <option value="-1">按教室端默认</option>
+            <option value="10000">10 秒</option>
+            <option value="20000">20 秒</option>
+            <option value="30000">30 秒</option>
+            <option value="60000">1 分钟</option>
+            <option value="0">常驻（要点掉才消失）</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row-actions">
+        <label class="inline-check" for="teacherSpeak">
+          <input id="teacherSpeak" type="checkbox" checked> 让教室朗读出来
+        </label>
+        <label class="inline-check" for="teacherInterrupt">
+          <input id="teacherInterrupt" type="checkbox" checked> 打断教室里正在读的内容
+        </label>
+      </div>
 
       <div class="mt-20">
         <div class="row-actions">
@@ -73,6 +114,39 @@
         <button class="outlined small" data-action="teacher-select-all">全选</button>
         <button class="outlined small" data-action="teacher-select-none">全不选</button>
         <button class="text small" data-action="teacher-refresh">刷新</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>呼叫</h2>
+      <p>用名单里的学生拼句子，一次叫好几位 —— 与 App 的「呼叫」页同一套规则：
+        需要名单、可多选、模板里带「小组成员」时按组归并成一条。
+        名单来自教师端「名单」页的「同步名单到服务器」。</p>
+
+      <div id="callError" class="banner error hidden"></div>
+      <div id="callResult" class="banner ok hidden"></div>
+
+      <div id="callBody">
+        <label for="callTemplate">呼叫模板</label>
+        <select id="callTemplate"></select>
+
+        <label for="callStudents">叫谁（可多选）</label>
+        <div id="callStudents" class="pick-list"></div>
+
+        <div class="row-actions">
+          <button class="outlined small" data-action="call-select-all">全选</button>
+          <button class="outlined small" data-action="call-select-none">全不选</button>
+          <button class="text small" data-action="call-refresh">刷新名单</button>
+        </div>
+
+        <div class="mt-20 row-actions">
+          <button class="tonal" data-action="call-preview">预览会喊什么</button>
+          <button class="primary" data-action="call-send">发送呼叫</button>
+        </div>
+      </div>
+
+      <div id="callEmpty" class="empty">
+        服务器上还没有你的名单。去 App 的「名单」页导入，再点「同步名单到服务器」。
       </div>
     </section>
   </main>
