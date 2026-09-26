@@ -25,17 +25,106 @@ public static class AppLog
     /// <summary>日志子目录名。</summary>
     public const string FolderName = "logs";
 
+    /// <summary>指定日志目录的环境变量（启动脚本会设它，把日志放到软件目录下）。</summary>
+    public const string DirectoryVariable = "CLASSSHOUT_LOG_DIR";
+
     private static readonly Lock Gate = new();
     private static bool _pruned;
+    private static string? _resolved;
 
-    /// <summary>日志目录（不存在会自动创建）。</summary>
+    /// <summary>
+    /// 日志目录（不存在会自动创建）。
+    ///
+    /// 优先放在**软件自己的目录**下（<c>&lt;程序目录&gt;\logs</c>），这样"日志在哪"
+    /// 与"软件在哪"是一件事 —— 找日志的人多半正站在那台机器前面。
+    /// 但程序可能被装在 <c>Program Files</c> 这类只读位置，所以逐级退：
+    ///
+    ///   1. <c>CLASSSHOUT_LOG_DIR</c>（启动脚本设的，指向软件目录下的 logs）；
+    ///   2. 程序目录下的 <c>logs</c>；
+    ///   3. 用户数据目录下的 <c>logs</c>（只读安装时的落点）。
+    ///
+    /// 退到哪一级会显示在设置页的「关于」里 —— 否则"日志到底写哪去了"又是一场猜谜。
+    /// </summary>
     public static string Directory
     {
         get
         {
-            var path = Path.Combine(LocalSettings.Directory, FolderName);
-            System.IO.Directory.CreateDirectory(path);
-            return path;
+            if (_resolved is not null)
+            {
+                return _resolved;
+            }
+
+            lock (Gate)
+            {
+                _resolved ??= ResolveDirectory();
+                return _resolved;
+            }
+        }
+    }
+
+    private static string ResolveDirectory()
+    {
+        foreach (var candidate in Candidates())
+        {
+            if (candidate is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(candidate);
+
+                // 建得出来不代表写得进去（只读介质、权限收紧），实际探一次
+                var probe = Path.Combine(candidate, ".write-test");
+                File.WriteAllText(probe, string.Empty);
+                File.Delete(probe);
+
+                return candidate;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                // 试下一个
+            }
+        }
+
+        // 三个都写不进去：仍然返回用户数据目录那份，让写入静默失败而不是抛异常
+        return Path.Combine(LocalSettings.Directory, FolderName);
+    }
+
+    private static IEnumerable<string?> Candidates()
+    {
+        yield return Environment.GetEnvironmentVariable(DirectoryVariable);
+
+        // 程序目录：AppContext.BaseDirectory 末尾带分隔符，Path.Combine 会处理
+        yield return SafeCombine(AppContext.BaseDirectory, FolderName);
+
+        yield return SafeCombine(LocalSettings.Directory, FolderName);
+    }
+
+    private static string? SafeCombine(string? root, string child)
+    {
+        try
+        {
+            return string.IsNullOrWhiteSpace(root) ? null : Path.Combine(root, child);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>日志实际写在哪（界面上显示给排障的人看）。</summary>
+    public static string LocationHint
+    {
+        get
+        {
+            var directory = Directory;
+            var dataDirectory = Path.Combine(LocalSettings.Directory, FolderName);
+
+            return string.Equals(directory, dataDirectory, StringComparison.OrdinalIgnoreCase)
+                ? $"{directory}（程序目录只读，退到用户数据目录）"
+                : directory;
         }
     }
 

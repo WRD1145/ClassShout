@@ -274,6 +274,8 @@ try {
             [string]$SourceDir,
             [string]$RootName,
             [string]$TargetPath,
+            [string]$LaunchName,
+            [string]$LaunchHint,
             [switch]$Gzip
         )
 
@@ -284,11 +286,82 @@ try {
         $staging = Join-Path $OutputRoot ('obj\stage\' + $RootName)
         Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path (Split-Path $staging -Parent) | Out-Null
+        New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
-        Copy-Item $SourceDir $staging -Recurse -Force
+        # 程序本体放在 app\ 子目录里。
+        #
+        # 为什么不能把 dll 单独分出去：.NET 的运行时宿主文件（hostpolicy / hostfxr /
+        # coreclr / System.Private.CoreLib …）必须与 exe 同级，而它们占了文件数的
+        # 一大半 —— 试过把其余程序集挪进 lib\ 并改 deps.json，应用直接崩在
+        # "hostpolicy.dll not found"。所以"一个 exe + 一个 dll 文件夹"在 .NET 上做不到。
+        #
+        # 能做的是把**界面**收拾干净：顶层只留一个启动脚本、一份说明和 logs\，
+        # 257 个程序文件全部待在 app\ 里。
+        $appDir = Join-Path $staging 'app'
+        Copy-Item $SourceDir $appDir -Recurse -Force
+
+        # 顶层 logs\：启动脚本用 CLASSSHOUT_LOG_DIR 指过来，
+        # 于是"找日志"和"找软件"在同一层，不用钻进 app\ 里翻。
+        New-Item -ItemType Directory -Force -Path (Join-Path $staging 'logs') | Out-Null
+
+        if ($Gzip) {
+            # Linux：一个可执行的 run.sh
+            $script = @"
+#!/bin/sh
+# ClassShout $LaunchName
+#
+# 程序在 app/ 里，日志写进同级的 logs/。
+cd "`$(dirname "`$0")" || exit 1
+export CLASSSHOUT_LOG_DIR="`$(pwd)/logs"
+exec ./app/$LaunchName "`$@"
+"@
+
+            $launcher = Join-Path $staging 'run.sh'
+        }
+        else {
+            # Windows：一个双击就行的 .cmd
+            $script = @"
+@echo off
+rem ClassShout $LaunchName
+rem
+rem 程序在 app\ 里，日志写进同级的 logs\。
+cd /d "%~dp0"
+set CLASSSHOUT_LOG_DIR=%~dp0logs
+start "" "%~dp0app\$LaunchName" %*
+"@
+
+            $launcher = Join-Path $staging "$LaunchName 启动.cmd"
+        }
+
+        [System.IO.File]::WriteAllText($launcher, ($script -replace "`r`n", "`n"), (New-Object System.Text.UTF8Encoding($false)))
+
+        $readme = @"
+ClassShout · $LaunchName
+$('=' * 60)
+
+启动：双击「$(Split-Path $launcher -Leaf)」
+      （Windows 会弹一下黑窗口，那是启动脚本，一闪就没了）
+
+目录说明：
+  app\    程序本体（exe 与它需要的全部文件，别单独搬走其中的文件）
+  logs\   运行日志，按天一个文件，自动只留最近 7 天
+
+升级：把新的压缩包解压覆盖本目录即可 —— 配置与日志都不在这里
+      （Windows 存在 %LOCALAPPDATA%\ClassShout\），覆盖不会丢东西。
+
+$LaunchHint
+"@
+
+        [System.IO.File]::WriteAllText(
+            (Join-Path $staging '使用说明.txt'),
+            ($readme -replace "`r`n", "`r`n"),
+            (New-Object System.Text.UTF8Encoding($false)))
+
         Remove-Item $TargetPath -Force -ErrorAction SilentlyContinue
 
         if ($Gzip) {
+            # 可执行位：Windows 打的 tar 不保留 Unix 权限位，解压端要自己 chmod。
+            # 这里至少让 run.sh 的意图写清楚（部署文档里有 chmod +x 那一步）。
             & tar -czf $TargetPath -C (Split-Path $staging -Parent) $RootName
         }
         else {
@@ -304,17 +377,32 @@ try {
 
     # 附件名一经发布就不要再改：README、历史发行版、别人的脚本都按它引用。
     New-AppArchive -SourceDir (Join-Path $windowsOut 'classroom') -RootName 'ClassShout.Classroom' `
-        -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-win-x64.zip')
+        -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-win-x64.zip') `
+        -LaunchName 'ClassShout.Classroom.exe' `
+        -LaunchHint '教室端：首次启动若弹防火墙提示，勾选「专用网络」并允许。'
+
     New-AppArchive -SourceDir (Join-Path $windowsOut 'teacher') -RootName 'ClassShout.Teacher' `
-        -TargetPath (Join-Path $releaseOut 'ClassShout.Teacher-win-x64.zip')
+        -TargetPath (Join-Path $releaseOut 'ClassShout.Teacher-win-x64.zip') `
+        -LaunchName 'ClassShout.Teacher.Desktop.exe' `
+        -LaunchHint '教师端（桌面）：手机上请装同一次发布里的 APK。'
+
     New-AppArchive -SourceDir (Join-Path $windowsOut 'server') -RootName 'ClassShout.RelayServer' `
-        -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-win-x64.zip')
+        -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-win-x64.zip') `
+        -LaunchName 'ClassShout.RelayServer.exe' `
+        -LaunchHint '中继服务器：常驻部署见文档「中继服务器」一节。'
 
     if ($IncludeLinuxServer) {
         New-AppArchive -SourceDir (Join-Path $OutputRoot 'linux\server') -RootName 'ClassShout.RelayServer' `
-            -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-linux-x64.tar.gz') -Gzip
+            -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-linux-x64.tar.gz') `
+            -LaunchName 'ClassShout.RelayServer' `
+            -LaunchHint '中继服务器（Linux）：解压后 chmod +x app/ClassShout.RelayServer 与 run.sh。' `
+            -Gzip
+
         New-AppArchive -SourceDir (Join-Path $OutputRoot 'linux\classroom') -RootName 'ClassShout.Classroom' `
-            -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-linux-x64.tar.gz') -Gzip
+            -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-linux-x64.tar.gz') `
+            -LaunchName 'ClassShout.Classroom' `
+            -LaunchHint '教室端（Linux）：解压后 chmod +x app/ClassShout.Classroom 与 run.sh；朗读需要有 spd-say 或 espeak-ng。' `
+            -Gzip
     }
 
     # APK 的文件名本来就是最终附件名（含版本号），直接沿用

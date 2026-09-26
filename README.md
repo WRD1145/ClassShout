@@ -202,8 +202,25 @@ dist/
 
 **为什么不再打成单文件**：单文件每次启动都要把 Skia 这类原生库解压到临时目录，
 首次启动明显变慢，体积还比"文件夹 + 压缩包"更大；而"解压到哪里就在哪里双击"
-对使用者并不更难。压缩包里套了一层以应用命名的目录 —— 解压出来是一整个目录，
-而不是十几个 dll 散落在"下载"文件夹里（后者在教室那台机器上基本等于"从此找不到"）。
+对使用者并不更难。
+
+**压缩包里的布局**（每个应用都一样）：
+
+```
+ClassShout.Classroom/
+├─ ClassShout.Classroom.exe 启动.cmd    ← 双击这个（Windows）
+├─ run.sh                               ← Linux 下跑这个
+├─ 使用说明.txt
+├─ logs/                                ← 运行日志落在这里
+└─ app/                                 ← 程序本体（exe 与全部依赖）
+```
+
+**为什么程序本体要放在 `app\` 里、DLL 不能单独再分一个文件夹**：
+.NET 的运行时宿主文件（`hostpolicy.dll` / `hostfxr.dll` / `coreclr.dll` /
+`System.Private.CoreLib.dll` …）**必须与 exe 同级**，而它们占了文件数的一大半。
+试过把其余程序集挪进 `lib\` 并改写 `deps.json` 里的路径，应用直接崩在
+`hostpolicy.dll not found`。所以能收拾的是**界面**：顶层只有启动脚本、说明和
+`logs\`，257 个程序文件全部待在 `app\` 里。
 
 `dist\release\` 是发布时唯一需要的东西：`pack.ps1` 已经把每个产物按**最终附件名**摆好，
 发布脚本不必再靠记忆去拼"哪个文件叫什么名字"。
@@ -262,9 +279,9 @@ dist/
 
 ### 3.4 第二步：部署教室端
 
-1. 把 `ClassShout.Classroom-win-x64.zip` 解压到一个固定目录，例如 `C:\ClassShout\`
-   （解压出来是 `ClassShout.Classroom\` 一层目录，里面的 `ClassShout.Classroom.exe`
-   就是入口）。**整个目录一起留着** —— 依赖文件就在它旁边；升级时解压覆盖同一个目录。
+1. 把 `ClassShout.Classroom-win-x64.zip` 解压到一个固定目录，例如 `C:\ClassShout\`，
+   双击里面的**「ClassShout.Classroom.exe 启动.cmd」**即可（程序在 `app\` 里，
+   日志会写进同级的 `logs\`）。**整个目录一起留着**；升级时解压覆盖同一个目录。
 
    教室端的配置**不在 exe 旁边**，而是写在当前 Windows 账户的用户目录里：
 
@@ -274,7 +291,7 @@ dist/
    %LOCALAPPDATA%\ClassShout\classroom-speech.json        朗读设置
    %LOCALAPPDATA%\ClassShout\classroom-stt.json           语音转文字（接口地址与密钥）
    %LOCALAPPDATA%\ClassShout\appearance.json              主题色（个性化，两端共用同一份格式）
-   %LOCALAPPDATA%\ClassShout\logs\                        运行日志（按天一个文件，只留 7 天）
+   %LOCALAPPDATA%\ClassShout\logs\                        运行日志（默认在软件目录下的 logs\，只读安装时才退到这里）
    ```
 
    这一点是有意为之：程序可能被装在 `Program Files` 这类只读位置，
@@ -470,7 +487,10 @@ Environment=CLASSSHOUT_SHARE_STATE=/opt/classshout/relay-shares.json
 Environment=CLASSSHOUT_SCHEDULE_STATE=/opt/classshout/relay-schedule.json
 Environment=CLASSSHOUT_SCHEDULE_AUDIO=/opt/classshout/relay-schedule-audio
 
-ExecStart=/opt/classshout/app/ClassShout.RelayServer/ClassShout.RelayServer --urls http://127.0.0.1:8080
+# 日志写在软件目录下的 logs/（压缩包里的 run.sh 也是这么指的）
+Environment=CLASSSHOUT_LOG_DIR=/opt/classshout/logs
+
+ExecStart=/opt/classshout/app/ClassShout.RelayServer --urls http://127.0.0.1:8080
 Restart=always
 RestartSec=5
 # 78 是服务器在"状态文件权限不对/内容损坏"时主动返回的退出码。
@@ -491,16 +511,18 @@ sudo chown classshout:classshout /opt/classshout
 sudo chmod 750 /opt/classshout
 
 # 2. 解压发布产物到 app/（1.10.0 起是压缩包，不再是单个文件）
-sudo mkdir -p /opt/classshout/app
-sudo tar -xzf ClassShout.RelayServer-linux-x64.tar.gz -C /opt/classshout/app
+#    --strip-components=1 把压缩包里那层 ClassShout.RelayServer/ 去掉，
+#    让 app/ 与 logs/ 直接落在 /opt/classshout 下。
+sudo mkdir -p /opt/classshout
+sudo tar -xzf ClassShout.RelayServer-linux-x64.tar.gz -C /opt/classshout --strip-components=1
 
 #    ⚠ Windows 上打的 tar 不保留 Unix 权限位，解压出来的可执行文件是 0666，
 #    不补这一步 systemd 会报 status=203/EXEC（Permission denied），
 #    而手动跑则是一句语焉不详的 "Permission denied"。
-sudo chmod +x /opt/classshout/app/ClassShout.RelayServer/ClassShout.RelayServer
+sudo chmod +x /opt/classshout/app/ClassShout.RelayServer /opt/classshout/run.sh
 
 # 3. 让"首次启动"就以服务账号的身份发生，然后按 Ctrl+C 退出
-sudo -u classshout /opt/classshout/app/ClassShout.RelayServer/ClassShout.RelayServer --urls http://127.0.0.1:8080
+sudo -u classshout /opt/classshout/app/ClassShout.RelayServer --urls http://127.0.0.1:8080
 
 # 4. 收紧状态文件权限：口令是明文存的，只给宿主自己看
 #    （新生成的文件本来就按 600 创建，这一步是给手工放宽过的机器兜底）
@@ -826,7 +848,8 @@ export CLASSSHOUT_SCHEDULE_TICK_MS=5000
 
 #### 升级
 
-教室端与教师端都是**解压覆盖**：关掉旧的 → 把压缩包解压到**同一个目录**（覆盖）→ 重新打开。
+教室端与教师端都是**解压覆盖**：关掉旧的 → 把压缩包解压到**同一个目录**（覆盖）→ 重新打开
+（还是双击那个启动脚本）。
 配置（教室名、UUID、口令、账号、日志）都存在用户目录里，升级不会丢。
 
 > 1.10.0 起不再打成单文件，所以升级是"覆盖一个目录"而不是"换一个 exe"。
@@ -845,12 +868,21 @@ export CLASSSHOUT_SCHEDULE_TICK_MS=5000
 
 #### 运行日志
 
-两端都会把界面上的那 200 行日志同时写一份到磁盘：
+两端都会把界面上的那 200 行日志同时写一份到磁盘，**默认就在软件目录下**：
 
 ```
-%LOCALAPPDATA%\ClassShout\logs\classshout-2026-09-26.log     Windows
-~/.local/share/ClassShout/logs/classshout-2026-09-26.log     Linux
+<软件目录>\logs\classshout-2026-09-26.log          Windows
+<软件目录>/logs/classshout-2026-09-26.log          Linux
 ```
+
+"日志在哪"与"软件在哪"是同一件事 —— 找日志的人多半正站在那台机器前面。
+但程序可能被装在只读位置，所以逐级退：
+
+1. 环境变量 `CLASSSHOUT_LOG_DIR`（压缩包里的启动脚本会把它指到软件目录下的 `logs\`）；
+2. 程序目录下的 `logs\`；
+3. 用户数据目录下的 `logs\`（只读安装时的落点）。
+
+退到哪一级会显示在设置页的「关于」里 —— 否则"日志到底写哪去了"又是一场猜谜。
 
 - **按天一个文件**：单个文件一直追加的话，几个月后会大到打不开，
   而"按天"正好对得上"那节课是几号"这个问题；
