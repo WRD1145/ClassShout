@@ -24,22 +24,16 @@ namespace ClassShout.Design.Controls;
 /// </summary>
 public sealed class AboutPanel : UserControl
 {
-    /// <summary>解锁需要连点多少次。</summary>
-    private const int UnlockTapCount = 10;
-
-    /// <summary>两次点击间隔超过它就重新计数。手滑点两下不该被算进那 10 次里。</summary>
-    private static readonly TimeSpan TapWindow = TimeSpan.FromSeconds(1.5);
-
-    /// <summary>从第几次开始给出"还差几次"的提示：太早提示会让人误以为按错了。</summary>
-    private const int HintAfterTaps = 5;
-
     private readonly TextBlock _versionText = new();
     private readonly TextBlock _buildText = new();
     private readonly TextBlock _tapHint = new() { IsVisible = false };
     private readonly StackPanel _developerSection = new() { Spacing = 10, IsVisible = false };
 
-    private int _tapCount;
-    private DateTimeOffset _lastTapAt = DateTimeOffset.MinValue;
+    /// <summary>连点手势。规则本身在设计层里共用（见 <see cref="DeveloperTapGesture"/>）。</summary>
+    private readonly DeveloperTapGesture _gesture;
+
+    /// <summary>是否已经订阅了 <see cref="DeveloperMode.Changed"/>。</summary>
+    private bool _subscribed;
 
     /// <summary>应用显示名，例如「ClassShout 教室端」。</summary>
     public string AppName { get; set; } = "ClassShout";
@@ -58,21 +52,56 @@ public sealed class AboutPanel : UserControl
 
     public AboutPanel()
     {
+        _gesture = new DeveloperTapGesture(ShowHint, () => ApplyDeveloperState(true, raise: true));
+
         Build();
         ApplyDeveloperState(DeveloperMode.IsEnabled, raise: false);
     }
 
+    /// <summary>
+    /// 解锁的入口不止这一处（「版本与更新」卡片上那行版本号也能连点），
+    /// 所以这里必须跟着全局状态走：不然从别处解锁之后，这块内容要等
+    /// 重新打开界面才出现 —— 看起来就像没解锁成功。
+    /// </summary>
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+
+        if (!_subscribed)
+        {
+            DeveloperMode.Changed += OnDeveloperModeChanged;
+            _subscribed = true;
+        }
+
+        ApplyDeveloperState(DeveloperMode.IsEnabled, raise: false);
+    }
+
+    /// <summary>
+    /// 退订是必须的：事件是静态的，不退订的话每打开一次设置窗口
+    /// 就留下一个再也不会被回收的 AboutPanel。
+    /// </summary>
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+
+        if (_subscribed)
+        {
+            DeveloperMode.Changed -= OnDeveloperModeChanged;
+            _subscribed = false;
+        }
+    }
+
+    private void OnDeveloperModeChanged() => Dispatcher.UIThread.Post(() => ApplyDeveloperState(true, raise: false));
+
     private void Build()
     {
         _versionText.FontSize = 15;
-        _versionText.Cursor = new Cursor(StandardCursorType.Hand);
         _versionText.Text = $"{AppName} {DeveloperMode.Version}";
         _versionText.Bind(TextBlock.ForegroundProperty, new DynamicResourceExtension("Md3.OnSurface"));
-        ToolTip.SetTip(_versionText, "连点 10 次可开启开发者模式");
 
-        // 用 PointerPressed 而不是 Button：版本号必须看起来就是一行普通的文字，
-        // 一旦做成按钮，它就变成了"一个功能"，而不是藏在关于里的入口。
-        _versionText.PointerPressed += OnVersionPressed;
+        // 手势挂在版本号上，而版本号看起来就是一行普通的文字 ——
+        // 做成按钮的话，它就变成了"一个功能"，而不是藏在关于里的入口。
+        _gesture.Attach(_versionText);
 
         _buildText.FontSize = 11;
         _buildText.TextWrapping = TextWrapping.Wrap;
@@ -90,36 +119,6 @@ public sealed class AboutPanel : UserControl
         };
 
         Content = root;
-    }
-
-    private void OnVersionPressed(object? sender, PointerPressedEventArgs e)
-    {
-        var now = DateTimeOffset.UtcNow;
-
-        // 间隔太久就重新计数：连点必须是"连"着点，隔天再点一下不该续上
-        _tapCount = now - _lastTapAt > TapWindow ? 1 : _tapCount + 1;
-        _lastTapAt = now;
-
-        if (DeveloperMode.IsEnabled)
-        {
-            // 已解锁时再点，给一句明确的提示 —— 否则用户会以为"怎么点都没反应"，
-            // 而这正是我们最不希望开发者模式给人的印象。
-            ShowHint("开发者模式已开启。");
-            return;
-        }
-
-        if (_tapCount >= UnlockTapCount)
-        {
-            _tapCount = 0;
-            DeveloperMode.Enable();
-            ApplyDeveloperState(true, raise: true);
-            return;
-        }
-
-        if (_tapCount >= HintAfterTaps)
-        {
-            ShowHint($"再点 {UnlockTapCount - _tapCount} 次可开启开发者模式…");
-        }
     }
 
     private void ShowHint(string text)

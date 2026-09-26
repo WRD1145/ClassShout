@@ -629,9 +629,14 @@
                       Command="{Binding Update.CheckCommand}" />
             </Grid>
 
-            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+            <!-- 这一行版本号同样接受"连点 10 次开启开发者模式"（见设置页代码后置） -->
+            <TextBlock x:Name="UpdateVersionText" Classes="bodySmall" TextWrapping="Wrap"
                        Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                        Text="{Binding Update.CurrentVersionText}" />
+
+            <TextBlock x:Name="UpdateVersionHint" Classes="bodySmall" TextWrapping="Wrap"
+                       IsVisible="False"
+                       Foreground="{DynamicResource Md3.Primary}" />
 
             <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                        IsVisible="{Binding Update.Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"

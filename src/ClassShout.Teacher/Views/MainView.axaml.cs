@@ -36,6 +36,34 @@ public partial class MainView : UserControl
             about.DiagnosticsProvider = BuildDiagnostics;
         }
 
+        // 「版本与更新」卡片上那一行版本号也接受连点手势。
+        // 两处都认是有意的：用户点的是自己最先看到的那一行，
+        // 而"只有一处能点开"会让人以为开发者模式没了。
+        if (this.FindControl<TextBlock>("UpdateVersionText") is { } versionText)
+        {
+            var hint = this.FindControl<TextBlock>("UpdateVersionHint");
+
+            new ClassShout.Design.DeveloperTapGesture(
+                text =>
+                {
+                    if (hint is not null)
+                    {
+                        hint.Text = text;
+                        hint.IsVisible = true;
+                        ShowHintBriefly(hint);
+                    }
+                },
+                () =>
+                {
+                    // 解锁后把「关于」那块内容也一并展开：用户是在这张卡片上点开的，
+                    // 开发者内容却在下面那张卡片里，不滚过去的话会以为没生效。
+                    if (about is not null)
+                    {
+                        about.BringIntoView();
+                    }
+                }).Attach(versionText);
+        }
+
         // 呼叫页的拼装区：接住从组件面板拖过来的组件。
         // 接在容器上而不是每个子项上 —— 拖到空白处也该算数，那里正是最自然的目标。
         if (this.FindControl<Border>("CallComposer") is { } composer)
@@ -47,6 +75,23 @@ public partial class MainView : UserControl
 
     /// <summary>拖放时用来识别"这是一个呼叫组件"的私有格式。</summary>
     private const string PaletteFormat = "classshout/component";
+
+    /// <summary>
+    /// 让一行提示显示两秒半就自己消失。
+    ///
+    /// 留在界面上不动的话，用户会把它当成一个常驻状态 ——
+    /// 而它其实只是"刚才那几下点对了"的反馈。
+    /// </summary>
+    private static void ShowHintBriefly(TextBlock hint)
+    {
+        var timer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+        timer.Tick += (sender, _) =>
+        {
+            hint.IsVisible = false;
+            ((Avalonia.Threading.DispatcherTimer)sender!).Stop();
+        };
+        timer.Start();
+    }
 
     /// <summary>
     /// 从组件面板开始拖动。

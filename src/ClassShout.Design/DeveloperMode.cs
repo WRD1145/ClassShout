@@ -35,12 +35,28 @@ public static class DeveloperMode
         }
     }
 
+    /// <summary>
+    /// 开发者模式被打开时触发。
+    ///
+    /// 需要这条事件，是因为解锁的入口**不止一个**：设置页「关于」里有一行版本号，
+    /// 「版本与更新」卡片里还有一行，而用户会去点自己最先看到的那一行。
+    /// 没有这条事件的话，从其中一处解锁之后，另一处那块开发者内容要等到
+    /// 重新打开界面才出现 —— 看起来就像"解锁没生效"。
+    /// </summary>
+    public static event Action? Changed;
+
     /// <summary>解锁并落盘。</summary>
     public static void Enable()
     {
+        if (_isEnabled)
+        {
+            return;
+        }
+
         _isEnabled = true;
         _loaded = true;
         LocalSettings.SaveDeveloper(new DeveloperSettings { Enabled = true });
+        Changed?.Invoke();
     }
 
     /// <summary>语义版本号，例如 1.2.3。</summary>

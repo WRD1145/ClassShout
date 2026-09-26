@@ -248,6 +248,9 @@ internal static class Program
         // ---------- 3r. 检查更新与镜像源 ----------
         await AssertUpdateCheckerAsync();
 
+        // ---------- 3s. 开发者模式的连点手势 ----------
+        AssertDeveloperTapGesture();
+
         // ---------- 3n. 发送队列 ----------
         await AssertShoutQueueAsync();
 
@@ -2598,6 +2601,107 @@ internal static class Program
         Check("返回内容被中间层改过时给一句人话（而不是把 JSON 解析异常甩出来）",
             !garbled.Ok && garbled.Error?.Contains("看不懂") == true,
             garbled.Error ?? "(没有原因)");
+    }
+
+    /// <summary>
+    /// 「连点版本号 10 次开启开发者模式」这个手势。
+    ///
+    /// 为什么值得单独测：规则本身很短（数到 10，隔太久就重新数），
+    /// 但写错的表现是"怎么点都不解锁" —— 而那种问题只有真人反复点才能发现，
+    /// 而且解锁入口现在**有两处**（「关于」里那行版本号、「版本与更新」卡片里那行），
+    /// 两处必须用同一套规则，否则会出现"一处能点开、另一处点了没反应"。
+    ///
+    /// 真的会把开发者模式打开（不然测不到底），所以先把数据目录指到临时目录 ——
+    /// 自检绝不能改动使用者自己的 developer.json。
+    /// </summary>
+    private static void AssertDeveloperTapGesture()
+    {
+        var window = ClassShout.Design.DeveloperTapGesture.TapWindow;
+        var start = new DateTimeOffset(2026, 9, 26, 8, 0, 0, TimeSpan.Zero);
+
+        // —— 纯计数规则 ——
+        Check("连点计数：连着点会一直累加",
+            ClassShout.Design.DeveloperTapGesture.NextCount(3, start, start.AddMilliseconds(200)) == 4,
+            "3 → 4");
+
+        Check("连点计数：隔太久就重新从 1 数起",
+            ClassShout.Design.DeveloperTapGesture.NextCount(9, start, start + window + TimeSpan.FromMilliseconds(1)) == 1,
+            "隔了一整天再点一下不该把之前那 9 下续上");
+
+        Check("连点计数：刚好在窗口边界上不算断开",
+            ClassShout.Design.DeveloperTapGesture.NextCount(9, start, start + window) == 10,
+            "1.5 秒整还算连点");
+
+        Check("解锁阈值是 10 次",
+            ClassShout.Design.DeveloperTapGesture.UnlockTapCount == 10,
+            "10 次");
+
+        // 累计到 10：模拟"连点"的计数过程，确认它确实会到达阈值
+        var count = 0;
+        var at = start;
+
+        for (var i = 0; i < ClassShout.Design.DeveloperTapGesture.UnlockTapCount; i++)
+        {
+            at = at.AddMilliseconds(100);
+            count = ClassShout.Design.DeveloperTapGesture.NextCount(count, at.AddMilliseconds(-100), at);
+        }
+
+        Check("连点 10 次会到达解锁阈值",
+            count >= ClassShout.Design.DeveloperTapGesture.UnlockTapCount,
+            $"数到 {count}");
+
+        // —— 真的点一遍（数据目录先指到临时目录）——
+        var originalDataDir = Environment.GetEnvironmentVariable("CLASSSHOUT_DATA_DIR");
+        var tempDataDir = Path.Combine(Path.GetTempPath(), "cs-devtap-" + Guid.NewGuid().ToString("N")[..8]);
+
+        try
+        {
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", tempDataDir);
+
+            // 已经开着的话这一条就测不到"从未开启到开启"，先手工确认初始状态
+            var alreadyEnabled = ClassShout.Design.DeveloperMode.IsEnabled;
+
+            if (alreadyEnabled)
+            {
+                Check("开发者模式的手势（本次运行前已开启，跳过真实解锁那一步）", true,
+                    "已开启：手势会给一句「已开启」的提示");
+                return;
+            }
+
+            var hints = new List<string>();
+            var unlocked = 0;
+
+            var gesture = new ClassShout.Design.DeveloperTapGesture(hints.Add, () => unlocked++);
+
+            for (var i = 0; i < 5; i++)
+            {
+                gesture.Tap(start.AddSeconds(i));
+            }
+
+            Check("点到第 5 次时开始提示还差几次",
+                hints.Count > 0 && hints[^1].Contains("再点"),
+                hints.Count == 0 ? "一句提示都没有" : hints[^1]);
+
+            for (var i = 5; i < ClassShout.Design.DeveloperTapGesture.UnlockTapCount; i++)
+            {
+                gesture.Tap(start.AddSeconds(i));
+            }
+
+            Check("连点 10 次之后开发者模式真的开了",
+                ClassShout.Design.DeveloperMode.IsEnabled && unlocked == 1,
+                $"IsEnabled={ClassShout.Design.DeveloperMode.IsEnabled}，解锁回调 {unlocked} 次");
+
+            // 已开启之后再点：不该重复触发解锁，而是给一句提示
+            gesture.Tap(start.AddSeconds(20));
+
+            Check("已开启之后再点会说一句「已开启」，而不是毫无反应",
+                unlocked == 1 && hints[^1].Contains("已开启"),
+                hints.Count == 0 ? "没有提示" : hints[^1]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", originalDataDir);
+        }
     }
 
     /// <summary>

@@ -1368,9 +1368,18 @@
                           Command="{Binding Update.CheckCommand}" />
                 </Grid>
 
-                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                <!--
+                  这一行版本号与「关于」里那一行都接受"连点 10 次开启开发者模式"：
+                  用户会去点自己最先看到的那一行 —— 只有一处能点开，
+                  会让人以为开发者模式没了。
+                -->
+                <TextBlock x:Name="UpdateVersionText" Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                            Text="{Binding Update.CurrentVersionText}" />
+
+                <TextBlock x:Name="UpdateVersionHint" Classes="bodySmall" TextWrapping="Wrap"
+                           IsVisible="False"
+                           Foreground="{DynamicResource Md3.Primary}" />
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            IsVisible="{Binding Update.Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"

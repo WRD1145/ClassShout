@@ -36,6 +36,33 @@ public partial class SettingsWindow : Window
             about.AppName = "ClassShout 教室端";
             about.DiagnosticsProvider = BuildDiagnostics;
         }
+
+        // 「版本与更新」卡片上那一行版本号也接受连点手势：用户点的是自己
+        // 最先看到的那一行，而"只有「关于」里那行能点开"会让人以为开发者模式没了。
+        if (this.FindControl<TextBlock>("UpdateVersionText") is { } versionText)
+        {
+            var hint = this.FindControl<TextBlock>("UpdateVersionHint");
+
+            new ClassShout.Design.DeveloperTapGesture(
+                text =>
+                {
+                    if (hint is not null)
+                    {
+                        hint.Text = text;
+                        hint.IsVisible = true;
+
+                        // 提示是临时的：留着会让人以为它是一个常驻状态
+                        var timer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+                        timer.Tick += (sender, _) =>
+                        {
+                            hint.IsVisible = false;
+                            ((Avalonia.Threading.DispatcherTimer)sender!).Stop();
+                        };
+                        timer.Start();
+                    }
+                },
+                () => about?.BringIntoView()).Attach(versionText);
+        }
     }
 
     /// <summary>

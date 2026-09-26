@@ -1503,6 +1503,26 @@ internal static class Program
                         ("Md3.Surface（自定义）", ToRgb(roles["Md3.Surface"])),
                     ];
                 }),
+
+            // 开发者模式开启之后，「关于」里多出来的那一块。
+            //
+            // 放在所有场景的最后：这一场景会把开发者模式真的打开（写进预览用的
+            // 临时数据目录），而它是一个**进程级**的静态状态 —— 放在前面的话，
+            // 后面每张设置页的图都会多出这一段，与之前那些图没法对照。
+            //
+            // 这一块以前从没被渲染过：它默认是隐藏的，而"隐藏内容排版走样"
+            // 恰恰是最容易漏的一类问题。
+            new("teacher-developer-mode",
+                () =>
+                {
+                    ClassShout.Design.DeveloperMode.Enable();
+
+                    var vm = new TeacherShellViewModel();
+                    vm.NavigateDevicesCommand.Execute(null);
+
+                    return new TeacherView { DataContext = vm };
+                }, 430, 3100,
+                _ => null),
         };
 
         var allPassed = fontsPassed && palettePassed && pickerPassed && serverAddressPassed && linkChipPassed && savedClassroomsPassed && imagePrepPassed;
