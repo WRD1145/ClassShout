@@ -12,6 +12,9 @@
 
 MIT 协议开源。欢迎自建，也欢迎改。详见 [开源协议](#十三开源协议)。
 
+**文档站（中英双语）：<https://docs.wrd1145.top/>** —— 源码在 [WRD1145/ClassShoutDocs](https://github.com/WRD1145/ClassShoutDocs)。
+本 README 与文档站内容大致对应，但文档站按"你要做的事"分了组、支持搜索，翻起来更方便。
+
 ---
 
 ## 目录
