@@ -48,6 +48,18 @@ $env:CLASSSHOUT_BINDING_STATE = Join-Path $state 'relay-bindings.json'
 $env:CLASSSHOUT_SCHEDULE_STATE = Join-Path $state 'relay-schedule.json'
 $env:CLASSSHOUT_SCHEDULE_AUDIO = Join-Path $state 'relay-schedule-audio'
 
+# 日志也放进这个临时目录：真实部署里这条路径由启动脚本设成"软件目录\logs"，
+# 而下面那一段要断言的正是"日志确实写到了这个变量指的目录里"，不是别处。
+$env:CLASSSHOUT_LOG_DIR = Join-Path $state 'logs'
+New-Item -ItemType Directory -Path $env:CLASSSHOUT_LOG_DIR -Force | Out-Null
+
+# 按天分文件 + 只留 7 天这两件事，光看代码不算数：这里在服务器启动前先种两份
+# 名字里带日期的旧日志，等它启动（第一次写日志时会清理一次）之后再回来看结果。
+$expiredLog = Join-Path $env:CLASSSHOUT_LOG_DIR ('classshout-' + (Get-Date).AddDays(-8).ToString('yyyy-MM-dd') + '.log')
+$keptLog = Join-Path $env:CLASSSHOUT_LOG_DIR ('classshout-' + (Get-Date).AddDays(-6).ToString('yyyy-MM-dd') + '.log')
+Set-Content -Path $expiredLog -Value '8 天前的那一份' -Encoding utf8NoBOM
+Set-Content -Path $keptLog -Value '6 天前的那一份' -Encoding utf8NoBOM
+
 # 服务器定时默认每 5 秒扫一次，而自检要真的等到"到点发出去"这件事发生 ——
 # 压到 200 毫秒，一个用例才不用干等五秒。生产上没必要更密：定时精确到分钟。
 $env:CLASSSHOUT_SCHEDULE_TICK_MS = '200'
@@ -90,6 +102,48 @@ try {
     Write-Host '================ 中继链路 ================' -ForegroundColor Yellow
     & $e2e --relay "http://127.0.0.1:$Port" --admin-password $adminPassword
     $relayExit = $LASTEXITCODE
+
+    Write-Host ''
+    Write-Host '================ 服务端文件日志 ================' -ForegroundColor Yellow
+
+    # 这一段守的是"日志文件里到底有没有东西"。
+    #
+    # 起因是一个真实发生过的 bug：落盘的过滤器按"类别名是不是以 ClassShout 开头"
+    # 判断，而服务器自己的主日志类别叫 Relay —— 于是登录、授权、喊话、定时发送
+    # 这些最该留档的 Information 全被挡在文件之外，日志文件里只剩启动那几行。
+    # 启动那几行看着挺正常，所以光"文件建出来了"根本发现不了，
+    # 必须断言到具体的事件行上。
+    $logDir = Join-Path $state 'logs'
+    $todayName = 'classshout-' + (Get-Date).ToString('yyyy-MM-dd') + '.log'
+    $todayLog = Join-Path $logDir $todayName
+    $logText = if (Test-Path $todayLog) { Get-Content $todayLog -Raw } else { '' }
+    $logFailures = 0
+
+    foreach ($check in @(
+        @{ Name = '日志写在 CLASSSHOUT_LOG_DIR 指的目录里'; Ok = (Test-Path $todayLog); Detail = $todayLog }
+        @{ Name = '文件按天命名'; Ok = ($todayName -match '^classshout-\d{4}-\d{2}-\d{2}\.log$'); Detail = $todayName }
+        @{ Name = '启动过程有记录'; Ok = ($logText -match '定时任务调度已启动'); Detail = '' }
+        @{ Name = '启动信息（类别叫 Relay 的那一份）也进了文件'; Ok = ($logText -match '注册表：'); Detail = '状态目录是全新的，所以这里出现的是「已有 0 条记录」那一条' }
+        @{ Name = '运行事件（管理员登录）也进了文件'; Ok = ($logText -match '管理员登录成功'); Detail = '这一条曾经被类别过滤器整批挡掉' }
+        @{ Name = '老师从网页喊话有记录'; Ok = ($logText -match '从网页'); Detail = '' }
+        @{ Name = '日志里没有管理员口令明文'; Ok = (-not $logText.Contains($adminPassword)); Detail = '' }
+        @{ Name = '超过 7 天的日志被清掉'; Ok = (-not (Test-Path $expiredLog)); Detail = (Split-Path -Leaf $expiredLog) }
+        @{ Name = '保留期内的日志不动'; Ok = (Test-Path $keptLog); Detail = (Split-Path -Leaf $keptLog) }
+    )) {
+        if ($check.Ok) {
+            $suffix = if ($check.Detail) { " —— $($check.Detail)" } else { '' }
+            Write-Host "  [通过] $($check.Name)$suffix"
+        }
+        else {
+            $suffix = if ($check.Detail) { " —— $($check.Detail)" } else { '' }
+            Write-Host "  [失败] $($check.Name)$suffix" -ForegroundColor Red
+            $logFailures++
+        }
+    }
+
+    if ($logFailures -gt 0 -and -not (Test-Path $todayLog)) {
+        Write-Host "  日志目录里现有：$((Get-ChildItem $logDir -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name) -join '、')" -ForegroundColor DarkGray
+    }
 }
 finally {
     if (-not $proc.HasExited) {
@@ -124,10 +178,12 @@ else {
     Write-Host '  跳过 —— 未找到 node' -ForegroundColor Yellow
 }
 
-Write-Host ''
-Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit    托盘退出码：$trayExit    单实例退出码：$singleExit    前端退出码：$webuiExit" -ForegroundColor Cyan
+if ($null -eq $logFailures) { $logFailures = 0 }
 
-if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $singleExit -ne 0 -or $webuiExit -ne 0) {
+Write-Host ''
+Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit    托盘退出码：$trayExit    单实例退出码：$singleExit    前端退出码：$webuiExit    日志失败项：$logFailures" -ForegroundColor Cyan
+
+if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $singleExit -ne 0 -or $webuiExit -ne 0 -or $logFailures -ne 0) {
     Write-Host '存在失败项。' -ForegroundColor Red
     exit 1
 }

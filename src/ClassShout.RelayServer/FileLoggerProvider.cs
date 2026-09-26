@@ -12,8 +12,14 @@ namespace ClassShout.RelayServer;
 ///
 /// **刻意只收有用的那些**：ASP.NET 自己那套 Information 里包含每一条长轮询请求，
 /// 一晚上能把磁盘写满，而它们对排障毫无价值。所以：
-///   · 我们自己代码（ClassShout.*）的 Information 及以上照收；
-///   · 别的类别（Microsoft.*）只收 Warning 及以上。
+///   · 框架类别（Microsoft.*、System.*）只收 Warning 及以上；
+///   · 其余一切（包括本程序自己的）Information 及以上照收。
+///
+/// 这里**不能**按"类别名是不是以 ClassShout 开头"来判断。程序自己的主日志
+/// 用的类别叫 <c>Relay</c>（不是 <c>ClassShout.RelayServer.*</c>），而在它下面写的
+/// 恰好是最该留档的东西：登录、班级授权、喊话、定时发送。按前缀判断的话，
+/// 这些 Information 会整批被挡在文件之外 —— 日志文件里就只剩启动那几行，
+/// 而"教室里昨天下午没声音"这种问题恰恰要看的就是被挡掉的那些。
 /// </summary>
 public sealed class FileLoggerProvider : ILoggerProvider
 {
@@ -26,13 +32,15 @@ public sealed class FileLoggerProvider : ILoggerProvider
 
     private sealed class FileLogger(string category) : ILogger
     {
-        /// <summary>是不是我们自己代码的类别（那种 Information 也要留）。</summary>
-        private readonly bool _isOurs = category.StartsWith("ClassShout", StringComparison.OrdinalIgnoreCase);
+        /// <summary>是不是框架自己的类别（那种只留 Warning 及以上，否则会被请求日志淹掉）。</summary>
+        private readonly bool _isFramework =
+            category.StartsWith("Microsoft", StringComparison.OrdinalIgnoreCase)
+            || category.StartsWith("System", StringComparison.OrdinalIgnoreCase);
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel)
-            => logLevel >= (_isOurs ? LogLevel.Information : LogLevel.Warning);
+            => logLevel >= (_isFramework ? LogLevel.Warning : LogLevel.Information);
 
         public void Log<TState>(
             LogLevel logLevel,
