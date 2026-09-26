@@ -159,6 +159,86 @@ public sealed class TeacherRelayClient : IAsyncDisposable
     }
 
     /// <summary>
+    /// 把本机的名单与呼叫模板同步到服务器。
+    ///
+    /// 为什么要同步：网页版（WebUI）也要能"呼叫"，而它跑在服务器上、看不到老师手机里的名单。
+    /// 同步之后网页用的是**同一份名单**，拼装也走 Core 里的同一段代码
+    /// （<see cref="CallComposer"/>），所以两边拼出来的话必然一样。
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> SyncRosterAsync(
+        IReadOnlyList<StudentRoster> rosters,
+        string? activeRosterId,
+        IReadOnlyList<CallTemplate> templates,
+        string? activeTemplateId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_settings.IsSignedIn || string.IsNullOrWhiteSpace(ServerUrl))
+        {
+            return (false, "还没登录服务器账号 —— 名单要同步给服务器，得先登录。");
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Put, Url(RelayPaths.TeacherRoster))
+            {
+                Content = JsonContent.Create(
+                    new TeacherRosterUpload(rosters, activeRosterId, templates, activeTemplateId),
+                    options: JsonOptions),
+            };
+
+            request.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, _settings.AuthToken);
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return (false, $"服务器没有接受（HTTP {(int)response.StatusCode}）。");
+            }
+
+            var result = await response.Content
+                .ReadFromJsonAsync<RosterSyncResult>(JsonOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            return result is { Ok: true }
+                ? (true, null)
+                : (false, result?.Error ?? "服务器没有接受这次同步。");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return (false, $"同步失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>服务器上存着的那份名单与模板（网页呼叫用的就是它）。</summary>
+    public async Task<TeacherRosterSnapshot?> GetRosterAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_settings.IsSignedIn || string.IsNullOrWhiteSpace(ServerUrl))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, Url(RelayPaths.TeacherRoster));
+            request.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, _settings.AuthToken);
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            return await response.Content
+                .ReadFromJsonAsync<TeacherRosterSnapshot>(JsonOptions, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            Log?.Invoke($"读取服务器上的名单失败：{ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 列出管理员在控制台上授权给当前账号的教室。
     /// 有了这个，老师手机上一点即可绑定，既不用抄 UUID，也不用传口令。
     /// </summary>

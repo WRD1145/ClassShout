@@ -228,6 +228,13 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
+
+                <!-- 同步给服务器：网页版（WebUI）的「呼叫」用的就是这一份 -->
+                <Button Classes="tonal block" Content="同步名单到服务器（网页呼叫用）"
+                        Command="{Binding SyncRosterCommand}" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding RosterSyncHint}" />
               </StackPanel>
             </md3:Md3Card>
 

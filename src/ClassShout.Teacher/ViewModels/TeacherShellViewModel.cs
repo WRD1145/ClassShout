@@ -410,6 +410,69 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void DismissError() => ErrorMessage = null;
 
+    // ======================== 名单同步到服务器 ========================
+    //
+    // 为什么要有这个按钮：网页版（WebUI）也要能"呼叫"，而它跑在服务器上，
+    // 看不到老师手机里的名单。同步之后网页用的是同一份名单，拼装也走同一段代码
+    // （Core 里的 CallComposer），所以两边拼出来的话必然一样。
+
+    [ObservableProperty]
+    private bool _isSyncingRoster;
+
+    [ObservableProperty]
+    private string _rosterSyncHint = "同步之后，网页版（登录服务器后打开服务器地址）也能用这份名单呼叫。";
+
+    [RelayCommand]
+    private async Task SyncRosterAsync()
+    {
+        if (IsSyncingRoster)
+        {
+            return;
+        }
+
+        var roster = LocalSettings.LoadRosters();
+        var calls = LocalSettings.LoadCalls();
+
+        if (roster.Rosters.Count == 0)
+        {
+            RosterSyncHint = "还没有名单可同步 —— 先在上面导入一份。";
+            return;
+        }
+
+        if (_relay is null)
+        {
+            RosterSyncHint = "还没绑定服务器：名单要同步给服务器，先去「设备」页绑定一间教室。";
+            return;
+        }
+
+        IsSyncingRoster = true;
+        RosterSyncHint = "正在同步…";
+
+        try
+        {
+            var (ok, error) = await _relay
+                .SyncRosterAsync(roster.Rosters, roster.ActiveRosterId, calls.Templates, calls.ActiveTemplateId)
+                .ConfigureAwait(true);
+
+            if (ok)
+            {
+                var students = roster.Active?.Students.Count ?? 0;
+                RosterSyncHint = $"已同步：{roster.Rosters.Count} 份名单（当前这份 {students} 位学生）、"
+                                 + $"{calls.Templates.Count} 个呼叫模板。网页版现在可以用它呼叫了。";
+                AddLog($"已把名单同步到服务器（{roster.Rosters.Count} 份、{calls.Templates.Count} 个模板）。");
+            }
+            else
+            {
+                RosterSyncHint = error ?? "同步失败。";
+                AddLog($"名单同步失败：{RosterSyncHint}");
+            }
+        }
+        finally
+        {
+            IsSyncingRoster = false;
+        }
+    }
+
     /// <summary>错误提示条出现之后到点自己收起（有关闭按钮，只是不指望人一定会点）。</summary>
     private void StartErrorTimeout()
     {

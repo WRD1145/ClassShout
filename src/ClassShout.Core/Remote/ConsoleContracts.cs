@@ -160,3 +160,10 @@ public sealed record TeacherCallResponse(
     IReadOnlyList<string> Messages,
     IReadOnlyList<TeacherShoutResult> Results,
     string Message);
+
+/// <summary>同步名单的结果（服务器只回一句"成没成"和原因，名单本身不必回传）。</summary>
+/// <param name="Ok">是否成功。</param>
+/// <param name="Error">失败原因。</param>
+/// <param name="Rosters">服务器上现在有几份名单。</param>
+/// <param name="Templates">服务器上现在有几个模板。</param>
+public sealed record RosterSyncResult(bool Ok, string? Error = null, int Rosters = 0, int Templates = 0);
