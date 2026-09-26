@@ -597,6 +597,32 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!-- 发送：这一页最要紧的那个动作。
+                 原来这一页压根没有发送按钮（命令在视图模型里躺着、界面上没有入口），
+                 于是文字喊话只能靠"呼叫"页或语音页发出去 —— 所以它单独占一张卡。 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="10">
+                <Button Classes="block" HorizontalContentAlignment="Center"
+                        Command="{Binding Text.SendCommand}">
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                    <md3:Md3Icon Kind="Send" Size="18" />
+                    <TextBlock Text="发送到教室" VerticalAlignment="Center" />
+                  </StackPanel>
+                </Button>
+
+                <!-- 灰着就说清为什么灰：没连教室、还没写内容、上一条还在发 -->
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           IsVisible="{Binding Text.HasSendBlockedHint}"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding Text.SendBlockedHint}" />
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           IsVisible="{Binding Text.IsQueued}"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding Text.QueueStatus}" />
+              </StackPanel>
+            </md3:Md3Card>
+
             <!-- 定时通知：把当前这条排到某个时间自动发出去。
                  可靠性边界写在卡片上，而不是只写在文档里 ——
                  老师会照着界面上的字去预期行为。 -->
@@ -1326,9 +1352,23 @@
 
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="10">
-                <Grid ColumnDefinitions="*,Auto">
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
                   <TextBlock Classes="cardTitle" Text="运行日志" />
-                  <Button Grid.Column="1" Classes="text small" Content="断开"
+
+                  <!-- 日志详细程度：默认"信息"。要排查"扫不到教室""这条到底发出去没有"时，
+                       调到"调试"才看得到广播发到哪、谁回了什么。 -->
+                  <ComboBox Grid.Column="1" MinWidth="110" VerticalAlignment="Center"
+                            ToolTip.Tip="{Binding LogLevelHint}"
+                            ItemsSource="{Binding LogLevelOptions}"
+                            SelectedItem="{Binding SelectedLogLevel}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="remote:AppLogLevelOption">
+                        <TextBlock Text="{Binding Label}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+
+                  <Button Grid.Column="2" Classes="text small" Content="断开"
                           IsVisible="{Binding IsConnected}"
                           Command="{Binding DisconnectCommand}" />
                 </Grid>

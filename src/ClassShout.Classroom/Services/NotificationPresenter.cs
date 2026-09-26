@@ -93,9 +93,20 @@ public sealed class NotificationPresenter : IDisposable
         RestartHideTimer();
     }
 
+    /// <summary>
+    /// 预览用的来源与内容。
+    ///
+    /// 抽成常量是因为预览有两条路（教室端自己的弹窗、投给 ClassIsland），
+    /// 两处各写一份文案的话，改了一处另一处就会说的是另一句话。
+    /// </summary>
+    public const string PreviewSourceName = "张老师";
+
+    /// <inheritdoc cref="PreviewSourceName" />
+    public const string PreviewText = "这是一条弹窗预览：同学们请安静，现在讲第三题。";
+
     /// <summary>弹一条自检提示，用于在设置界面里预览效果。</summary>
     public void ShowPreview()
-        => Show(new NotificationContent("张老师", "这是一条弹窗预览：同学们请安静，现在讲第三题。", IsVoice: false));
+        => Show(new NotificationContent(PreviewSourceName, PreviewText, IsVoice: false));
 
     private NotificationWindow EnsureWindow()
     {

@@ -336,6 +336,9 @@ public partial class TextShoutViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
     [NotifyPropertyChangedFor(nameof(CharacterCount))]
+    [NotifyPropertyChangedFor(nameof(CharacterCountText))]
+    [NotifyPropertyChangedFor(nameof(SendBlockedHint))]
+    [NotifyPropertyChangedFor(nameof(HasSendBlockedHint))]
     private string _text = string.Empty;
 
     [ObservableProperty]
@@ -454,6 +457,8 @@ public partial class TextShoutViewModel : ObservableObject
             OnPropertyChanged();
             OnPropertyChanged(nameof(HasImage));
             OnPropertyChanged(nameof(ImageSizeText));
+            OnPropertyChanged(nameof(SendBlockedHint));
+            OnPropertyChanged(nameof(HasSendBlockedHint));
             SendCommand.NotifyCanExecuteChanged();
         }
     }
@@ -511,10 +516,14 @@ public partial class TextShoutViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
+    [NotifyPropertyChangedFor(nameof(SendBlockedHint))]
+    [NotifyPropertyChangedFor(nameof(HasSendBlockedHint))]
     private bool _isConnected;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SendCommand))]
+    [NotifyPropertyChangedFor(nameof(SendBlockedHint))]
+    [NotifyPropertyChangedFor(nameof(HasSendBlockedHint))]
     private bool _isSending;
 
     /// <summary>输入框里有多少字。界面上顺手提示"建议 60 字以内"。</summary>
@@ -536,6 +545,38 @@ public partial class TextShoutViewModel : ObservableObject
     /// 说明文字是可选的那部分。
     /// </summary>
     public bool CanSend => IsConnected && !IsSending && (!string.IsNullOrWhiteSpace(Text) || HasImage);
+
+    /// <summary>
+    /// 发不出去的原因。
+    ///
+    /// 为什么要有这一行字：按钮灰着却不说话，是最容易被当成"坏了"的一种界面 ——
+    /// 而这几个条件（没连教室 / 还没写内容 / 上一条还在发）本来都能一句话说清。
+    /// </summary>
+    public string SendBlockedHint
+    {
+        get
+        {
+            if (IsSending)
+            {
+                return "正在发送上一条…";
+            }
+
+            if (!IsConnected)
+            {
+                return "还没连上教室，发不出去：去「设备」页连一间；用局域网的话，确认教室那台电脑开着、和这台设备在同一个网络，"
+                       + "并且第一次启动时在防火墙提示里勾了「专用网络」。";
+            }
+
+            if (string.IsNullOrWhiteSpace(Text) && !HasImage)
+            {
+                return "写一句要喊的话，或者选一张图片。";
+            }
+
+            return string.Empty;
+        }
+    }
+
+    public bool HasSendBlockedHint => SendBlockedHint.Length > 0;
 
     // ======================== 发送队列 ========================
 

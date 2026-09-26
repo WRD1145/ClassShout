@@ -90,6 +90,26 @@ public enum ShoutNotificationChannel
 /// <param name="Label">界面显示文本。</param>
 public sealed record ShoutChannelOption(ShoutNotificationChannel Value, string Label);
 
+/// <summary>
+/// 通道的两条规则，集中放在这里。
+///
+/// 为什么值得单独抽出来：这两条规则原先散在两个地方各写一遍 ——
+/// 「收到喊话时怎么投」和「点预览弹窗时怎么显示」。写法一分开就会走样，
+/// 而实际就走样过一次：设置里选了「只看 ClassIsland 提醒」，收到喊话时
+/// 教室端不弹自己的窗（对），可点「预览弹窗」照样弹了出来（错）。
+/// 规则只有一份，两边都来问它，就不会再各自演化。
+/// </summary>
+public static class ShoutNotificationChannels
+{
+    /// <summary>这个通道要不要弹教室端自己的弹窗。</summary>
+    public static bool ShowsOwnPopup(ShoutNotificationChannel channel)
+        => channel is not ShoutNotificationChannel.ClassIsland;
+
+    /// <summary>这个通道要不要投给 ClassIsland 联动插件。</summary>
+    public static bool NotifiesClassIsland(ShoutNotificationChannel channel)
+        => channel is ShoutNotificationChannel.ClassIsland or ShoutNotificationChannel.Both;
+}
+
 /// <summary>教室端弹窗与显示的配置。</summary>
 public sealed class ClassroomNotificationSettings
 {

@@ -38,7 +38,11 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     private string _newTemplate = string.Empty;
     private bool _newIsGitee;
 
-    public UpdateCardViewModel(HttpClient? http, UpdateSettings settings, Func<string, Task>? openUrl = null)
+    public UpdateCardViewModel(
+        HttpClient? http,
+        UpdateSettings settings,
+        Func<string, Task>? openUrl = null,
+        Func<UpdateSettings, UpdateChecker>? checkerFactory = null)
     {
         _settings = settings.Normalized();
 
@@ -46,7 +50,9 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         // 这样"改了代理立刻生效"，不必让各端重建 HttpClient。
         _ = http;
 
-        _checker = new UpdateChecker(_settings);
+        // checkerFactory 只给自检用：让自检能塞一个"必定查到新版本"的检查器进来，
+        // 从而断言按钮状态 —— 这件事没法靠真的发网络请求来测。
+        _checker = checkerFactory?.Invoke(_settings) ?? new UpdateChecker(_settings);
         _openUrl = openUrl;
 
         CheckCommand = new SimpleCommand(async () => await CheckAsync().ConfigureAwait(true), () => !IsBusy);
@@ -549,6 +555,12 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         Raise(nameof(CanOpenPage));
         Raise(nameof(HasDownload));
         Raise(nameof(IsCustomProxy));
+
+        // 光让属性变化还不够：按钮能不能点是命令的 CanExecute 说了算，
+        // 而 CanExecute 只在命令自己喊"变了"的时候才会被重新问一次。
+        // 少了这两行，界面上就是"明明查到了新版本，「下载新版」却一直是灰的、点不动"。
+        (OpenDownloadCommand as SimpleCommand)?.RaiseCanExecuteChanged();
+        (OpenPageCommand as SimpleCommand)?.RaiseCanExecuteChanged();
     }
 
     /// <summary>把发行说明裁成一小段：整篇 Markdown 贴在手机上是灾难。</summary>

@@ -68,6 +68,17 @@ public sealed class ClassroomAnnouncer : IAsyncDisposable
     /// <summary>教室端当前对外信息；名称变化后无需重启响应器。</summary>
     public ClassroomAnnouncement Current { get; set; } = new();
 
+    /// <summary>
+    /// 过程日志（"调试"档）：监听起没起来、绑在哪个端口。
+    ///
+    /// 这两条回调存在的理由只有一个：教室端"扫不到"时，得能看出**这一侧到底在不在听**。
+    /// 平时它们是关着的（见 AppLog 的档位），需要排查时把档位调到调试就会显示。
+    /// </summary>
+    public Action<string>? LogDebug { get; set; }
+
+    /// <summary>最细的日志（"跟踪"档）：每一条收到的探测与回复。</summary>
+    public Action<string>? LogTrace { get; set; }
+
     /// <summary>启动监听。已在运行则直接返回。</summary>
     public void Start()
     {
@@ -84,6 +95,8 @@ public sealed class ClassroomAnnouncer : IAsyncDisposable
         _udp = udp;
         _cts = new CancellationTokenSource();
         _loop = Task.Run(() => ReceiveLoopAsync(udp, _cts.Token));
+
+        LogDebug?.Invoke($"UDP 发现监听已开启：0.0.0.0:{_port}（教师端扫描时就是往这个端口发探测）。");
     }
 
     private async Task ReceiveLoopAsync(UdpClient udp, CancellationToken cancellationToken)
@@ -101,6 +114,8 @@ public sealed class ClassroomAnnouncer : IAsyncDisposable
 
                 var reply = JsonSerializer.SerializeToUtf8Bytes(Current, ClassroomAnnouncement.SerializerOptions);
                 await udp.SendAsync(reply, result.RemoteEndPoint, cancellationToken).ConfigureAwait(false);
+
+                LogTrace?.Invoke($"收到来自 {result.RemoteEndPoint} 的探测，已回复「{Current.Name}」。");
             }
             catch (OperationCanceledException)
             {

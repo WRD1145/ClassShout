@@ -69,8 +69,11 @@ builder.Services.AddHostedService<ScheduledShoutService>();
 
 // 日志除了走 stdout（systemd 收进 journald），同时落一份到软件目录下的 logs\ ——
 // 压缩包里本来就带着那个目录，让它真的有东西，运维就不必先学一遍 journalctl。
-// 过滤器见 FileLoggerProvider：只收有用的那些，不收每条长轮询请求。
+// 过滤器见 FileLoggerProvider：只收有用的那些，不收每条长轮询请求；
+// 档位由 CLASSSHOUT_LOG_LEVEL 控制（默认信息级），这里把它同步给 AppLog 的落盘过滤，
+// 免得"provider 放行了、AppLog 又挡回去"。
 builder.Logging.AddProvider(new FileLoggerProvider());
+AppLog.Minimum = FileLoggerProvider.Minimum;
 
 // ======================== 限速 ========================
 //

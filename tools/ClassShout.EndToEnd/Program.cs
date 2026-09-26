@@ -253,6 +253,7 @@ internal static class Program
 
         // ---------- 3t. 日志按天分文件、只留 7 天 ----------
         AssertLogRetention();
+        AssertLogLevels();
 
         // ---------- 3n. 发送队列 ----------
         await AssertShoutQueueAsync();
@@ -2933,6 +2934,60 @@ internal static class Program
         Check("直连失败时提示「可以设个代理」（校园网里这是最常见的原因）",
             !offline.Ok && offline.Error?.Contains("代理") == true,
             offline.Error ?? "(没有原因)");
+
+        // —— 卡片本身：查到新版本之后，"下载新版"必须真的能点 ——
+        //
+        // 这是一个真实发生过的问题：属性（CanDownload）变了，但按钮的可用状态来自命令的
+        // CanExecute，而命令没人通知"变了" —— 于是界面上"明明查到了新版本，
+        // 「下载新版」却一直是灰的、点不动"。光断言 CanDownload 是发现不了的，
+        // 必须问命令本人 CanExecute 要答案。
+        var openedUrls = new List<string>();
+        var originalDataDir = Environment.GetEnvironmentVariable("CLASSSHOUT_DATA_DIR");
+        var tempDataDir = Path.Combine(Path.GetTempPath(), "cs-updatecard-" + Guid.NewGuid().ToString("N")[..8]);
+
+        try
+        {
+            // 检查完会落盘（update.json），自检不能改使用者自己的那份
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", tempDataDir);
+
+            var card = new ClassShout.Design.UpdateCardViewModel(
+                null,
+                new UpdateSettings { Mirrors = [.. UpdateMirror.BuiltIns()] },
+                url =>
+                {
+                    openedUrls.Add(url);
+                    return Task.CompletedTask;
+                },
+                settings => new UpdateChecker(settings, _ => handler))
+            {
+                CurrentVersion = "1.9.0",
+                PreferredAssetName = "ClassShout.Classroom-win-x64.zip",
+            };
+
+            var clickableBefore = card.OpenDownloadCommand.CanExecute(null);
+            var notified = false;
+            card.OpenDownloadCommand.CanExecuteChanged += (_, _) => notified = true;
+
+            await card.CheckAsync();
+
+            Check("卡片：没查到之前「下载新版」是灰的",
+                !clickableBefore,
+                $"CanExecute={clickableBefore}");
+
+            Check("卡片：查到新版本后「下载新版」变成可点（并通知过界面重新问）",
+                card.OpenDownloadCommand.CanExecute(null) && notified,
+                $"CanExecute={card.OpenDownloadCommand.CanExecute(null)}，通知过={notified}");
+
+            await card.OpenDownloadAsync();
+
+            Check("卡片：点「下载新版」打开的就是本平台的附件地址",
+                openedUrls.Count == 1 && openedUrls[0].EndsWith("ClassShout.Classroom-win-x64.zip", StringComparison.Ordinal),
+                openedUrls.Count == 1 ? openedUrls[0] : $"打开了 {openedUrls.Count} 个地址");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", originalDataDir);
+        }
     }
 
     /// <summary>
@@ -3033,6 +3088,98 @@ internal static class Program
         finally
         {
             Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", originalDataDir);
+        }
+    }
+
+    /// <summary>
+    /// 日志档位：Trace / Debug / Info / Warning / Error。
+    ///
+    /// 这一段守两件事：
+    ///   1. 设置里那个字符串认不出来时**退回默认档**，绝不因为设置写坏就一条日志都不记；
+    ///   2. 低于当前档位的日志确实既不显示也不落盘 —— "调到调试能看到广播细节"这句话，
+    ///      只有在过滤真的生效时才算数（真踩过：档位改了但写文件那一步没看档位）。
+    /// </summary>
+    private static void AssertLogLevels()
+    {
+        Check("日志档位：认得出大小写不同的设置",
+            AppLogLevels.Parse("debug") == AppLogLevel.Debug
+            && AppLogLevels.Parse("TRACE") == AppLogLevel.Trace
+            && AppLogLevels.Parse("Warning") == AppLogLevel.Warning,
+            "debug / TRACE / Warning 都认出来了");
+
+        Check("日志档位：认不出来就退回默认（信息）",
+            AppLogLevels.Parse("胡说八道") == AppLogLevels.Default
+            && AppLogLevels.Parse("") == AppLogLevels.Default
+            && AppLogLevels.Parse(null) == AppLogLevels.Default,
+            $"默认 {AppLogLevels.Default}");
+
+        Check("日志档位：五档齐全且按严重程度排",
+            AppLogLevels.All.Length == 5
+            && AppLogLevels.All.SequenceEqual(
+            [
+                AppLogLevel.Trace,
+                AppLogLevel.Debug,
+                AppLogLevel.Info,
+                AppLogLevel.Warning,
+                AppLogLevel.Error,
+            ]),
+            string.Join(" < ", AppLogLevels.All.Select(AppLogLevels.Label)));
+
+        // —— 真的写一遍文件，看过滤有没有生效 ——
+        var directory = Path.Combine(Path.GetTempPath(), "cs-loglevel-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(directory);
+
+        var originalDirectory = Environment.GetEnvironmentVariable(ClassShout.Core.Remote.AppLog.DirectoryVariable);
+        var originalMinimum = ClassShout.Core.Remote.AppLog.Minimum;
+
+        try
+        {
+            Environment.SetEnvironmentVariable(ClassShout.Core.Remote.AppLog.DirectoryVariable, directory);
+
+            var file = Path.Combine(directory, ClassShout.Core.Remote.AppLog.FileNameFor(DateTimeOffset.Now));
+
+            // 档位 = 调试：调试、信息、警告都该进文件；跟踪不该
+            ClassShout.Core.Remote.AppLog.Minimum = AppLogLevel.Debug;
+            ClassShout.Core.Remote.AppLog.Write(AppLogLevel.Trace, "网络", "跟踪级：这条不该出现");
+            ClassShout.Core.Remote.AppLog.Write(AppLogLevel.Debug, "网络", "调试级：广播发往 192.168.1.255");
+            ClassShout.Core.Remote.AppLog.Write("网络", "信息级：已连上教室");
+            ClassShout.Core.Remote.AppLog.Write(AppLogLevel.Warning, "网络", "警告级：教室没回包");
+
+            var text = File.Exists(file) ? File.ReadAllText(file) : string.Empty;
+
+            Check("日志档位：调到调试后，调试级日志真的落盘了",
+                text.Contains("调试级：广播发往"),
+                text.Length == 0 ? "(文件都没建出来)" : "文件里有这一条");
+
+            Check("日志档位：仍低于档位的跟踪级不会落盘",
+                !text.Contains("跟踪级：这条不该出现"),
+                "跟踪那条没进去");
+
+            Check("日志行里带着级别（与服务器那份日志同一种读法）",
+                text.Contains("[信息 网络]") && text.Contains("[调试 网络]") && text.Contains("[警告 网络]"),
+                text.Split('\n').FirstOrDefault(line => line.Contains("信息级："))?.Trim() ?? "(没有信息级那行)");
+
+            // 档位 = 警告：信息级也该被挡住
+            ClassShout.Core.Remote.AppLog.Minimum = AppLogLevel.Warning;
+            ClassShout.Core.Remote.AppLog.Write("网络", "信息级：档位调到警告之后这条不该出现");
+            ClassShout.Core.Remote.AppLog.Write(AppLogLevel.Error, "网络", "错误级：这条要留下");
+
+            var afterRaise = File.ReadAllText(file);
+
+            Check("日志档位：往上调之后，低于档位的直接丢掉",
+                !afterRaise.Contains("档位调到警告之后这条不该出现") && afterRaise.Contains("错误级：这条要留下"),
+                "信息级被挡住、错误级留着");
+
+            Check("日志档位：IsEnabled 与档位一致",
+                !ClassShout.Core.Remote.AppLog.IsEnabled(AppLogLevel.Info)
+                && ClassShout.Core.Remote.AppLog.IsEnabled(AppLogLevel.Error),
+                "警告档下：信息=关，错误=开");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ClassShout.Core.Remote.AppLog.DirectoryVariable, originalDirectory);
+            ClassShout.Core.Remote.AppLog.Minimum = originalMinimum;
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -3667,6 +3814,46 @@ internal static class Program
         Check("特大字在弹窗里比在大字区小得多",
             popupPixels < stagePixels / 2,
             $"弹窗 {popupPixels}px，大字区 {stagePixels}px");
+
+        AssertShoutNotificationChannels();
+    }
+
+    /// <summary>
+    /// 喊话提示走哪几条通道。
+    ///
+    /// 这一段守的是一个真实发生过的不一致：设置里选了「只看 ClassIsland 提醒」，
+    /// 收到喊话时教室端不弹自己的窗（对），可点「预览弹窗」还是会弹出来（错）——
+    /// 因为那条规则在两个地方各写了一遍。现在规则只有一份（ShoutNotificationChannels），
+    /// 收到喊话、预览弹窗都问它，所以这里断言的就是那份规则的取值表。
+    /// </summary>
+    private static void AssertShoutNotificationChannels()
+    {
+        Check("通道：只用 ClassShout 时弹自己的窗、不投 ClassIsland",
+            ShoutNotificationChannels.ShowsOwnPopup(ShoutNotificationChannel.ClassShout)
+            && !ShoutNotificationChannels.NotifiesClassIsland(ShoutNotificationChannel.ClassShout),
+            "ClassShout");
+
+        Check("通道：只看 ClassIsland 时不弹自己的窗（预览也守这条）",
+            !ShoutNotificationChannels.ShowsOwnPopup(ShoutNotificationChannel.ClassIsland)
+            && ShoutNotificationChannels.NotifiesClassIsland(ShoutNotificationChannel.ClassIsland),
+            "ClassIsland");
+
+        Check("通道：两处都显示时两边都走",
+            ShoutNotificationChannels.ShowsOwnPopup(ShoutNotificationChannel.Both)
+            && ShoutNotificationChannels.NotifiesClassIsland(ShoutNotificationChannel.Both),
+            "Both");
+
+        // 三条通道至少有一条会显示，否则喊话会静悄悄地什么都不出现
+        var silent = new[]
+        {
+            ShoutNotificationChannel.ClassShout,
+            ShoutNotificationChannel.ClassIsland,
+            ShoutNotificationChannel.Both,
+        }.Where(channel =>
+            !ShoutNotificationChannels.ShowsOwnPopup(channel)
+            && !ShoutNotificationChannels.NotifiesClassIsland(channel)).ToArray();
+
+        Check("通道：不存在「什么都不显示」的取值", silent.Length == 0, string.Join("、", silent));
     }
 
     /// <summary>在字节数组里找一段 ASCII 子串。二进制体不能按 UTF-8 解码后再搜。</summary>

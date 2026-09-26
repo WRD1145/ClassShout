@@ -203,6 +203,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             // 比"先自己判断登录没登录、再决定要不要处理"简单得多，也不会漏掉链接。
             _ = ClaimShareAsync();
         });
+
+        // 日志详细程度：默认"信息"，调过就按调过的来（见 log.json 与 LogSettings）。
+        // 放在构造函数末尾：这一行之前写下的日志按默认档处理，之后才按设置过滤。
+        _logSettings = LogSettings.LoadAndApply();
+        _selectedLogLevel = AppLogLevels.Options.FirstOrDefault(o => o.Value == _logSettings.Resolved)
+                            ?? AppLogLevels.Options[2];
     }
 
     public TextShoutViewModel Text { get; }
@@ -211,6 +217,46 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>快速呼叫页：组件拼装 + 选学生 + 模板。</summary>
     public CallShoutViewModel Call { get; }
+
+    // ======================== 日志详细程度 ========================
+    //
+    // "自动发现扫不到教室""这条喊话到底发出去没有"这类问题，要看的不是正常操作记录，
+    // 而是"广播发到哪、谁回了什么"这种过程细节 —— 那些属于 Debug / Trace。
+    // 平时全记下来会把日志刷成流水账，所以做成可调档位，由使用者按需打开。
+
+    private readonly LogSettings _logSettings;
+    private AppLogLevelOption _selectedLogLevel;
+
+    /// <summary>可选的日志档位（下拉框直接绑它）。</summary>
+    public IReadOnlyList<AppLogLevelOption> LogLevelOptions => AppLogLevels.Options;
+
+    /// <summary>当前档位。改了立刻落盘、立刻生效。</summary>
+    public AppLogLevelOption SelectedLogLevel
+    {
+        get => _selectedLogLevel;
+        set
+        {
+            if (value is null || ReferenceEquals(value, _selectedLogLevel))
+            {
+                return;
+            }
+
+            // 先把档位切到位再写"档位已改"这条日志，否则从 Warning 调回 Info 时，
+            // 这条说明自己会被旧档位挡掉，界面上看着像没生效。
+            _selectedLogLevel = value;
+            var saved = _logSettings.Apply(value.Value);
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LogLevelHint));
+
+            AddLog(saved
+                ? $"日志详细程度已改为「{value.Label}」。"
+                : $"日志详细程度已改为「{value.Label}」，但没能存到本机 —— 重启后会退回上一档。");
+        }
+    }
+
+    /// <summary>选中的档位会多记什么，写在选择框下面。</summary>
+    public string LogLevelHint => AppLogLevels.Describe(SelectedLogLevel.Value);
 
     // ======================== 连接状态 ========================
 
@@ -1189,12 +1235,28 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
+            // 扫描的细节值得记下来：这一条路上出问题时（"就是扫不到教室"），
+            // 要知道广播发给了哪些地址、等了多久、有没有回包 —— 那才有得排查。
+            var broadcastAddresses = NetworkUtility.GetBroadcastAddresses()
+                .Append(IPAddress.Broadcast)
+                .Distinct()
+                .Select(address => address.ToString())
+                .ToList();
+
+            AddLog(AppLogLevel.Debug, $"开始扫描局域网：向 {string.Join("、", broadcastAddresses)} 的 UDP "
+                                      + $"{ShoutProtocol.DefaultDiscoveryPort} 端口广播探测（等 1.5 秒回包）。");
+
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             var found = await _discovery.ScanAsync().ConfigureAwait(true);
+            stopwatch.Stop();
 
             Classrooms.Clear();
-            foreach (var item in found)
+            foreach (var announcement in found)
             {
-                Classrooms.Add(new ClassroomListItem(item, target => ConnectAsync(target)));
+                Classrooms.Add(new ClassroomListItem(announcement, target => ConnectAsync(target)));
+                AddLog(AppLogLevel.Debug,
+                    $"发现教室「{announcement.Name}」：{announcement.Host}:{announcement.Port}"
+                    + $"（版本 {announcement.AppVersion ?? "未知"}）。");
             }
 
             HasScanned = true;
@@ -1203,15 +1265,26 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             if (found.Count == 0)
             {
                 ErrorMessage = "没有发现教室端。请确认教室端已启动，且两台设备在同一个 Wi-Fi 下。";
+
+                // 0 结果时把"下一步该查什么"直接写进日志：界面上只有一句话，
+                // 而真正的原因往往藏在"网段不同""防火墙拦了""无线开了客户端隔离"里。
+                AddLog(AppLogLevel.Debug,
+                    $"扫描结束：{stopwatch.ElapsedMilliseconds} ms 内一个回包都没有。"
+                    + "接着可以查这几处：教室端那台电脑上程序开着没有（右下角大字区应显示「等待教师端连接」）；"
+                    + "两台设备是不是同一个网段（教室端界面右上角有它自己的 IP）；"
+                    + "教室端第一次启动时 Windows 防火墙提示里有没有勾「专用网络」；"
+                    + "无线网络是不是开了「客户端隔离 / AP 隔离」（学校 Wi-Fi 常见，开了就互相看不见，"
+                    + "这种情况改用中继服务器）。");
             }
             else
             {
-                AddLog($"发现 {found.Count} 个教室端");
+                AddLog($"发现 {found.Count} 个教室端（{stopwatch.ElapsedMilliseconds} ms）");
             }
         }
         catch (Exception ex)
         {
             ErrorMessage = $"扫描失败：{ex.Message}";
+            AddLog(AppLogLevel.Error, $"扫描失败：{ex.GetType().Name}：{ex.Message}");
         }
         finally
         {
@@ -2450,8 +2523,16 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         return true;
     }
 
-    private void AddLog(string message)
+    private void AddLog(string message) => AddLog(AppLogLevel.Info, message);
+
+    /// <summary>按档位记一条日志：低于当前档位的既不进界面列表、也不落盘。</summary>
+    private void AddLog(AppLogLevel level, string message)
     {
+        if (!AppLog.IsEnabled(level))
+        {
+            return;
+        }
+
         Logs.Insert(0, new TeacherLogEntry(DateTime.Now, message));
 
         while (Logs.Count > 120)
@@ -2461,7 +2542,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         // 同时落一份到磁盘：界面上这份一关就没了，而排障时最常见的问法是
         // "昨天下午那条喊话到底发出去没有"。按天分文件、只留 7 天，见 AppLog。
-        AppLog.Write("教师端", message);
+        AppLog.Write(level, "教师端", message);
     }
 
     private static void Post(Action action)

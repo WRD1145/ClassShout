@@ -149,13 +149,42 @@ public static partial class AppLog
     /// <summary>今天的日志文件全路径。</summary>
     public static string CurrentFilePath => Path.Combine(Directory, FileNameFor(DateTimeOffset.Now));
 
+    private static AppLogLevel _minimum = AppLogLevel.Info;
+
+    /// <summary>
+    /// 低于这一档的日志既不显示、也不落盘。
+    ///
+    /// 为什么要能调：默认的 Info 记的是"正常操作与结果"，而"自动发现扫不到教室"
+    /// 这类问题要看的是**每一次广播发到哪、谁回了什么** —— 那些属于 Debug / Trace。
+    /// 平时把它们全记下来会把日志刷成流水账，所以由使用者按需打开（见设置页）。
+    /// </summary>
+    public static AppLogLevel Minimum
+    {
+        get => _minimum;
+        set => _minimum = value;
+    }
+
+    /// <summary>这一档现在要不要记。</summary>
+    public static bool IsEnabled(AppLogLevel level) => level >= _minimum;
+
     /// <summary>
     /// 写一条日志。
     /// </summary>
     /// <param name="kind">来源，例如「喊话」「朗读」「网络」。</param>
     /// <param name="message">内容。</param>
-    public static void Write(string kind, string message)
+    public static void Write(string kind, string message) => Write(AppLogLevel.Info, kind, message);
+
+    /// <summary>按档位写一条日志；低于当前档位的直接丢掉。</summary>
+    /// <param name="level">详细程度。</param>
+    /// <param name="kind">来源，例如「喊话」「朗读」「网络」。</param>
+    /// <param name="message">内容。</param>
+    public static void Write(AppLogLevel level, string kind, string message)
     {
+        if (!IsEnabled(level))
+        {
+            return;
+        }
+
         try
         {
             lock (Gate)
@@ -164,8 +193,9 @@ public static partial class AppLog
 
                 // 凭据一律不进文件（见 Redact）：界面上显示口令是设计如此，
                 // 但写进磁盘就是另一回事 —— 日志会被打包发给别人看、会被备份拷走。
+                // 级别写在前面，和服务器那份日志（[信息 Relay]）保持同一种读法。
                 var safeText = Redact(message);
-                var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} [{kind}] {safeText}{Environment.NewLine}";
+                var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} [{AppLogLevels.Label(level)} {kind}] {safeText}{Environment.NewLine}";
                 var path = Path.Combine(Directory, FileNameFor(DateTimeOffset.Now));
 
                 File.AppendAllText(path, line, Encoding.UTF8);

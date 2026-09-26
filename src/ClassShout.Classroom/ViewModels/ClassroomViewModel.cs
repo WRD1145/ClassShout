@@ -151,6 +151,11 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     {
         _server = new ClassroomServer(port);
         _announcer = new ClassroomAnnouncer(discoveryPort);
+
+        // 发现这一侧的"过程日志"：教师端扫不到教室时，先要能看出这台机器到底在不在听、
+        // 有没有收到探测。默认档位不显示，调到"调试 / 跟踪"才有（见设置页的日志档位）。
+        _announcer.LogDebug = message => Post(() => AddLog(AppLogLevel.Debug, "发现", message));
+        _announcer.LogTrace = message => Post(() => AddLog(AppLogLevel.Trace, "发现", message));
         // 系统语音始终建起来：它不依赖外网，是保底引擎，
         // 也是 Edge 连不上时的回落目标。
         _speechSettings = LocalSettings.LoadSpeech();
@@ -274,6 +279,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         // 分项保护的勾选状态（哪几项要 PIN）
         LoadProtectedOptions();
+
+        // 日志详细程度：默认"信息"，调过就按调过的来（见 log.json 与 LogSettings）。
+        // 放在构造函数最后：这一行之前写下的日志按默认档处理，之后才按设置过滤。
+        _logSettings = LogSettings.LoadAndApply();
+        _selectedLogLevel = AppLogLevels.Options.FirstOrDefault(o => o.Value == _logSettings.Resolved)
+                            ?? AppLogLevels.Options[2];
     }
 
     // ======================== 可绑定状态 ========================
@@ -509,6 +520,46 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     }
 
     public ObservableCollection<LogEntry> Logs { get; } = [];
+
+    // ======================== 日志详细程度 ========================
+    //
+    // "自动发现扫不到教室""这条喊话到底发出去没有"这类问题，要看的不是正常操作记录，
+    // 而是"广播发到哪、谁回了什么"这种过程细节 —— 那些属于 Debug / Trace。
+    // 平时全记下来会把日志刷成流水账，所以做成可调档位，由使用者按需打开。
+
+    private readonly LogSettings _logSettings;
+    private AppLogLevelOption _selectedLogLevel;
+
+    /// <summary>可选的日志档位（下拉框直接绑它）。</summary>
+    public IReadOnlyList<AppLogLevelOption> LogLevelOptions => AppLogLevels.Options;
+
+    /// <summary>当前档位。改了立刻落盘、立刻生效。</summary>
+    public AppLogLevelOption SelectedLogLevel
+    {
+        get => _selectedLogLevel;
+        set
+        {
+            if (value is null || ReferenceEquals(value, _selectedLogLevel))
+            {
+                return;
+            }
+
+            // 先把档位降/升到位，再写"档位已改"这条日志 —— 否则从 Warning 调到 Info 时，
+            // 这条说明自己会被旧档位挡掉，界面上看着像没生效。
+            _selectedLogLevel = value;
+            var saved = _logSettings.Apply(value.Value);
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LogLevelHint));
+
+            AddLog("日志", saved
+                ? $"日志详细程度已改为「{value.Label}」。"
+                : $"日志详细程度已改为「{value.Label}」，但没能存到本机 —— 重启后会退回上一档。");
+        }
+    }
+
+    /// <summary>选中的档位会多记什么，写在选择框下面。</summary>
+    public string LogLevelHint => AppLogLevels.Describe(SelectedLogLevel.Value);
 
     public ObservableCollection<TeacherInfo> Teachers { get; } = [];
 
@@ -1809,8 +1860,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private void AddLog(string kind, string message)
+    private void AddLog(string kind, string message) => AddLog(AppLogLevel.Info, kind, message);
+
+    /// <summary>按档位记一条日志：低于当前档位的既不进界面列表、也不落盘。</summary>
+    private void AddLog(AppLogLevel level, string kind, string message)
     {
+        if (!AppLog.IsEnabled(level))
+        {
+            return;
+        }
+
         Logs.Insert(0, new LogEntry(DateTime.Now, kind, message));
 
         // 日志只保留最近 200 条，长时间运行不会撑爆内存
@@ -1821,7 +1880,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         // 同时落一份到磁盘：界面上这份一关就没了，而排障时最常见的问法是
         // "昨天下午那节课教室里怎么没声音"。按天分文件、只留 7 天，见 AppLog。
-        AppLog.Write(kind, message);
+        AppLog.Write(level, kind, message);
     }
 
     private static void Post(Action action)
@@ -2518,7 +2577,24 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        _notificationPresenter.ShowPreview();
+        // 预览走的是**和真收到喊话时同一条规则**（ShoutNotificationChannels）：
+        // 选了「只看 ClassIsland 提醒」时，教室端自己的弹窗本来就不参与，
+        // 预览要是照样弹出来，就是在演示一个永远不会发生的效果。
+        var channel = SelectedChannel?.Value ?? ShoutNotificationChannel.ClassShout;
+
+        if (ShoutNotificationChannels.ShowsOwnPopup(channel))
+        {
+            _notificationPresenter.ShowPreview();
+        }
+        else
+        {
+            AddLog("提示", "当前是「只看 ClassIsland 提醒」，教室端不弹自己的弹窗；预览改投一条给 ClassIsland。");
+        }
+
+        NotifyClassIsland(
+            NotificationPresenter.PreviewSourceName,
+            NotificationPresenter.PreviewText,
+            ShoutNoticeKind.Text);
     }
 
     [RelayCommand]
@@ -2652,9 +2728,10 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 发送方选了"只在大字区显示"时（Display=window），教室端自己的弹窗就不参与了 ——
         // 那正是"窗口"和"弹窗"两个选项的区别。没带展示参数的老喊话（例如语音）
         // 仍然按老规矩弹。
-        var showOwnPopup = plan is not { IsWindow: true };
+        var showOwnPopup = plan is not { IsWindow: true }
+            && ShoutNotificationChannels.ShowsOwnPopup(SelectedChannel?.Value ?? ShoutNotificationChannel.ClassShout);
 
-        if (showOwnPopup && SelectedChannel?.Value is not ShoutNotificationChannel.ClassIsland)
+        if (showOwnPopup)
         {
             _notificationPresenter.Show(new NotificationContent(sourceName, text, kind is ShoutNoticeKind.Voice)
             {
@@ -2680,7 +2757,8 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        if (SelectedChannel?.Value is ShoutNotificationChannel.ClassIsland or ShoutNotificationChannel.Both)
+        if (ShoutNotificationChannels.NotifiesClassIsland(
+                SelectedChannel?.Value ?? ShoutNotificationChannel.ClassShout))
         {
             _ = NotifyClassIslandAsync(sourceName, text, kind);
         }
