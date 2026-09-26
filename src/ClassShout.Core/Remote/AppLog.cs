@@ -17,7 +17,7 @@ namespace ClassShout.Core.Remote;
 /// · **失败就闭嘴**。写不进去（目录只读、磁盘满）不影响应用继续干活 ——
 ///   日志是辅助，不该成为新的故障点。
 /// </summary>
-public static class AppLog
+public static partial class AppLog
 {
     /// <summary>保留多少天的日志。</summary>
     public const int RetainDays = 7;
@@ -79,6 +79,21 @@ public static class AppLog
                 var probe = Path.Combine(candidate, ".write-test");
                 File.WriteAllText(probe, string.Empty);
                 File.Delete(probe);
+
+                // 日志里有排障信息（服务器地址、教室名、账号名），同机其他账号不该随便看
+                if (!OperatingSystem.IsWindows())
+                {
+                    try
+                    {
+                        File.SetUnixFileMode(
+                            candidate,
+                            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+                    {
+                        // 设不了不致命
+                    }
+                }
 
                 return candidate;
             }
@@ -147,13 +162,71 @@ public static class AppLog
             {
                 PruneLocked(DateTimeOffset.Now);
 
-                var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} [{kind}] {message}{Environment.NewLine}";
-                File.AppendAllText(Path.Combine(Directory, FileNameFor(DateTimeOffset.Now)), line, Encoding.UTF8);
+                // 凭据一律不进文件（见 Redact）：界面上显示口令是设计如此，
+                // 但写进磁盘就是另一回事 —— 日志会被打包发给别人看、会被备份拷走。
+                var safeText = Redact(message);
+                var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} [{kind}] {safeText}{Environment.NewLine}";
+                var path = Path.Combine(Directory, FileNameFor(DateTimeOffset.Now));
+
+                File.AppendAllText(path, line, Encoding.UTF8);
+                RestrictPermissions(path);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
             // 日志写不进去不该影响应用本身
+        }
+    }
+
+    /// <summary>
+    /// 把日志里的凭据换成「（已隐去）」。
+    ///
+    /// 两处真实存在的情况：
+    ///   · 服务器首次启动的横幅里有「口令：xxxxxx」（管理员口令）；
+    ///   · 教室端注册成功后界面上显示「口令：xxxxxx —— 请抄给老师」，
+    ///     而这条也会被记进日志。
+    /// 界面显示口令是设计如此，但**落到磁盘**就多了一份暴露面：
+    /// 日志会被打包发给别人看排障、会被备份拷走、会随压缩包一起传播。
+    ///
+    /// 只抹掉"标签 + 冒号 + 值"这种形状，像「管理员口令已更新。」这种不带值的照旧留下 ——
+    /// 否则日志会变得没法读。
+    /// </summary>
+    public static string Redact(string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+        {
+            return string.Empty;
+        }
+
+        return CredentialPattern().Replace(message, "$1：（已隐去）");
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"(口令|密钥|Secret|secret|Token|token|API[ _-]?[Kk]ey)\s*[：:]\s*[^\s，。；、]+",
+        System.Text.RegularExpressions.RegexOptions.None,
+        matchTimeoutMilliseconds: 200)]
+    private static partial System.Text.RegularExpressions.Regex CredentialPattern();
+
+    /// <summary>
+    /// 收紧日志文件权限（只给宿主自己读写）。
+    ///
+    /// Windows 上用户目录本来就只有本人可读；Linux 上要显式设 ——
+    /// 不然一份带排查信息的日志会是 0644，同机其他账号都能看。
+    /// </summary>
+    private static void RestrictPermissions(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            // 设不了就算了：内容里的凭据已经抹过一道
         }
     }
 

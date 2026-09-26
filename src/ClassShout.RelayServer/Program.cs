@@ -67,6 +67,11 @@ builder.Services.AddSingleton(sp => new ScheduledShoutStore(
 
 builder.Services.AddHostedService<ScheduledShoutService>();
 
+// 日志除了走 stdout（systemd 收进 journald），同时落一份到软件目录下的 logs\ ——
+// 压缩包里本来就带着那个目录，让它真的有东西，运维就不必先学一遍 journalctl。
+// 过滤器见 FileLoggerProvider：只收有用的那些，不收每条长轮询请求。
+builder.Logging.AddProvider(new FileLoggerProvider());
+
 // ======================== 限速 ========================
 //
 // 注册与登录是匿名开放的，而每个请求都要跑 10 万次 PBKDF2 —— 一次请求几十毫秒

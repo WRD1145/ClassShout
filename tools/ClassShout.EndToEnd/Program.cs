@@ -3087,6 +3087,34 @@ internal static class Program
             Check("日志文件名里带着日期（按天分文件）",
                 name == "classshout-2026-09-26.log",
                 name);
+
+            // —— 凭据不进文件日志 ——
+            //
+            // 两处真实存在：服务器首次启动的横幅里有「口令：xxx」（管理员口令），
+            // 教室端注册成功后界面上显示「口令：xxx —— 请抄给老师」。
+            // 界面显示口令是设计如此，但**落到磁盘**就多了一份暴露面：
+            // 日志会被打包发给别人看、会被备份拷走。
+            Check("日志里的口令会被抹掉（服务器启动横幅那种）",
+                !ClassShout.Core.Remote.AppLog.Redact("      口令：hw5F+4k3VzQ8^V%J!2c^").Contains("hw5F"),
+                ClassShout.Core.Remote.AppLog.Redact("      口令：hw5F+4k3VzQ8^V%J!2c^").Trim());
+
+            Check("日志里的口令会被抹掉（教室端那条「请抄给老师」）",
+                !ClassShout.Core.Remote.AppLog.Redact("口令：ABC12345 —— 请抄给老师，教师端绑定时要填这两项。").Contains("ABC12345"),
+                ClassShout.Core.Remote.AppLog.Redact("口令：ABC12345 —— 请抄给老师，教师端绑定时要填这两项。"));
+
+            Check("密钥与令牌同样抹掉",
+                !ClassShout.Core.Remote.AppLog.Redact("API Key: sk-abcdef123456").Contains("sk-abcdef123456")
+                && !ClassShout.Core.Remote.AppLog.Redact("token：abcdef123456").Contains("abcdef123456"),
+                ClassShout.Core.Remote.AppLog.Redact("API Key: sk-abcdef123456"));
+
+            Check("不带值的口令消息照旧留着（否则日志没法读）",
+                ClassShout.Core.Remote.AppLog.Redact("管理员口令已更新。") == "管理员口令已更新。",
+                ClassShout.Core.Remote.AppLog.Redact("管理员口令已更新。"));
+
+            Check("普通日志一行都不动",
+                ClassShout.Core.Remote.AppLog.Redact("教室端已启动，监听 192.168.2.124:45900")
+                    == "教室端已启动，监听 192.168.2.124:45900",
+                "原样保留");
         }
         finally
         {
