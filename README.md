@@ -788,6 +788,16 @@ export CLASSSHOUT_SCHEDULE_TICK_MS=5000
 或「系统没有配置代理（直连）」）—— 出问题时一眼能看出是系统代理没读到，
 还是地址填错了，而不是对着"连不上"猜。
 
+> **「跟随系统」是直接读 Windows 的系统代理设置的**（注册表里 `ProxyEnable` /
+> `ProxyServer` / `ProxyOverride`），而不是用 .NET 自带的解析。原因是踩过的坑：
+> `HttpClient.DefaultProxy` 只要发现**任何一个**代理环境变量，就会选那个
+> "只看环境变量"的实现，而它按 URL 的 scheme 取变量 —— https 请求只看
+> `HTTPS_PROXY`。代理软件常常只设了 `HTTP_PROXY`，于是 https 请求一个都不走代理，
+> 而 Windows 那份系统代理设置它同样不读。表现就是"浏览器能开 GitHub、
+> ClassShout 连不上"，且界面上没有任何线索。
+> 解析顺序：Windows 注册表 → 环境变量（含 `ALL_PROXY`、`NO_PROXY=*`）→
+> .NET 自带解析（保底）。
+
 其余取舍：
 
 - **只在你按下按钮时检查**，不做后台轮询。每次开应用都去外面问一次"有没有新版本"，
