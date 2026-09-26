@@ -83,7 +83,13 @@ async function doLogin() {
     authToken = result.token;
     currentUser = result.user;
     sessionStorage.setItem('classshout_token', authToken);
-    await enterConsole();
+
+    // 管理员进控制台，老师进"给自己班喊话"那一页 —— 两边共用同一个登录入口
+    if (currentUser && currentUser.isAdmin) {
+      await enterConsole();
+    } else {
+      await enterTeacherView();
+    }
   } catch (e) {
     setBanner('loginError', '无法连接服务器：' + e.message);
   }
@@ -100,11 +106,13 @@ async function doLogout() {
 function showLogin() {
   authToken = null;
   document.getElementById('consoleView').classList.add('hidden');
+  document.getElementById('teacherView').classList.add('hidden');
   document.getElementById('loginView').classList.remove('hidden');
 }
 
 async function enterConsole() {
   document.getElementById('loginView').classList.add('hidden');
+  document.getElementById('teacherView').classList.add('hidden');
   document.getElementById('consoleView').classList.remove('hidden');
   document.getElementById('whoami').textContent =
     (currentUser ? currentUser.displayName : '?') +
@@ -114,6 +122,107 @@ async function enterConsole() {
   await loadClassrooms();
   await loadUsers();
   await loadBindings();
+}
+
+/* ---------- 老师视图 ---------- */
+
+// 老师勾了哪几个班（key 是 UUID）。刷新列表时保留选择，
+// 否则每次刷新都要重新勾一遍。
+let teacherSelection = {};
+
+async function enterTeacherView() {
+  document.getElementById('loginView').classList.add('hidden');
+  document.getElementById('consoleView').classList.add('hidden');
+  document.getElementById('teacherView').classList.remove('hidden');
+
+  document.getElementById('teacherWhoami').textContent =
+    (currentUser ? currentUser.displayName : '?') +
+    (currentUser && currentUser.subject ? '（' + currentUser.subject + '）' : '') +
+    ' · 老师';
+
+  setBanner('teacherError', '');
+  setBanner('teacherResult', '');
+  await loadTeacherClassrooms();
+}
+
+async function loadTeacherClassrooms() {
+  const host = document.getElementById('teacherClassrooms');
+  const list = await apiJson('/api/teacher/classrooms');
+
+  if (!list || list.length === 0) {
+    host.innerHTML = '<div class="empty">管理员还没有把班级授权给你。' +
+      '让管理员在控制台的「教室」页点「授权给老师」，或者用分享链接把班级加到你的账号下。</div>';
+    return;
+  }
+
+  host.innerHTML =
+    '<table><thead><tr>' +
+    '<th></th><th>班级</th><th>状态</th><th>最近活动</th>' +
+    '</tr></thead><tbody>' +
+    list.map(c => {
+      const checked = teacherSelection[c.uuid] ? ' checked' : '';
+      const status = c.online
+        ? '<span class="chip ok">在线</span>'
+        : '<span class="chip">离线</span>';
+
+      return '<tr>' +
+        '<td><input type="checkbox" data-teacher-classroom="' + escapeAttr(c.uuid) + '"' + checked + '></td>' +
+        '<td>' + escapeHtml(c.name) + '</td>' +
+        '<td>' + status + '</td>' +
+        '<td>' + fmtTime(c.lastSeenAt) + '</td>' +
+        '</tr>';
+    }).join('') +
+    '</tbody></table>';
+
+  // 勾选状态记在 teacherSelection 里：列表一重建，勾过的还在
+  host.querySelectorAll('input[data-teacher-classroom]').forEach(input => {
+    input.addEventListener('change', () => {
+      teacherSelection[input.dataset.teacherClassroom] = input.checked;
+    });
+  });
+}
+
+function setTeacherSelection(value) {
+  document.querySelectorAll('input[data-teacher-classroom]').forEach(input => {
+    input.checked = value;
+    teacherSelection[input.dataset.teacherClassroom] = value;
+  });
+}
+
+async function submitTeacherShout() {
+  setBanner('teacherError', '');
+  setBanner('teacherResult', '');
+
+  const text = (document.getElementById('teacherText').value || '').trim();
+  const targets = Object.keys(teacherSelection).filter(uuid => teacherSelection[uuid]);
+
+  if (!text) {
+    setBanner('teacherError', '写一句要朗读的内容。');
+    return;
+  }
+
+  if (targets.length === 0) {
+    setBanner('teacherError', '至少勾一个班级。');
+    return;
+  }
+
+  const result = await apiJson('/api/teacher/shout', {
+    method: 'POST',
+    body: JSON.stringify({ targetUuids: targets, text: text })
+  });
+
+  if (!result || !result.ok) {
+    // 一间都没发出去时，把逐间的原因摆出来（"没授权""教室没了"是两回事）
+    const detail = result && result.results
+      ? result.results.filter(r => !r.ok).map(r => r.classroomName + '：' + r.error).join('；')
+      : '';
+
+    setBanner('teacherError', ((result && result.message) || '发送失败。') + (detail ? ' ' + detail : ''));
+    return;
+  }
+
+  setBanner('teacherResult', result.message);
+  await loadTeacherClassrooms();
 }
 
 /* ---------- 标签页 ---------- */
@@ -834,6 +943,13 @@ const actions = {
 
   'close-login-help': () => hideOverlay('loginHelpOverlay'),
 
+  // 老师视图
+  'teacher-shout': () => submitTeacherShout(),
+  'teacher-clear': () => { document.getElementById('teacherText').value = ''; },
+  'teacher-select-all': () => setTeacherSelection(true),
+  'teacher-select-none': () => setTeacherSelection(false),
+  'teacher-refresh': () => loadTeacherClassrooms(),
+
   'close-grant': () => closeGrant(),
   'submit-grant': () => submitGrant(),
   'close-reset': () => closeReset(),
@@ -865,11 +981,13 @@ document.addEventListener('click', (event) => {
   authToken = saved;
   try {
     currentUser = await apiJson('/api/auth/me');
+
     if (currentUser && currentUser.isAdmin) {
       await enterConsole();
+    } else if (currentUser) {
+      // 老师账号登进来是"给自己的班喊话"，不是"被拦在门外"
+      await enterTeacherView();
     } else {
-      // 教师账号不应进入管理控制台
-      setBanner('loginError', '该账号不是管理员，无法进入控制台。');
       showLogin();
     }
   } catch (e) {

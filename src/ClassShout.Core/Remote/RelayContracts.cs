@@ -56,6 +56,12 @@ public static class RelayPaths
     /// <summary>取消一条服务器定时。</summary>
     public const string AuthScheduleItem = "/api/auth/schedule/{0}";
 
+    /// <summary>老师（网页端）能喊话的班级。与 App 的「已授权教室」是同一套规则。</summary>
+    public const string TeacherClassrooms = "/api/teacher/classrooms";
+
+    /// <summary>老师（网页端）给自己的班喊话。</summary>
+    public const string TeacherShout = "/api/teacher/shout";
+
     /// <summary>教师端列出「管理员授权给我使用的教室」。登录后无需再填 UUID 与口令即可绑定。</summary>
     public const string TeacherAuthorized = "/api/teachers/authorized";
 

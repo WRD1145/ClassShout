@@ -48,3 +48,49 @@ public sealed record ConsoleSubjectRequest(
 /// <param name="Volume">音量。</param>
 /// <param name="Interrupt">是否打断教室里当前的朗读。</param>
 public sealed record ConsoleShoutRequest(string Uuid, string Text, int Rate = 1, int Volume = 100, bool Interrupt = true);
+
+/// <summary>老师（网页端）能喊话的一个班级。</summary>
+/// <param name="Uuid">教室 UUID。</param>
+/// <param name="Name">教室名。</param>
+/// <param name="Online">当前是否在线（最近一分半内有过动静）。</param>
+/// <param name="LastSeenAt">最近一次活动时间。</param>
+public sealed record TeacherClassroomDto(string Uuid, string Name, bool Online, DateTimeOffset LastSeenAt);
+
+/// <summary>老师从网页喊一句话。参数与 App 里那条完全一致。</summary>
+/// <param name="TargetUuids">发给哪几个班（可以多选）。</param>
+/// <param name="Text">要朗读的文字。</param>
+/// <param name="Rate">语速。</param>
+/// <param name="Volume">音量。</param>
+/// <param name="Interrupt">是否打断教室里当前的朗读。</param>
+/// <param name="Display">展示方式（留空＝用教室端默认）。</param>
+/// <param name="FontSize">字号档位。</param>
+/// <param name="HoldMs">停留时长。</param>
+/// <param name="Speak">是否朗读。</param>
+public sealed record TeacherWebShoutRequest(
+    IReadOnlyList<string> TargetUuids,
+    string Text,
+    int Rate = 1,
+    int Volume = 100,
+    bool Interrupt = true,
+    string? Display = null,
+    string? FontSize = null,
+    int HoldMs = Protocol.ShoutHoldDurations.Unspecified,
+    bool Speak = true);
+
+/// <summary>逐间的结果 —— 有一间没送到时要能说清是哪一间。</summary>
+/// <param name="Uuid">教室 UUID。</param>
+/// <param name="ClassroomName">教室名。</param>
+/// <param name="Ok">这一间是否发出去了。</param>
+/// <param name="Error">失败原因。</param>
+public sealed record TeacherShoutResult(string Uuid, string ClassroomName, bool Ok, string? Error);
+
+/// <summary>网页喊话的结果。</summary>
+/// <param name="Ok">至少发出去一间。</param>
+/// <param name="Sent">成功几间。</param>
+/// <param name="Results">逐间结果。</param>
+/// <param name="Message">给人看的一句话。</param>
+public sealed record TeacherWebShoutResponse(
+    bool Ok,
+    int Sent,
+    IReadOnlyList<TeacherShoutResult> Results,
+    string Message);

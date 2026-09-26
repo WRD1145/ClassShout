@@ -635,6 +635,126 @@ app.MapGet(RelayPaths.TeacherAuthorized, ([FromHeader(Name = RelayPaths.AuthToke
     return Results.Ok(result);
 });
 
+// ======================== 教师：在网页上给自己的班喊话 ========================
+//
+// 为什么要有这一块：老师不一定装着 App、也不一定带着手机 —— 站在教室那台电脑前
+// 打开网页就能喊一句，比"回办公室拿手机"省事得多。控制台原本只对管理员开放，
+// 普通老师登进来只会看到一句"该账号不是管理员"。
+//
+// 权限与 App 完全一致：只喊得了「管理员授权给自己」的班级（内置管理员不受限）。
+// 来源也照旧由服务器算（科目按各个班取），客户端填不了。
+
+app.MapGet(RelayPaths.TeacherClassrooms, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var cutoff = DateTimeOffset.UtcNow - OnlineWindow;
+
+    var list = ShoutableClassrooms(profile)
+        .Select(record => new TeacherClassroomDto(
+            record.Uuid,
+            record.Name,
+            record.LastSeenAt >= cutoff,
+            record.LastSeenAt))
+        .OrderBy(item => item.Name, StringComparer.CurrentCulture)
+        .ToList();
+
+    return Results.Ok(list);
+});
+
+/// <summary>
+/// 老师从网页给自己的（一个或多个）班喊一句话。
+///
+/// 与教师端 App 走的是同一条转发通路（同一个 MessageHub、同一个信封格式），
+/// 所以教室端不必为"来自网页"多一种情况。
+/// </summary>
+app.MapPost(RelayPaths.TeacherShout, (
+    TeacherWebShoutRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Text))
+    {
+        return Results.BadRequest(new TeacherWebShoutResponse(false, 0, [], "喊话内容不能为空。"));
+    }
+
+    var allowed = ShoutableClassrooms(profile).ToDictionary(record => record.Uuid, StringComparer.OrdinalIgnoreCase);
+
+    if (request.TargetUuids.Count == 0)
+    {
+        return Results.BadRequest(new TeacherWebShoutResponse(false, 0, [], "请至少选择一个班级。"));
+    }
+
+    var text = request.Text.Trim();
+    var sent = 0;
+    var results = new List<TeacherShoutResult>();
+
+    foreach (var uuid in request.TargetUuids.Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        if (!allowed.TryGetValue(uuid, out var classroom))
+        {
+            // 不是"这个班不存在"，而是"这个班不归你喊" —— 与绑定同一条规则，
+            // 换一条路（网页）进来也一样拦。
+            results.Add(new TeacherShoutResult(uuid, uuid, false, "这个班级没有授权给你。"));
+            continue;
+        }
+
+        hub.Publish(MessageHub.ClassroomKey(classroom.Uuid), new RelayEnvelope
+        {
+            Kind = RelayKinds.TextShout,
+
+            // 来源由服务器算，科目按**这个班**取 —— 与 App 那条路同一个规则
+            From = profile.ShoutNameFor(classroom.Uuid),
+            Text = text,
+            Rate = request.Rate,
+            Volume = request.Volume,
+            Interrupt = request.Interrupt,
+            Display = request.Display,
+            FontSize = request.FontSize,
+            HoldMs = request.HoldMs,
+            Speak = request.Speak,
+        });
+
+        sent++;
+        results.Add(new TeacherShoutResult(classroom.Uuid, classroom.Name, true, null));
+    }
+
+    logger.LogInformation("老师 {Teacher} 从网页向 {Count} 个班级喊话：{Text}",
+        profile.DisplayName, sent, text);
+
+    var message = sent switch
+    {
+        0 => "一条都没发出去。",
+        1 => $"已向「{results.First(r => r.Ok).ClassroomName}」喊话。",
+        _ => $"已向 {sent} 个班级喊话。",
+    };
+
+    return Results.Ok(new TeacherWebShoutResponse(sent > 0, sent, results, message));
+}).RequireRateLimiting("auth");
+
+/// <summary>这位老师可以喊话的班级（内置管理员 = 全部）。</summary>
+List<ClassroomRecord> ShoutableClassrooms(UserProfile profile)
+{
+    if (profile.Id == AdminUserId)
+    {
+        return store.ListForConsole().ToList();
+    }
+
+    return bindings.ClassroomsOf(profile.Id)
+        .Select(uuid => store.Get(uuid))
+        .OfType<ClassroomRecord>()
+        .ToList();
+}
+
 // ======================== 教师端：绑定 ========================
 
 app.MapPost(RelayPaths.BindTeacher, (

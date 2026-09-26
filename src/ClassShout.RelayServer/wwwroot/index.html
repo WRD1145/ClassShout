@@ -13,12 +13,12 @@
   <div class="card login-card">
     <div class="logo-lg">C</div>
     <h1>ClassShout 中继服务器</h1>
-    <div class="hint">管理控制台 · 请使用管理员账号登录</div>
+    <div class="hint">管理员登录后进控制台；老师登录后可以给自己的班喊话</div>
 
     <div id="loginError" class="banner error hidden"></div>
 
     <label for="account">账号</label>
-    <input id="account" type="text" autocomplete="username" placeholder="admin">
+    <input id="account" type="text" autocomplete="username" placeholder="管理员账号，或老师自己的账号">
 
     <label for="password">口令</label>
     <input id="password" type="password" autocomplete="current-password" placeholder="初始口令见服务器日志与 relay-config.json">
@@ -27,6 +27,55 @@
       <button class="primary w-full" data-action="login">登录</button>
     </div>
   </div>
+</div>
+
+<!-- ==================== 老师视图：给自己的班喊话 ==================== -->
+<!--
+  老师不一定装着 App、也不一定带着手机 —— 站在教室那台电脑前打开网页就能喊一句。
+  权限与 App 完全一致：只喊得了管理员授权给自己的班级。
+-->
+<div id="teacherView" class="hidden">
+  <div class="appbar">
+    <div class="logo">C</div>
+    <div>
+      <h1>ClassShout</h1>
+      <div class="sub" id="teacherWhoami">—</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="outlined small" data-action="logout">退出登录</button>
+  </div>
+
+  <main class="wrap">
+    <section class="card">
+      <h2>喊话</h2>
+      <p>写一句话，勾上要发给的班级，点发送 —— 教室电脑会用系统语音念出来。
+        语音播报、字号这些按教室端的默认设置走。</p>
+
+      <div id="teacherError" class="banner error hidden"></div>
+      <div id="teacherResult" class="banner ok hidden"></div>
+
+      <label for="teacherText">要朗读的内容</label>
+      <input id="teacherText" type="text" autocomplete="off" placeholder="例如 同学们请安静，现在讲第三题">
+
+      <div class="mt-20">
+        <div class="row-actions">
+          <button class="primary" data-action="teacher-shout">发送到选中的班级</button>
+          <button class="text small" data-action="teacher-clear">清空</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>我的班级</h2>
+      <p>这里列出的是管理员授权给你的班级。教室离线时消息会排队，等它上线就送到。</p>
+      <div id="teacherClassrooms"></div>
+      <div class="row-actions mt-20">
+        <button class="outlined small" data-action="teacher-select-all">全选</button>
+        <button class="outlined small" data-action="teacher-select-none">全不选</button>
+        <button class="text small" data-action="teacher-refresh">刷新</button>
+      </div>
+    </section>
+  </main>
 </div>
 
 <!-- ==================== 控制台 ==================== -->

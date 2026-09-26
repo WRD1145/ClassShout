@@ -1129,7 +1129,162 @@ internal static class Program
             await fallbackBroadcaster.ResetAsync();
         }
 
-        // ---------- 8c. 服务器上的定时喊话 ----------
+        // ---------- 8c. 老师从网页给自己的班喊话 ----------
+        //
+        // 老师不一定装着 App、也不一定带着手机 —— 站在教室那台电脑前打开网页就能喊一句。
+        // 权限必须与 App 完全一致：只喊得了管理员授权给自己的班级，
+        // 否则"网页"就成了绕过授权的一条侧门。
+        if (!string.IsNullOrEmpty(adminToken))
+        {
+            using var webHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            webHttp.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, teacherSettings.AuthToken);
+
+            // 此刻老师对 uuid 的授权已经被上一段撤掉了 → 列表里应当是空的
+            var beforeGrant = await webHttp.GetFromJsonAsync<List<TeacherClassroomDto>>(
+                $"{root}{RelayPaths.TeacherClassrooms}", JsonOptions) ?? [];
+
+            Check("老师登进网页时看不到任何未授权的班级",
+                beforeGrant.Count == 0,
+                $"看到 {beforeGrant.Count} 个");
+
+            var noTarget = await webHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.TeacherShout}",
+                new TeacherWebShoutRequest([], "空目标"),
+                JsonOptions);
+
+            Check("网页喊话：没勾班级会被拒",
+                (int)noTarget.StatusCode == 400,
+                $"HTTP {(int)noTarget.StatusCode}");
+
+            var emptyText = await webHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.TeacherShout}",
+                new TeacherWebShoutRequest([uuid], "   "),
+                JsonOptions);
+
+            Check("网页喊话：空内容会被拒",
+                (int)emptyText.StatusCode == 400,
+                $"HTTP {(int)emptyText.StatusCode}");
+
+            // 未授权就往里发：要明确拒绝，而不是发出去
+            var forbiddenText = $"越权的网页喊话 {Guid.NewGuid():N}"[..24];
+            var forbiddenArrived = false;
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == forbiddenText)
+                {
+                    forbiddenArrived = true;
+                }
+            };
+
+            var forbidden = await webHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.TeacherShout}",
+                new TeacherWebShoutRequest([uuid], forbiddenText),
+                JsonOptions);
+
+            var forbiddenBody = await forbidden.Content.ReadFromJsonAsync<TeacherWebShoutResponse>(JsonOptions);
+
+            await Task.Delay(1500);
+
+            Check("网页喊话：没授权的班级发不出去，并说明原因",
+                forbiddenBody is { Ok: false, Sent: 0 } &&
+                forbiddenBody.Results.Any(r => r.Error?.Contains("没有授权") == true),
+                forbiddenBody is null ? "没有结果" : string.Join("；", forbiddenBody.Results.Select(r => r.Error ?? "ok")));
+
+            Check("网页喊话：越权的那条确实没有进教室", !forbiddenArrived, "教室里没有出现这条");
+
+            // 授权之后再来一次：这回要真的送到，且来源是老师自己的名字
+            using var adminWebHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            adminWebHttp.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, adminToken);
+
+            var teacherProfileId = (await adminWebHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [])
+                .FirstOrDefault(u => u.Username == accountName)?.Id;
+
+            await adminWebHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.ConsoleBindings}",
+                new GrantBindingRequest(teacherProfileId ?? string.Empty, uuid),
+                JsonOptions);
+
+            var afterGrant = await webHttp.GetFromJsonAsync<List<TeacherClassroomDto>>(
+                $"{root}{RelayPaths.TeacherClassrooms}", JsonOptions) ?? [];
+
+            Check("授权之后网页上就能看到这个班了",
+                afterGrant.Any(item => item.Uuid == uuid),
+                string.Join("、", afterGrant.Select(item => $"{item.Name}{(item.Online ? "(在线)" : "(离线)")}")));
+
+            var webText = $"网页喊话 {Guid.NewGuid():N}"[..22];
+            var webReceived = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text == webText)
+                {
+                    webReceived.TrySetResult(envelope.From ?? string.Empty);
+                }
+            };
+
+            var webShout = await webHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.TeacherShout}",
+                new TeacherWebShoutRequest([uuid], webText, Volume: 88, Speak: false),
+                JsonOptions);
+
+            var webBody = await webShout.Content.ReadFromJsonAsync<TeacherWebShoutResponse>(JsonOptions);
+
+            var webFrom = await Task.WhenAny(webReceived.Task, Task.Delay(10_000)) == webReceived.Task
+                ? webReceived.Task.Result
+                : null;
+
+            Check("网页喊话能送到教室（来源是老师自己，不是客户端自填）",
+                webFrom == "数学张老师",
+                $"From={webFrom ?? "(10 秒内没收到)"}");
+
+            Check("网页喊话的结果逐间报回来",
+                webBody is { Ok: true, Sent: 1 } && webBody.Results.Count == 1 && webBody.Results[0].Ok,
+                webBody?.Message ?? "(没有结果)");
+
+            // 内置管理员也能用同一套接口（它的班级是全部）
+            var adminList = await adminWebHttp.GetFromJsonAsync<List<TeacherClassroomDto>>(
+                $"{root}{RelayPaths.TeacherClassrooms}", JsonOptions) ?? [];
+
+            Check("内置管理员用同一套接口时看到的是全部班级",
+                adminList.Count >= 2,
+                $"看到 {adminList.Count} 个");
+
+            // 未登录一律拒绝
+            using var anonymous = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var anon = await anonymous.GetAsync($"{root}{RelayPaths.TeacherClassrooms}");
+
+            Check("网页喊话接口没登录一律拒绝",
+                (int)anon.StatusCode == 401,
+                $"HTTP {(int)anon.StatusCode}");
+
+            // 恢复现场：后面"定时不能绕过授权"那一段要靠"这位老师没有授权"这个前提，
+            // 所以这一段用完必须把授权撤回去 —— 测试之间不能互相留状态。
+            using var revokeRequest = new HttpRequestMessage(
+                HttpMethod.Delete,
+                $"{root}{RelayPaths.ConsoleBindings}?userId={Uri.EscapeDataString(teacherProfileId ?? string.Empty)}&uuid={Uri.EscapeDataString(uuid)}");
+
+            await adminWebHttp.SendAsync(revokeRequest);
+
+            var afterRevoke = await webHttp.GetFromJsonAsync<List<TeacherClassroomDto>>(
+                $"{root}{RelayPaths.TeacherClassrooms}", JsonOptions) ?? [];
+
+            Check("撤销授权之后网页上又看不到了（现场已恢复）",
+                afterRevoke.Count == 0,
+                $"看到 {afterRevoke.Count} 个");
+
+            // 还要把老师的绑定会话也恢复：撤销授权的实现会顺带解绑这个班里属于他的会话，
+            // 而后面（中继图片、多班那些）用的就是这一条绑定 ——
+            // 不恢复的话，它们会因为令牌失效而静默地什么都收不到。
+            var (rebindOk, rebindError) = await teacher.BindAsync(uuid, secret, "数学张老师");
+
+            Check("撤销授权之后重新绑定回来（后续用例还要用这条链路）",
+                rebindOk,
+                rebindError ?? "已重新绑定");
+        }
+
+        // ---------- 8d. 服务器上的定时喊话 ----------
         //
         // 这是"教师端不在后台运行也能发"的那条路：任务存在服务器上，到点由服务器自己发。
         // 自检用的服务器把检查间隔调到了 200 毫秒（CLASSSHOUT_SCHEDULE_TICK_MS），
@@ -1407,7 +1562,7 @@ internal static class Program
                 afterCancel.FirstOrDefault(item => item.Id == cancelItem?.Id)?.Status ?? "(找不到)");
         }
 
-        // ---------- 8d. 控制台集体喊话 ----------
+        // ---------- 8e. 控制台集体喊话 ----------
         //
         // "所有在线教室"这个概念得真的压一遍：判在线的依据是教室记录上的最近活动时间，
         // 而两间教室此刻都在长轮询 —— 少发一间是那种当场就会被发现的尴尬。
