@@ -2572,6 +2572,54 @@ internal static class Program
             systemProxy.Description.Contains("系统"),
             systemProxy.Description);
 
+        // 这一条正是踩过的坑：.NET 自带的解析在"系统代理开着、但只设了 HTTP_PROXY"
+        // 的机器上会把 https 请求判成直连，于是应用连不上而浏览器能开。
+        // 现在跟随系统会去读 Windows 的系统代理设置（注册表），这里注入一份假的来断言。
+        var fakeSystem = UpdateProxy.Resolve(
+            UpdateProxyMode.System,
+            null,
+            "https://api.github.com",
+            () => (true, "127.0.0.1:7890", "localhost;127.*;<local>"));
+
+        Check("代理：系统代理开着时，https 请求也会走它（这是踩过的坑）",
+            fakeSystem.UseProxy && fakeSystem.Address.Contains("127.0.0.1:7890"),
+            fakeSystem.Description);
+
+        var fakeOff = UpdateProxy.Resolve(
+            UpdateProxyMode.System,
+            null,
+            "https://api.github.com",
+            () => (false, "127.0.0.1:7890", null));
+
+        Check("代理：系统代理关着时不会硬套上那个地址",
+            !fakeOff.UseProxy,
+            fakeOff.Description);
+
+        Check("代理：按协议分写的设置能取对那一段",
+            UpdateProxy.ParseWindowsProxyServer("http=1.2.3.4:8080;https=5.6.7.8:9090", "https://api.github.com")
+                == "http://5.6.7.8:9090",
+            UpdateProxy.ParseWindowsProxyServer("http=1.2.3.4:8080;https=5.6.7.8:9090", "https://api.github.com") ?? "(空)");
+
+        Check("代理：https 没单独配时用 http 那一段（http 代理也能转发 https）",
+            UpdateProxy.ParseWindowsProxyServer("http=1.2.3.4:8080", "https://api.github.com")
+                == "http://1.2.3.4:8080",
+            UpdateProxy.ParseWindowsProxyServer("http=1.2.3.4:8080", "https://api.github.com") ?? "(空)");
+
+        Check("代理：socks 那一段也认",
+            UpdateProxy.ParseWindowsProxyServer("socks=127.0.0.1:1080", "https://api.github.com")
+                == "socks5://127.0.0.1:1080",
+            UpdateProxy.ParseWindowsProxyServer("socks=127.0.0.1:1080", "https://api.github.com") ?? "(空)");
+
+        Check("代理：没写 scheme 的 host:port 会补上 http://",
+            UpdateProxy.ParseWindowsProxyServer("127.0.0.1:7890", "https://api.github.com")
+                == "http://127.0.0.1:7890",
+            UpdateProxy.ParseWindowsProxyServer("127.0.0.1:7890", "https://api.github.com") ?? "(空)");
+
+        Check("代理：设置里是空的就别编一个出来",
+            UpdateProxy.ParseWindowsProxyServer("   ", "https://api.github.com") is null
+            && UpdateProxy.ParseWindowsProxyServer(null, "https://api.github.com") is null,
+            "返回了 null");
+
         Check("代理：选了自定义却没填地址，会退回跟随系统（不会假装走了代理）",
             new UpdateSettings { ProxyMode = UpdateProxyMode.Custom, ProxyUrl = "  " }.Normalized().ProxyMode == UpdateProxyMode.System,
             "退回跟随系统");

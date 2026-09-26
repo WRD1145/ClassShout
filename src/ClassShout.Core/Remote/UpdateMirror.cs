@@ -206,13 +206,18 @@ public readonly record struct ProxyResolution(bool UseProxy, IWebProxy? Proxy, s
 /// <summary>
 /// 「这次请求走不走代理」的解析。
 ///
-/// 为什么需要它：教室里/办公室里常常挂着代理（而且要挂才能出去），
-/// 而 .NET 的 HttpClient 默认走系统代理解析 —— 在**某些环境里并不生效**
-/// （代理软件只设了环境变量、或者进程从桌面启动时没继承到那些变量）。
-/// 表现就是"浏览器能开 GitHub、应用却连不上"，而且没有任何提示。
+/// 为什么需要它，以及为什么不能只靠 .NET 自带的解析：
 ///
-/// 所以这里把三件事说清楚：跟随系统、不用、自己填；并且把**实际解析出来的地址**
-/// 显示在界面上 —— 出问题时一眼能看出"系统代理没读到"还是"地址填错了"。
+/// 课堂上/办公室里常常挂着代理（而且要挂才能出去 GitHub），而 .NET 的
+/// <c>HttpClient.DefaultProxy</c> 在装了代理的机器上**未必走代理** ——
+/// 它在存在代理环境变量时会选那个"只看环境变量"的实现
+/// （<c>HttpEnvironmentProxy</c>），而它按 URL 的 scheme 取变量：
+/// https 请求只看 <c>HTTPS_PROXY</c>。代理软件往往只设了 <c>HTTP_PROXY</c>，
+/// 于是 https 请求一个都不走代理 —— 表现就是"浏览器能开 GitHub、ClassShout 连不上"，
+/// 而且没有任何提示。Windows 的"系统代理"（注册表里那份）它同样不读。
+///
+/// 所以这里按可靠程度依次来：Windows 注册表 → 环境变量 → .NET 自带解析（保底），
+/// 并把**实际解析出来的地址**显示在界面上，让"到底走没走代理"一眼可见。
 /// </summary>
 public static class UpdateProxy
 {
@@ -222,7 +227,12 @@ public static class UpdateProxy
     /// <param name="mode">用户选的模式。</param>
     /// <param name="customUrl">自定义代理地址，例如 http://127.0.0.1:7890。</param>
     /// <param name="probeUrl">用来问"系统代理会把它指到哪"，随便一个 https 地址即可。</param>
-    public static ProxyResolution Resolve(UpdateProxyMode mode, string? customUrl, string probeUrl = "https://api.github.com")
+    /// <param name="windowsProxyReader">只给自检用：替换"读 Windows 系统代理"这一步。</param>
+    public static ProxyResolution Resolve(
+        UpdateProxyMode mode,
+        string? customUrl,
+        string probeUrl = "https://api.github.com",
+        Func<(bool Enabled, string? Server, string? Bypass)>? windowsProxyReader = null)
     {
         if (mode == UpdateProxyMode.None)
         {
@@ -238,7 +248,8 @@ public static class UpdateProxy
                 return new ProxyResolution(false, null, "自定义代理：还没填地址，按直连处理", string.Empty);
             }
 
-            if (!Uri.TryCreate(address, UriKind.Absolute, out var uri))
+            if (!LooksLikeProxyAddress(address) ||
+                !Uri.TryCreate(NormalizeProxyAddress(address), UriKind.Absolute, out var uri))
             {
                 return new ProxyResolution(false, null, $"自定义代理地址看不懂：{address}", string.Empty);
             }
@@ -246,8 +257,35 @@ public static class UpdateProxy
             return new ProxyResolution(true, new WebProxy(uri), $"自定义代理 → {uri}", uri.ToString());
         }
 
-        // 跟随系统。GetSystemWebProxy 在 Windows 上读系统（WinINET）设置，
-        // 在 Linux/macOS 上读 http_proxy / https_proxy / all_proxy 环境变量。
+        // —— 跟随系统 ——
+
+        // 1) Windows：读系统代理设置。代理软件（Clash / v2ray 等）的"系统代理"开关
+        //    写的就是这里，而 .NET 自带的解析根本不读它。
+        //    自检会注入一份假的读取器，所以这里走的是委托而不是直接调用。
+        if (OperatingSystem.IsWindows())
+        {
+            var readWindows = windowsProxyReader ?? ReadWindowsSystemProxy;
+
+#pragma warning disable CA1416 // 上面那行已经挡过平台；分析器看不出一份委托背后是不是 Windows 专有实现
+            var (enabled, server, bypass) = readWindows();
+#pragma warning restore CA1416
+
+            if (enabled && ParseWindowsProxyServer(server, probeUrl) is { Length: > 0 } windowsAddress &&
+                Uri.TryCreate(windowsAddress, UriKind.Absolute, out var windowsUri))
+            {
+                var proxy = new WebProxy(windowsUri) { BypassList = BuildBypassList(bypass) };
+                return new ProxyResolution(true, proxy, $"系统代理 → {windowsUri}", windowsUri.ToString());
+            }
+        }
+
+        // 2) 环境变量。Linux / macOS 上主要靠它；Windows 上代理软件也可能只设了这些。
+        if (ResolveFromEnvironment(probeUrl) is { Length: > 0 } envAddress &&
+            Uri.TryCreate(envAddress, UriKind.Absolute, out var envUri))
+        {
+            return new ProxyResolution(true, new WebProxy(envUri), $"环境变量代理 → {envUri}", envUri.ToString());
+        }
+
+        // 3) .NET 自带的解析（保底；它可能什么都不返回）
         try
         {
             var system = WebRequest.GetSystemWebProxy();
@@ -265,6 +303,209 @@ public static class UpdateProxy
         catch (Exception ex) when (ex is PlatformNotSupportedException or NotSupportedException or UriFormatException)
         {
             return new ProxyResolution(false, null, $"读系统代理失败（{ex.Message}），按直连处理", string.Empty);
+        }
+    }
+
+    /// <summary>
+    /// 把系统代理设置里的那一串解析成当前这个地址该用的代理。
+    ///
+    /// 它可能是：
+    ///   · 单个地址 <c>127.0.0.1:7890</c>（最常见）；
+    ///   · 按协议分开写 <c>http=1.2.3.4:8080;https=5.6.7.8:9090</c>；
+    ///   · 带 socks 前缀 <c>socks=127.0.0.1:1080</c>。
+    /// 只取当前 probe 协议对应的那一段；都没有就返回 null（表示"别用代理"）。
+    /// </summary>
+    /// <param name="raw">系统设置里的 ProxyServer 字符串。</param>
+    /// <param name="probeUrl">要访问的地址（用来决定取哪一段）。</param>
+    public static string? ParseWindowsProxyServer(string? raw, string probeUrl)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var text = raw.Trim();
+        var isHttps = probeUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+        if (!text.Contains('=', StringComparison.Ordinal))
+        {
+            // 单个地址：补上 scheme（注册表里存的通常就是 host:port）
+            return NormalizeProxyAddress(text);
+        }
+
+        string? https = null;
+        string? http = null;
+        string? socks = null;
+
+        foreach (var part in text.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var split = part.Split('=', 2);
+
+            if (split.Length != 2)
+            {
+                continue;
+            }
+
+            var scheme = split[0].Trim().ToLowerInvariant();
+            var value = split[1].Trim();
+
+            switch (scheme)
+            {
+                case "https":
+                    https = value;
+                    break;
+
+                case "http":
+                    http = value;
+                    break;
+
+                case "socks":
+                case "socks5":
+                    socks = value;
+                    break;
+            }
+        }
+
+        if (isHttps && https is { Length: > 0 })
+        {
+            return NormalizeProxyAddress(https);
+        }
+
+        if (!isHttps && http is { Length: > 0 })
+        {
+            return NormalizeProxyAddress(http);
+        }
+
+        // https 没单独配时用 http 那一份（http 代理同样能转发 https 请求，靠 CONNECT）
+        if (isHttps && http is { Length: > 0 })
+        {
+            return NormalizeProxyAddress(http);
+        }
+
+        // 只剩 socks 也认：.NET 6 起 SocketsHttpHandler 支持 socks5
+        return socks is { Length: > 0 } ? NormalizeProxyAddress(socks, "socks5") : null;
+    }
+
+    /// <summary>
+    /// 这一串看起来像不像一个代理地址。
+    ///
+    /// 为什么光靠 Uri.TryCreate 不够：`http://这不是地址` 在 Uri 眼里"语法合法"
+    /// （它只是把主机名当成一个奇怪的名字），于是用户把"这不是地址"填进去时，
+    /// 程序会一本正经地拿它当代理用，然后所有请求都失败在一个没人看得懂的地方。
+    /// </summary>
+    private static bool LooksLikeProxyAddress(string text)
+    {
+        if (text.Contains("://", StringComparison.Ordinal))
+        {
+            return Uri.TryCreate(text, UriKind.Absolute, out _);
+        }
+
+        // host[:port]：主机只允许字母数字、点、横线、下划线（IPv4、域名、localhost 都覆盖）
+        var parts = text.Split(':', 2);
+        var host = parts[0];
+
+        if (host.Length == 0 || !host.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_'))
+        {
+            return false;
+        }
+
+        return parts.Length == 1 || (int.TryParse(parts[1], out var port) && port is > 0 and <= 65535);
+    }
+
+    /// <summary>给一个没写 scheme 的 host:port 补上默认的 scheme。</summary>
+    private static string NormalizeProxyAddress(string address, string fallbackScheme = "http")
+    {
+        var text = address.Trim();
+
+        if (text.Contains("://", StringComparison.Ordinal))
+        {
+            return text;
+        }
+
+        return $"{fallbackScheme}://{text}";
+    }
+
+    /// <summary>把系统的"例外列表"变成 WebProxy 认的正则列表。</summary>
+    private static string[] BuildBypassList(string? bypassRaw)
+    {
+        if (string.IsNullOrWhiteSpace(bypassRaw))
+        {
+            return [];
+        }
+
+        var patterns = new List<string>();
+
+        foreach (var item in bypassRaw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            // <local> 是 IE 的"本地地址不走代理"，在 WebProxy 里没有对应写法，跳过
+            if (item.StartsWith('<'))
+            {
+                continue;
+            }
+
+            // 通配符换成正则：127.* → 127\..*，localhost → 原样
+            var pattern = System.Text.RegularExpressions.Regex.Escape(item)
+                .Replace("\\*", ".*", StringComparison.Ordinal);
+
+            patterns.Add("^" + pattern + "$");
+        }
+
+        return [.. patterns];
+    }
+
+    /// <summary>环境变量里的代理（按 scheme 取，与 .NET 的约定一致）。</summary>
+    private static string? ResolveFromEnvironment(string probeUrl)
+    {
+        static string? Read(string name)
+        {
+            var value = Environment.GetEnvironmentVariable(name)
+                        ?? Environment.GetEnvironmentVariable(name.ToLowerInvariant());
+
+            return string.IsNullOrWhiteSpace(value) ? null : NormalizeProxyAddress(value);
+        }
+
+        var noProxy = Environment.GetEnvironmentVariable("NO_PROXY")
+                      ?? Environment.GetEnvironmentVariable("no_proxy");
+
+        // 例外列表里有 * 就等于"所有地址都不走代理"
+        if (noProxy is { Length: > 0 } && noProxy.Contains('*', StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return probeUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? Read("HTTPS_PROXY") ?? Read("ALL_PROXY")
+            : Read("HTTP_PROXY") ?? Read("ALL_PROXY");
+    }
+
+    /// <summary>
+    /// 读 Windows 的"系统代理"设置（代理软件的开关写的就是这里）。
+    ///
+    /// 标注 SupportedOSPlatform：注册表 API 在别的平台上会抛。
+    /// 调用处已经用 OperatingSystem.IsWindows() 挡过一道，这个标注是给分析器看的。
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static (bool Enabled, string? Server, string? Bypass) ReadWindowsSystemProxy()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Internet Settings");
+
+            if (key is null)
+            {
+                return (false, null, null);
+            }
+
+            var enabled = key.GetValue("ProxyEnable") is int flag && flag != 0;
+            var server = key.GetValue("ProxyServer") as string;
+            var bypass = key.GetValue("ProxyOverride") as string;
+
+            return (enabled, server, bypass);
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            return (false, null, null);
         }
     }
 }
