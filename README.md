@@ -457,7 +457,20 @@ After=network.target
 Type=simple
 User=classshout
 WorkingDirectory=/opt/classshout
-ExecStart=/opt/classshout/ClassShout.RelayServer --urls http://127.0.0.1:8080
+
+# 程序放在 app/ 子目录里，状态文件留在 /opt/classshout —— 升级就是解压覆盖 app/。
+# 这几行必须显式写：服务端默认按**程序所在目录**找状态文件，
+# 程序搬到子目录之后那个默认值就变成了"往一个 root 拥有的目录里写"，
+# 启动自检会直接拒绝启动（status=78，日志里会写明是哪一项不可用）。
+Environment=CLASSSHOUT_CONFIG=/opt/classshout/relay-config.json
+Environment=CLASSSHOUT_USER_STATE=/opt/classshout/relay-users.json
+Environment=CLASSSHOUT_RELAY_STATE=/opt/classshout/relay-state.json
+Environment=CLASSSHOUT_BINDING_STATE=/opt/classshout/relay-bindings.json
+Environment=CLASSSHOUT_SHARE_STATE=/opt/classshout/relay-shares.json
+Environment=CLASSSHOUT_SCHEDULE_STATE=/opt/classshout/relay-schedule.json
+Environment=CLASSSHOUT_SCHEDULE_AUDIO=/opt/classshout/relay-schedule-audio
+
+ExecStart=/opt/classshout/app/ClassShout.RelayServer/ClassShout.RelayServer --urls http://127.0.0.1:8080
 Restart=always
 RestartSec=5
 # 78 是服务器在"状态文件权限不对/内容损坏"时主动返回的退出码。
@@ -477,13 +490,17 @@ sudo mkdir -p /opt/classshout
 sudo chown classshout:classshout /opt/classshout
 sudo chmod 750 /opt/classshout
 
-# 2. 把发布产物拷进去
-sudo cp ClassShout.RelayServer /opt/classshout/
-sudo chown classshout:classshout /opt/classshout/ClassShout.RelayServer
-sudo chmod 755 /opt/classshout/ClassShout.RelayServer
+# 2. 解压发布产物到 app/（1.10.0 起是压缩包，不再是单个文件）
+sudo mkdir -p /opt/classshout/app
+sudo tar -xzf ClassShout.RelayServer-linux-x64.tar.gz -C /opt/classshout/app
+
+#    ⚠ Windows 上打的 tar 不保留 Unix 权限位，解压出来的可执行文件是 0666，
+#    不补这一步 systemd 会报 status=203/EXEC（Permission denied），
+#    而手动跑则是一句语焉不详的 "Permission denied"。
+sudo chmod +x /opt/classshout/app/ClassShout.RelayServer/ClassShout.RelayServer
 
 # 3. 让"首次启动"就以服务账号的身份发生，然后按 Ctrl+C 退出
-sudo -u classshout /opt/classshout/ClassShout.RelayServer --urls http://127.0.0.1:8080
+sudo -u classshout /opt/classshout/app/ClassShout.RelayServer/ClassShout.RelayServer --urls http://127.0.0.1:8080
 
 # 4. 收紧状态文件权限：口令是明文存的，只给宿主自己看
 #    （新生成的文件本来就按 600 创建，这一步是给手工放宽过的机器兜底）
