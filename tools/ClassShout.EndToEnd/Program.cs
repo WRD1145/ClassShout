@@ -304,6 +304,7 @@ internal static class Program
         // ---------- 3t. 日志按天分文件、只留 7 天 ----------
         AssertLogRetention();
         AssertLogLevels();
+        AssertShoutTargetCard();
 
         // ---------- 3n. 发送队列 ----------
         await AssertShoutQueueAsync();
@@ -3033,6 +3034,103 @@ internal static class Program
             Check("卡片：点「下载新版」打开的就是本平台的附件地址",
                 openedUrls.Count == 1 && openedUrls[0].EndsWith("ClassShout.Classroom-win-x64.zip", StringComparison.Ordinal),
                 openedUrls.Count == 1 ? openedUrls[0] : $"打开了 {openedUrls.Count} 个地址");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", originalDataDir);
+        }
+    }
+
+    /// <summary>
+    /// 文字页「这条发给谁」那张卡。
+    ///
+    /// 这张卡的可见性以前是"已保存的服务器教室数量 > 1"——于是只连局域网时
+    /// （那份列表是服务器绑定用的，平时是空的）整张卡都不出现，
+    /// 而"这条会发到哪"恰恰是老师最想确认的一句话。
+    /// 现在有一间就显示，并且写清是经服务器发的还是局域网直连。
+    /// </summary>
+    private static void AssertShoutTargetCard()
+    {
+        var originalDataDir = Environment.GetEnvironmentVariable("CLASSSHOUT_DATA_DIR");
+        var tempDataDir = Path.Combine(Path.GetTempPath(), "cs-targetcard-" + Guid.NewGuid().ToString("N")[..8]);
+
+        try
+        {
+            // 视图模型会读本机的展示参数与常用语，指到临时目录免得动使用者自己的
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", tempDataDir);
+
+            var text = new ClassShout.Teacher.ViewModels.TextShoutViewModel(
+                new ClassShout.Teacher.Services.ShoutTransportRouter());
+
+            Check("发给谁：一间都没连、也没保存教室时，这张卡不显示",
+                !text.HasTargets,
+                $"HasTargets={text.HasTargets}");
+
+            // 只连局域网（用桌面端当教师端就是这么用的）
+            text.SyncLanTarget("三年二班");
+
+            Check("发给谁：只连局域网时卡片也显示",
+                text.HasTargets,
+                $"HasTargets={text.HasTargets}");
+
+            Check("发给谁：局域网直连时写明「直接发给它、不经过服务器」",
+                text.TargetHintText.Contains("三年二班") && text.TargetHintText.Contains("局域网"),
+                text.TargetHintText);
+
+            Check("发给谁：局域网直连时右上角那行也写着是哪一间",
+                text.TargetSummaryText.Contains("三年二班"),
+                text.TargetSummaryText);
+
+            // 只有一间已保存的教室：以前整张卡都不显示
+            text.SyncLanTarget(null);
+            text.SyncTargets(
+                [new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com")],
+                "uuid-1");
+
+            Check("发给谁：只有一间已保存的教室时也显示，并写明发到哪一间",
+                text.HasTargets && text.TargetHintText.Contains("三年三班"),
+                text.TargetHintText);
+
+            Check("发给谁：只有一间时不再出现多班那套说明",
+                !text.TargetHintText.Contains("勾选多个班级"),
+                text.TargetHintText);
+
+            Check("发给谁：只有一间时它默认是勾上的（不然发送会变成「什么都不发」）",
+                text.Targets.Count == 1 && text.Targets[0].IsSelected,
+                $"共 {text.Targets.Count} 项，勾选 {text.Targets.Count(t => t.IsSelected)} 项");
+
+            // 两间：回到多班说明
+            text.SyncTargets(
+                [
+                    new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com"),
+                    new BoundClassroom("uuid-2", "三年四班", DateTimeOffset.Now, "https://relay.example.com"),
+                ],
+                "uuid-2");
+
+            Check("发给谁：两间时给出多班说明（并说明语音仍只发当前那间）",
+                text.TargetHintText.Contains("勾选多个班级") && text.TargetHintText.Contains("语音"),
+                text.TargetHintText);
+
+            Check("发给谁：再同步会保留老师的手工勾选（去设备页转一圈回来不该被清空）",
+                text.Targets.Count == 2 && text.Targets[0].IsSelected && !text.Targets[1].IsSelected,
+                string.Join("、", text.Targets.Select(t => $"{t.Name}{(t.IsSelected ? "(已勾)" : string.Empty)}")));
+
+            // 首次填充（本机还没记住任何教室）时默认勾当前绑定的那间
+            var fresh = new ClassShout.Teacher.ViewModels.TextShoutViewModel(
+                new ClassShout.Teacher.Services.ShoutTransportRouter());
+
+            fresh.SyncTargets(
+                [
+                    new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com"),
+                    new BoundClassroom("uuid-2", "三年四班", DateTimeOffset.Now, "https://relay.example.com"),
+                ],
+                "uuid-2");
+
+            Check("发给谁：首次填充时默认勾当前绑定的那一间",
+                fresh.Targets.Count == 2
+                && fresh.Targets.Count(t => t.IsSelected) == 1
+                && fresh.Targets[1].IsSelected,
+                string.Join("、", fresh.Targets.Select(t => $"{t.Name}{(t.IsSelected ? "(已勾)" : string.Empty)}")));
         }
         finally
         {

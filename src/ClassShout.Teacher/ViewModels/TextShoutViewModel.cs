@@ -124,12 +124,89 @@ public partial class TextShoutViewModel : ObservableObject
     /// <summary>列表里超过一间教室时才需要"选择发给谁"——只有一间的话，选它没有意义。</summary>
     public bool HasMultipleTargets => Targets.Count > 1;
 
+    private string _lanTargetText = string.Empty;
+
+    /// <summary>
+    /// 局域网直连时连上的那间教室（名字），没有就走服务器/无连接。
+    ///
+    /// 为什么要单独记一份：文字页"发给谁"那份列表来自**已保存的服务器教室**，
+    /// 而局域网直连根本不经过服务器 —— 只连局域网时那份列表是空的，
+    /// 于是"这条发给谁"整张卡都看不见，而它恰恰是老师最想确认的一句话。
+    /// </summary>
+    public string LanTargetText
+    {
+        get => _lanTargetText;
+        private set
+        {
+            if (_lanTargetText == value)
+            {
+                return;
+            }
+
+            _lanTargetText = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasLanTarget));
+            OnPropertyChanged(nameof(HasTargets));
+            OnPropertyChanged(nameof(TargetSummaryText));
+            OnPropertyChanged(nameof(TargetHintText));
+        }
+    }
+
+    public bool HasLanTarget => LanTargetText.Length > 0;
+
+    /// <summary>由外壳在连接状态变化时调用：局域网直连连上了哪一间（没连就传 null）。</summary>
+    public void SyncLanTarget(string? classroomName)
+        => LanTargetText = string.IsNullOrWhiteSpace(classroomName) ? string.Empty : classroomName.Trim();
+
+    /// <summary>
+    /// 这张卡要不要显示。**有一间就显示** ——
+    /// 只有一间时"选谁"确实没得选，但"这条会发到哪"仍然值得看一眼
+    /// （尤其是局域网直连时，屏幕上连的是哪一间本来只在设备页里写着）。
+    /// </summary>
+    public bool HasTargets => Targets.Count > 0 || HasLanTarget;
+
+    /// <summary>卡片里那句说明：这一条到底会发到哪。</summary>
+    public string TargetHintText
+    {
+        get
+        {
+            if (Targets.Count == 0)
+            {
+                return HasLanTarget
+                    ? $"当前走局域网直连：「{LanTargetText}」—— 这一条直接发给它，不经过服务器。"
+                    : string.Empty;
+            }
+
+            var selected = Targets.Where(t => t.IsSelected).ToList();
+
+            if (Targets.Count == 1)
+            {
+                var only = Targets[0];
+                var where = only.IsCurrent ? "（当前绑定）" : string.Empty;
+
+                return selected.Count == 0
+                    ? $"这一条会发到「{only.Name}」{where}。"
+                    : $"这一条会发到「{only.Name}」{where}。";
+            }
+
+            return "勾选多个班级时，这一条会同时发到每一间（经中继服务器）。"
+                   + "语音喊话不受影响，仍然只发当前绑定的那间 —— 声音是从某一个教室的喇叭出来的，"
+                   + "同时往几个班播没有意义。";
+        }
+    }
+
     /// <summary>当前这一条会发给哪几间。</summary>
     public string TargetSummaryText
     {
         get
         {
             var selected = Targets.Where(t => t.IsSelected).ToList();
+
+            if (Targets.Count == 0)
+            {
+                // 只连了局域网时没有"已保存的教室"，这时该显示的就是屏幕上正连着的那间
+                return HasLanTarget ? $"{LanTargetText}（局域网直连）" : "未连接教室";
+            }
 
             return selected.Count switch
             {
@@ -184,7 +261,9 @@ public partial class TextShoutViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(HasMultipleTargets));
+        OnPropertyChanged(nameof(HasTargets));
         OnPropertyChanged(nameof(TargetSummaryText));
+        OnPropertyChanged(nameof(TargetHintText));
     }
 
     /// <summary>最近喊话（本机保存，最多二十条，最新在前）。</summary>

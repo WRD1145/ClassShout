@@ -338,6 +338,26 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         Text.IsConnected = value;
         Voice.IsConnected = value;
         OnPropertyChanged(nameof(ConnectionStatusText));
+        SyncTextTargets();
+    }
+
+    partial void OnClassroomNameChanged(string value) => SyncTextTargets();
+
+    /// <summary>
+    /// 把"当前连的是哪一间"同步给文字页的"发给谁"。
+    ///
+    /// 文字页那份勾选列表来自**已保存的服务器教室**，而局域网直连不经过服务器 ——
+    /// 只连局域网时那份列表是空的，"发给谁"整张卡会跟着消失。
+    /// 所以这里把屏幕上正连着的教室也告诉它一份（只有非服务器绑定、确实连上时才算）。
+    /// </summary>
+    private void SyncTextTargets()
+    {
+        var lanName = IsConnected && !IsServerBound && ClassroomName is { Length: > 0 } name
+                      && name != "未连接"
+            ? name
+            : null;
+
+        Text.SyncLanTarget(lanName);
     }
 
     /// <summary>弹出一条自动消失的提示。</summary>

@@ -1092,6 +1092,15 @@ internal static class Program
                 () =>
                 {
                     var vm = new TeacherShellViewModel();
+
+                    // 「这条发给谁」这张卡：只有一间教室时也要显示，并且要如实写出这一条发给谁
+                    vm.Text.SyncTargets(
+                        [
+                            new ClassShout.Core.Remote.BoundClassroom(
+                                "uuid-1", "三年二班", DateTimeOffset.Now, "https://relay.example.com"),
+                        ],
+                        "uuid-1");
+
                     var blocker = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
                     vm.Text.Queue?.Enqueue("第一条（占位，用于让队列非空）", _ => blocker.Task);
