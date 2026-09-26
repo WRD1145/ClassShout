@@ -3286,6 +3286,40 @@ internal static class Program
             Check("错误提示条：点关闭之后立刻收起",
                 !shell.HasError,
                 $"HasError={shell.HasError}");
+
+            // 「地址已保存」「连接正常」这类一次性提示同样要能点掉、也会自己收起
+            shell.ServerAddressNotice = "地址已保存。因为换了服务器，之前的登录与教室绑定都已解除。";
+
+            Check("一次性提示：出现时可见，且有关闭命令",
+                shell.HasServerAddressNotice && shell.DismissServerAddressNoticeCommand.CanExecute(null),
+                $"HasServerAddressNotice={shell.HasServerAddressNotice}");
+
+            shell.DismissServerAddressNoticeCommand.Execute(null);
+
+            Check("一次性提示：点关闭之后立刻收起",
+                !shell.HasServerAddressNotice,
+                $"HasServerAddressNotice={shell.HasServerAddressNotice}");
+
+            Check("一次性提示：停留时间比错误提示短一些（读一眼就够）",
+                ClassShout.Teacher.ViewModels.TeacherShellViewModel.NoticeBannerSeconds > 0
+                && ClassShout.Teacher.ViewModels.TeacherShellViewModel.NoticeBannerSeconds
+                   < ClassShout.Teacher.ViewModels.TeacherShellViewModel.ErrorBannerSeconds,
+                $"{ClassShout.Teacher.ViewModels.TeacherShellViewModel.NoticeBannerSeconds} 秒 < "
+                + $"{ClassShout.Teacher.ViewModels.TeacherShellViewModel.ErrorBannerSeconds} 秒");
+
+            shell.ServerAddressError = "地址格式不对，应形如 192.168.1.5:45900";
+            shell.DismissServerAddressErrorCommand.Execute(null);
+
+            Check("服务器地址那行的错误也能点掉",
+                !shell.HasServerAddressError,
+                $"HasServerAddressError={shell.HasServerAddressError}");
+
+            shell.ShareError = "这串分享令牌看不懂。";
+            shell.DismissShareErrorCommand.Execute(null);
+
+            Check("分享链接的错误也能点掉",
+                !shell.HasShareError,
+                $"HasShareError={shell.HasShareError}");
         }
         finally
         {

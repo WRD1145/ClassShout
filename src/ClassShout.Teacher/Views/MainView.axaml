@@ -1057,17 +1057,34 @@
                 <Border IsVisible="{Binding HasServerAddressError}"
                         Background="{DynamicResource Md3.ErrorContainer}"
                         CornerRadius="10" Padding="10,8">
-                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
-                             Foreground="{DynamicResource Md3.OnErrorContainer}"
-                             Text="{Binding ServerAddressError}" />
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBlock Classes="bodySmall" TextWrapping="Wrap" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Md3.OnErrorContainer}"
+                               Text="{Binding ServerAddressError}" />
+                    <Button Grid.Column="1" Classes="icon" VerticalAlignment="Center"
+                            Command="{Binding DismissServerAddressErrorCommand}"
+                            ToolTip.Tip="关掉这条提示">
+                      <md3:Md3Icon Kind="Close" Size="16"
+                                   IconBrush="{DynamicResource Md3.OnErrorContainer}" />
+                    </Button>
+                  </Grid>
                 </Border>
 
+                <!-- 一次性提示（地址已保存 / 连接正常）：10 秒后自己收起，也能点右边的叉关掉 -->
                 <Border IsVisible="{Binding HasServerAddressNotice}"
                         Background="{DynamicResource Md3.SecondaryContainer}"
                         CornerRadius="10" Padding="10,8">
-                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
-                             Foreground="{DynamicResource Md3.OnSecondaryContainer}"
-                             Text="{Binding ServerAddressNotice}" />
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBlock Classes="bodySmall" TextWrapping="Wrap" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Md3.OnSecondaryContainer}"
+                               Text="{Binding ServerAddressNotice}" />
+                    <Button Grid.Column="1" Classes="icon" VerticalAlignment="Center"
+                            Command="{Binding DismissServerAddressNoticeCommand}"
+                            ToolTip.Tip="关掉这条提示">
+                      <md3:Md3Icon Kind="Close" Size="16"
+                                   IconBrush="{DynamicResource Md3.OnSecondaryContainer}" />
+                    </Button>
+                  </Grid>
                 </Border>
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
@@ -1367,9 +1384,17 @@
                 <Border IsVisible="{Binding HasShareError}"
                         Background="{DynamicResource Md3.ErrorContainer}"
                         CornerRadius="10" Padding="10,8">
-                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
-                             Foreground="{DynamicResource Md3.OnErrorContainer}"
-                             Text="{Binding ShareError}" />
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBlock Classes="bodySmall" TextWrapping="Wrap" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Md3.OnErrorContainer}"
+                               Text="{Binding ShareError}" />
+                    <Button Grid.Column="1" Classes="icon" VerticalAlignment="Center"
+                            Command="{Binding DismissShareErrorCommand}"
+                            ToolTip.Tip="关掉这条提示">
+                      <md3:Md3Icon Kind="Close" Size="16"
+                                   IconBrush="{DynamicResource Md3.OnErrorContainer}" />
+                    </Button>
+                  </Grid>
                 </Border>
               </StackPanel>
             </md3:Md3Card>

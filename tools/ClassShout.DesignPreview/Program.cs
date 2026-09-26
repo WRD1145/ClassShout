@@ -1131,6 +1131,11 @@ internal static class Program
                 {
                     var vm = new TeacherShellViewModel();
                     vm.NavigateDevicesCommand.Execute(null);
+
+                    // 「地址已保存」这条一次性提示：右边那个叉要看得见
+                    // （它以前既不会自己消失、也关不掉）
+                    vm.ServerAddressNotice = "地址已保存。因为换了服务器，之前的登录与教室绑定都已解除。";
+
                     return new TeacherView { DataContext = vm };
 
                     // 高度跟着设置项一起长：这一页已经排到「版本与更新」和「关于」，

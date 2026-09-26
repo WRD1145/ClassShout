@@ -337,6 +337,18 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         StartErrorTimeout();
     }
 
+    partial void OnServerAddressNoticeChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasServerAddressNotice));
+        StartNoticeTimeout();
+    }
+
+    partial void OnServerAddressErrorChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasServerAddressError));
+        StartServerAddressErrorTimeout();
+    }
+
     partial void OnIsConnectedChanged(bool value)
     {
         Text.IsConnected = value;
@@ -409,6 +421,65 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     /// <summary>关掉顶部的错误提示条。</summary>
     [RelayCommand]
     private void DismissError() => ErrorMessage = null;
+
+    /// <summary>关掉「地址已保存」「连接正常」这类一次性提示。</summary>
+    [RelayCommand]
+    private void DismissServerAddressNotice() => ServerAddressNotice = null;
+
+    /// <summary>关掉服务器地址那一行的错误提示。</summary>
+    [RelayCommand]
+    private void DismissServerAddressError() => ServerAddressError = null;
+
+    private CancellationTokenSource? _serverAddressErrorCts;
+
+    /// <summary>服务器地址填错时那条提示也自己收起。</summary>
+    private void StartServerAddressErrorTimeout()
+    {
+        _serverAddressErrorCts?.Cancel();
+        _serverAddressErrorCts?.Dispose();
+        _serverAddressErrorCts = null;
+
+        if (string.IsNullOrWhiteSpace(ServerAddressError))
+        {
+            return;
+        }
+
+        _serverAddressErrorCts = ScheduleAutoHide(ErrorBannerSeconds, () => ServerAddressError = null);
+    }
+
+    /// <summary>
+    /// 让一条横幅过一会儿自己收起。
+    ///
+    /// 为什么所有横幅都要有这一步：**关不掉又不会消失的提示会一直占着屏幕**，
+    /// 而"地址已保存""没有发现教室端"这类话是说给"刚才那一下"的 ——
+    /// 过一会儿再看，它已经不代表当前状态，却还在那儿，像是仍然有问题。
+    /// 返回的令牌源由调用方留着：来新消息时取消旧的，免得旧计时把新横幅顺手清掉。
+    /// </summary>
+    private CancellationTokenSource ScheduleAutoHide(int seconds, Action hide)
+    {
+        var cts = new CancellationTokenSource();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(seconds), cts.Token).ConfigureAwait(false);
+                Post(() =>
+                {
+                    if (!cts.IsCancellationRequested)
+                    {
+                        hide();
+                    }
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                // 被新的消息顶掉、或用户手动关掉，都属正常流程
+            }
+        });
+
+        return cts;
+    }
 
     // ======================== 名单同步到服务器 ========================
     //
@@ -485,27 +556,32 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        var cts = new CancellationTokenSource();
-        _errorCts = cts;
+        _errorCts = ScheduleAutoHide(ErrorBannerSeconds, () => ErrorMessage = null);
+    }
 
-        _ = Task.Run(async () =>
+    /// <summary>
+    /// 一次性提示（「地址已保存」「连接正常：…」）停留多久。
+    ///
+    /// 比错误提示短一点：这类话读一眼就够，而它说的都是"刚才那一下"，
+    /// 过一会儿还挂着反而像是当前状态。
+    /// </summary>
+    public const int NoticeBannerSeconds = 10;
+
+    private CancellationTokenSource? _noticeCts;
+
+    /// <summary>一次性提示出现之后到点自己收起。</summary>
+    private void StartNoticeTimeout()
+    {
+        _noticeCts?.Cancel();
+        _noticeCts?.Dispose();
+        _noticeCts = null;
+
+        if (string.IsNullOrWhiteSpace(ServerAddressNotice))
         {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(ErrorBannerSeconds), cts.Token).ConfigureAwait(false);
-                Post(() =>
-                {
-                    if (ReferenceEquals(_errorCts, cts))
-                    {
-                        ErrorMessage = null;
-                    }
-                });
-            }
-            catch (OperationCanceledException)
-            {
-                // 被新的错误顶掉、或用户手动关掉，都属于正常流程
-            }
-        });
+            return;
+        }
+
+        _noticeCts = ScheduleAutoHide(NoticeBannerSeconds, () => ServerAddressNotice = null);
     }
 
     // ======================== 定时通知 ========================
@@ -1046,7 +1122,32 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     public bool HasShareError => !string.IsNullOrWhiteSpace(ShareError);
 
-    partial void OnShareErrorChanged(string value) => OnPropertyChanged(nameof(HasShareError));
+    partial void OnShareErrorChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasShareError));
+        StartShareErrorTimeout();
+    }
+
+    /// <summary>关掉分享链接那条错误提示。</summary>
+    [RelayCommand]
+    private void DismissShareError() => ShareError = string.Empty;
+
+    private CancellationTokenSource? _shareErrorCts;
+
+    /// <summary>分享链接的错误也自己收起（与其它横幅同一个道理：关不掉就会一直占着位置）。</summary>
+    private void StartShareErrorTimeout()
+    {
+        _shareErrorCts?.Cancel();
+        _shareErrorCts?.Dispose();
+        _shareErrorCts = null;
+
+        if (string.IsNullOrWhiteSpace(ShareError))
+        {
+            return;
+        }
+
+        _shareErrorCts = ScheduleAutoHide(ErrorBannerSeconds, () => ShareError = string.Empty);
+    }
 
     /// <summary>
     /// 用一条分享链接把自己绑定到那几个班。
