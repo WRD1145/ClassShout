@@ -62,6 +62,12 @@ public static class RelayPaths
     /// <summary>老师（网页端）给自己的班喊话。</summary>
     public const string TeacherShout = "/api/teacher/shout";
 
+    /// <summary>老师同步到服务器上的名单与呼叫模板（WebUI 的呼叫要用同一份）。</summary>
+    public const string TeacherRoster = "/api/teacher/roster";
+
+    /// <summary>WebUI 上按客户端那套规则拼一次呼叫。</summary>
+    public const string TeacherCall = "/api/teacher/call";
+
     /// <summary>教师端列出「管理员授权给我使用的教室」。登录后无需再填 UUID 与口令即可绑定。</summary>
     public const string TeacherAuthorized = "/api/teachers/authorized";
 

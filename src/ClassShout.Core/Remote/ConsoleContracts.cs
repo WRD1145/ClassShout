@@ -94,3 +94,69 @@ public sealed record TeacherWebShoutResponse(
     int Sent,
     IReadOnlyList<TeacherShoutResult> Results,
     string Message);
+// ======================== 名单与呼叫（老师同步到服务器，WebUI 也能呼叫） ========================
+//
+// 为什么名单要上服务器：客户端的「呼叫」必须以名单为前提，而 WebUI 跑在服务器上、
+// 看不到老师手机里的那份名单。同步一份上去，WebUI 才能用**同一份名单、同一套拼装规则**
+// 拼出同样的话 —— 拼装本身复用 Core 里的 CallComposer，两边跑的是同一段代码，
+// 所以"要求与客户端一致"是结构上保证的，不是照着抄一遍。
+
+/// <summary>服务器上存着的某位老师的名单与呼叫模板。</summary>
+/// <param name="Rosters">名单（一位老师通常教好几个班，可以有好几份）。</param>
+/// <param name="ActiveRosterId">当前选中的名单。</param>
+/// <param name="Templates">呼叫模板。</param>
+/// <param name="ActiveTemplateId">当前选中的模板。</param>
+/// <param name="UpdatedAt">最近一次同步时间。</param>
+public sealed record TeacherRosterSnapshot(
+    IReadOnlyList<StudentRoster> Rosters,
+    string? ActiveRosterId,
+    IReadOnlyList<CallTemplate> Templates,
+    string? ActiveTemplateId,
+    DateTimeOffset? UpdatedAt);
+
+/// <summary>老师把名单与模板同步到服务器。留空表示"这一项不动"。</summary>
+public sealed record TeacherRosterUpload(
+    IReadOnlyList<StudentRoster>? Rosters = null,
+    string? ActiveRosterId = null,
+    IReadOnlyList<CallTemplate>? Templates = null,
+    string? ActiveTemplateId = null,
+    string? CsvText = null,
+    string? RosterName = null);
+
+/// <summary>WebUI 上拼一次呼叫。</summary>
+/// <param name="TargetUuids">发给哪几个班。</param>
+/// <param name="StudentIds">选了哪几位学生（服务器用名单里的顺序与字段拼装）。</param>
+/// <param name="TemplateId">用哪个模板；留空表示用当前模板。</param>
+/// <param name="Components">临时拼的组件（给了它就按它拼，不落盘）。</param>
+/// <param name="Rate">语速。</param>
+/// <param name="Volume">音量。</param>
+/// <param name="Interrupt">是否打断教室里当前的朗读。</param>
+/// <param name="Display">展示方式。</param>
+/// <param name="FontSize">字号档位。</param>
+/// <param name="HoldMs">停留时长。</param>
+/// <param name="Speak">是否朗读。</param>
+public sealed record TeacherCallRequest(
+    IReadOnlyList<string> TargetUuids,
+    IReadOnlyList<string> StudentIds,
+    string? TemplateId = null,
+    IReadOnlyList<MessageComponent>? Components = null,
+    int Rate = 1,
+    int Volume = 100,
+    bool Interrupt = true,
+    string? Display = null,
+    string? FontSize = null,
+    int HoldMs = Protocol.ShoutHoldDurations.Unspecified,
+    bool Speak = true);
+
+/// <summary>WebUI 呼叫的结果。</summary>
+/// <param name="Ok">至少发出去一间。</param>
+/// <param name="Sent">成功几间。</param>
+/// <param name="Messages">拼出来的那几句话（原样回给界面，老师能看见到底喊了什么）。</param>
+/// <param name="Results">逐间结果。</param>
+/// <param name="Message">给人看的一句话。</param>
+public sealed record TeacherCallResponse(
+    bool Ok,
+    int Sent,
+    IReadOnlyList<string> Messages,
+    IReadOnlyList<TeacherShoutResult> Results,
+    string Message);

@@ -48,6 +48,12 @@ var shareStatePath = Environment.GetEnvironmentVariable("CLASSSHOUT_SHARE_STATE"
     ?? Path.Combine(AppContext.BaseDirectory, "relay-shares.json");
 
 builder.Services.AddSingleton(sp => new ShareStore(shareStatePath, sp.GetRequiredService<ILogger<ShareStore>>()));
+
+// 老师同步到服务器上的名单与呼叫模板：WebUI 的「呼叫」要用同一份（见 relay-rosters.json）
+var rosterStatePath = Environment.GetEnvironmentVariable("CLASSSHOUT_ROSTER_STATE")
+    ?? Path.Combine(AppContext.BaseDirectory, "relay-rosters.json");
+
+builder.Services.AddSingleton(sp => new RosterStore(rosterStatePath, sp.GetRequiredService<ILogger<RosterStore>>()));
 builder.Services.AddSingleton<UserSessions>();
 builder.Services.AddSingleton<RelaySessions>();
 builder.Services.AddSingleton<MessageHub>();
@@ -146,6 +152,7 @@ var store = app.Services.GetRequiredService<ClassroomStore>();
 var users = app.Services.GetRequiredService<UserStore>();
 var bindings = app.Services.GetRequiredService<BindingStore>();
 var shares = app.Services.GetRequiredService<ShareStore>();
+var rosters = app.Services.GetRequiredService<RosterStore>();
 var userSessions = app.Services.GetRequiredService<UserSessions>();
 var sessions = app.Services.GetRequiredService<RelaySessions>();
 var hub = app.Services.GetRequiredService<MessageHub>();
@@ -747,6 +754,210 @@ app.MapPost(RelayPaths.TeacherShout, (
     };
 
     return Results.Ok(new TeacherWebShoutResponse(sent > 0, sent, results, message));
+}).RequireRateLimiting("auth");
+
+// ======================== 教师端：名单与呼叫（WebUI 也用这一份） ========================
+//
+// 老师把名单与呼叫模板同步到服务器，WebUI 才能"呼叫"：那份名单本来只在他手机里，
+// 而网页跑在服务器上。拼装用的是 Core 里的 CallComposer —— 与客户端**同一段代码**，
+// 所以「要求与客户端一致」不是靠对齐参数，而是结构上就只有一份实现。
+
+app.MapGet(RelayPaths.TeacherRoster, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var record = rosters.Get(profile.Id);
+
+    return Results.Ok(new TeacherRosterSnapshot(
+        record?.Rosters ?? [],
+        record?.ActiveRosterId,
+        record?.Templates ?? [],
+        record?.ActiveTemplateId,
+        record?.UpdatedAt));
+});
+
+app.MapPut(RelayPaths.TeacherRoster, (
+    TeacherRosterUpload upload,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var current = rosters.Get(profile.Id) ?? new TeacherRosterRecord { UserId = profile.Id };
+
+    var next = new TeacherRosterRecord
+    {
+        UserId = profile.Id,
+        Rosters = upload.Rosters is not null ? upload.Rosters.ToList() : current.Rosters,
+        ActiveRosterId = upload.ActiveRosterId ?? current.ActiveRosterId,
+        Templates = upload.Templates is not null ? upload.Templates.ToList() : current.Templates,
+        ActiveTemplateId = upload.ActiveTemplateId ?? current.ActiveTemplateId,
+        UpdatedAt = DateTimeOffset.UtcNow,
+    };
+
+    // 也可以直接贴一份 CSV：用的就是客户端导入名单那套解析器（同一个 RosterCsv），
+    // 表头、空行、引号、从 Excel 直接粘贴都照样认。
+    if (!string.IsNullOrWhiteSpace(upload.CsvText))
+    {
+        var parsed = RosterCsv.Parse(upload.CsvText, upload.RosterName ?? "学生名单");
+        if (!parsed.Ok)
+        {
+            return Results.BadRequest(new { ok = false, error = "这份名单一行都没能解析出来。", skipped = parsed.SkippedLines });
+        }
+
+        var imported = parsed.Roster!;
+        next.Rosters.RemoveAll(r => string.Equals(r.Name, imported.Name, StringComparison.OrdinalIgnoreCase));
+        next.Rosters.Add(imported);
+        next.ActiveRosterId = imported.Id;
+    }
+
+    if (next.Rosters.Count > 0 && next.Rosters.All(r => r.Id != next.ActiveRosterId))
+    {
+        next.ActiveRosterId = next.Rosters[0].Id;
+    }
+
+    if (next.Templates.Count > 0 && next.Templates.All(t => t.Id != next.ActiveTemplateId))
+    {
+        next.ActiveTemplateId = next.Templates[0].Id;
+    }
+
+    if (!rosters.Save(next))
+    {
+        return Results.Ok(new { ok = false, error = "名单没能存到服务器上（磁盘不可写？），这次同步没有生效。" });
+    }
+
+    logger.LogInformation("{User} 同步了名单：{Rosters} 份、模板 {Templates} 个",
+        profile.DisplayName, next.Rosters.Count, next.Templates.Count);
+
+    return Results.Ok(new { ok = true, rosters = next.Rosters.Count, templates = next.Templates.Count });
+});
+
+/// <summary>
+/// WebUI 上拼一次呼叫：与客户端「呼叫」页同一套规则 ——
+/// 需要名单、可以多选学生、含"小组成员"组件时按组归并，展示参数也一并带上。
+/// </summary>
+app.MapPost(RelayPaths.TeacherCall, (
+    TeacherCallRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var record = rosters.Get(profile.Id);
+    var roster = record is null
+        ? null
+        : record.Rosters.FirstOrDefault(r => r.Id == record.ActiveRosterId) ?? record.Rosters.FirstOrDefault();
+
+    if (roster is null || roster.Students.Count == 0)
+    {
+        return Results.BadRequest(new TeacherCallResponse(
+            false, 0, [], [],
+            "服务器上还没有你的名单：先在教师端「名单」页导入，再点「同步到服务器」。"));
+    }
+
+    var template = request.Components is { Count: > 0 }
+        ? new CallTemplate { Name = "（本次拼装）", Components = request.Components.ToList() }
+        : record!.Templates.FirstOrDefault(t => t.Id == request.TemplateId)
+          ?? record.Templates.FirstOrDefault(t => t.Id == record.ActiveTemplateId)
+          ?? record.Templates.FirstOrDefault();
+
+    if (template is null || template.Components.Count == 0)
+    {
+        return Results.BadRequest(new TeacherCallResponse(
+            false, 0, [], [], "还没有可用的呼叫模板：先在教师端「呼叫」页拼一个，再点「同步到服务器」。"));
+    }
+
+    if (request.StudentIds.Count == 0)
+    {
+        return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "一个学生都没选。"));
+    }
+
+    if (request.TargetUuids.Count == 0)
+    {
+        return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "请至少选择一个班级。"));
+    }
+
+    // 学生按**名单里的顺序**取，而不是按前端传过来的顺序：
+    // 组内成员、多人一条的句子顺序都跟着名单走，两种客户端拼出来的话才会一样。
+    var wanted = request.StudentIds.ToHashSet(StringComparer.Ordinal);
+    var students = roster.Students.Where(s => wanted.Contains(s.Id)).ToList();
+
+    if (students.Count == 0)
+    {
+        return Results.BadRequest(new TeacherCallResponse(
+            false, 0, [], [], "选中的学生在服务器上的名单里找不到 —— 可能名单更新过，请刷新页面重选。"));
+    }
+
+    var allowed = ShoutableClassrooms(profile).ToDictionary(record => record.Uuid, StringComparer.OrdinalIgnoreCase);
+    var results = new List<TeacherShoutResult>();
+    var allMessages = new List<string>();
+    var sent = 0;
+
+    foreach (var uuid in request.TargetUuids.Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        if (!allowed.TryGetValue(uuid, out var classroom))
+        {
+            results.Add(new TeacherShoutResult(uuid, uuid, false, "这个班级没有授权给你。"));
+            continue;
+        }
+
+        // 每个班各拼一遍：来源里的科目是**按班**取的（"数学张老师"/"物理张老师"），
+        // 与 App 那条路同一个规则。
+        var messages = CallComposer.Compose(template, students, roster, profile.ShoutNameFor(classroom.Uuid));
+
+        if (messages.Count == 0)
+        {
+            results.Add(new TeacherShoutResult(classroom.Uuid, classroom.Name, false, "这套模板拼不出内容。"));
+            continue;
+        }
+
+        foreach (var text in messages)
+        {
+            hub.Publish(MessageHub.ClassroomKey(classroom.Uuid), new RelayEnvelope
+            {
+                Kind = RelayKinds.TextShout,
+                From = profile.ShoutNameFor(classroom.Uuid),
+                Text = text,
+                Rate = request.Rate,
+                Volume = request.Volume,
+                Interrupt = request.Interrupt,
+                Display = request.Display,
+                FontSize = request.FontSize,
+                HoldMs = request.HoldMs,
+                Speak = request.Speak,
+            });
+
+            if (!allMessages.Contains(text, StringComparer.Ordinal))
+            {
+                allMessages.Add(text);
+            }
+        }
+
+        sent++;
+        results.Add(new TeacherShoutResult(classroom.Uuid, classroom.Name, true, null));
+    }
+
+    logger.LogInformation("老师 {Teacher} 从网页呼叫：{Students} 位学生、{Messages} 条、{Count} 个班",
+        profile.DisplayName, students.Count, allMessages.Count, sent);
+
+    var message = sent switch
+    {
+        0 => "一条都没发出去。",
+        1 => $"已向「{results.First(r => r.Ok).ClassroomName}」呼叫 {allMessages.Count} 条。",
+        _ => $"已向 {sent} 个班级各呼叫 {allMessages.Count} 条。",
+    };
+
+    return Results.Ok(new TeacherCallResponse(sent > 0, sent, allMessages, results, message));
 }).RequireRateLimiting("auth");
 
 /// <summary>这位老师可以喊话的班级（内置管理员 = 全部）。</summary>

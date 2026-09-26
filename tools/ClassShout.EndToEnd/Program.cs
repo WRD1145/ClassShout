@@ -1303,6 +1303,143 @@ internal static class Program
                 adminList.Count >= 2,
                 $"看到 {adminList.Count} 个");
 
+            // ---------- 8d. 名单同步与网页呼叫 ----------
+            //
+            // WebUI 的「呼叫」要能用**与客户端同一套规则**拼句子，前提是名单在服务器上。
+            // 这里走一遍完整链路：客户端同步名单 → 网页呼叫 → 教室里真的收到拼好的话。
+            var callRoster = new StudentRoster
+            {
+                Name = "三年二班",
+                Students =
+                [
+                    new Student { Id = "s1", Name = "张三", StudentNo = "20250101", ShortName = "小张", Group = "A组" },
+                    new Student { Id = "s2", Name = "李四", StudentNo = "20250102", ShortName = "小李", Group = "A组" },
+                    new Student { Id = "s3", Name = "王五", StudentNo = "20250103", Group = "B组" },
+                ],
+            };
+
+            var callTemplate = new CallTemplate
+            {
+                Id = "t1",
+                Name = "来办公室",
+                Components =
+                [
+                    MessageComponent.Of(MessageComponentKinds.StudentName),
+                    MessageComponent.Of(MessageComponentKinds.Text, " 来 "),
+                    MessageComponent.Of(MessageComponentKinds.Teacher),
+                    MessageComponent.Of(MessageComponentKinds.Text, " 办公室"),
+                ],
+            };
+
+            var upload = await webHttp.PutAsJsonAsync(
+                $"{root}{RelayPaths.TeacherRoster}",
+                new TeacherRosterUpload([callRoster], callRoster.Id, [callTemplate], callTemplate.Id),
+                JsonOptions);
+
+            Check("网页呼叫：名单与模板能同步到服务器",
+                upload.IsSuccessStatusCode,
+                $"HTTP {(int)upload.StatusCode}");
+
+            var synced = await webHttp.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}", JsonOptions);
+
+            Check("网页呼叫：同步上去的名单能读回来（学生与小组都在）",
+                synced is { Rosters.Count: 1 } && synced.Rosters[0].Students.Count == 3
+                && synced.Rosters[0].Students.Any(s => s.Name == "张三" && s.Group == "A组")
+                && synced.Templates.Count == 1,
+                synced is null ? "(没读到)" : $"{synced.Rosters.Count} 份名单、{synced.Templates.Count} 个模板");
+
+            // 一位学生一条：与客户端"每个学生一条"的规则一致
+            var callTexts = new List<string>();
+            classroom.ShoutReceived += envelope =>
+            {
+                if (envelope.Kind == RelayKinds.TextShout && envelope.Text?.Contains("办公室") == true)
+                {
+                    lock (callTexts)
+                    {
+                        callTexts.Add(envelope.Text);
+                    }
+                }
+            };
+
+            var call = await webHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.TeacherCall}",
+                new TeacherCallRequest([uuid], ["s1", "s3"], TemplateId: "t1"),
+                JsonOptions);
+
+            var callBody = await call.Content.ReadFromJsonAsync<TeacherCallResponse>(JsonOptions);
+            await Task.Delay(1200);
+
+            Check("网页呼叫：拼出来的话与客户端同一套规则（姓名 + 教师（含科目））",
+                callBody is { Ok: true, Sent: 1 }
+                && callBody.Messages.Count == 2
+                && callBody.Messages.Contains("张三 来 数学张老师 办公室")
+                && callBody.Messages.Contains("王五 来 数学张老师 办公室"),
+                callBody is null ? "(没有结果)" : string.Join(" / ", callBody.Messages));
+
+            Check("网页呼叫：两条都真的进了教室",
+                callTexts.Count == 2,
+                callTexts.Count == 0 ? "(一条都没收到)" : string.Join(" / ", callTexts));
+
+            // 含"小组成员"组件时按小组归并：两位同组学生只发一条，且列出整组
+            var groupTemplate = new CallTemplate
+            {
+                Id = "t2",
+                Name = "叫整组",
+                Components =
+                [
+                    MessageComponent.Of(MessageComponentKinds.Text, "请 "),
+                    MessageComponent.Of(MessageComponentKinds.Group),
+                    MessageComponent.Of(MessageComponentKinds.Text, " 来 "),
+                    MessageComponent.Of(MessageComponentKinds.Teacher),
+                    MessageComponent.Of(MessageComponentKinds.Text, " 办公室"),
+                ],
+            };
+
+            await webHttp.PutAsJsonAsync(
+                $"{root}{RelayPaths.TeacherRoster}",
+                new TeacherRosterUpload(Templates: [callTemplate, groupTemplate], ActiveTemplateId: "t2"),
+                JsonOptions);
+
+            lock (callTexts)
+            {
+                callTexts.Clear();
+            }
+
+            var groupCall = await webHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.TeacherCall}",
+                new TeacherCallRequest([uuid], ["s1", "s2"]),
+                JsonOptions);
+
+            var groupBody = await groupCall.Content.ReadFromJsonAsync<TeacherCallResponse>(JsonOptions);
+            await Task.Delay(1200);
+
+            Check("网页呼叫：含「小组成员」组件时按组归并成一条（与客户端同一条规则）",
+                groupBody is { Ok: true } && groupBody.Messages.Count == 1
+                && groupBody.Messages[0] == "请 张三、李四 来 数学张老师 办公室",
+                groupBody is null ? "(没有结果)" : string.Join(" / ", groupBody.Messages));
+
+            // 没同步过名单的账号：要说清该做什么，而不是"发送失败"
+            var emptyRosterCall = await adminWebHttp.PostAsJsonAsync(
+                $"{root}{RelayPaths.TeacherCall}",
+                new TeacherCallRequest([uuid], []),
+                JsonOptions);
+
+            var emptyBody = await emptyRosterCall.Content.ReadFromJsonAsync<TeacherCallResponse>(JsonOptions);
+
+            Check("网页呼叫：没同步名单时说清该先去做什么（而不是一句发送失败）",
+                emptyBody is { Ok: false } && emptyBody.Message.Contains("名单"),
+                emptyBody?.Message ?? "(没有说明)");
+
+            using var anonymousRoster = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+            Check("网页呼叫：没登录一律拒绝",
+                (await anonymousRoster.PutAsJsonAsync(
+                    $"{root}{RelayPaths.TeacherRoster}",
+                    new TeacherRosterUpload(Rosters: []),
+                    JsonOptions)).StatusCode == System.Net.HttpStatusCode.Unauthorized,
+                "HTTP 401");
+
             // 未登录一律拒绝
             using var anonymous = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
             var anon = await anonymous.GetAsync($"{root}{RelayPaths.TeacherClassrooms}");
