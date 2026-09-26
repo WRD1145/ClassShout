@@ -3131,6 +3131,24 @@ internal static class Program
                 && fresh.Targets.Count(t => t.IsSelected) == 1
                 && fresh.Targets[1].IsSelected,
                 string.Join("、", fresh.Targets.Select(t => $"{t.Name}{(t.IsSelected ? "(已勾)" : string.Empty)}")));
+
+            // —— 顶部那条错误提示：能点掉，而且到点自己收起 ——
+            Check("错误提示条：停留时间比浮动提示长得多（3 秒读不完一整句原因）",
+                ClassShout.Teacher.ViewModels.TeacherShellViewModel.ErrorBannerSeconds >= 10,
+                $"{ClassShout.Teacher.ViewModels.TeacherShellViewModel.ErrorBannerSeconds} 秒");
+
+            var shell = new ClassShout.Teacher.ViewModels.TeacherShellViewModel();
+            shell.ErrorMessage = "连接超时：请检查地址是否正确、教室端是否已启动、防火墙是否放行。";
+
+            Check("错误提示条：出现时是可见的，且有关闭命令",
+                shell.HasError && shell.DismissErrorCommand.CanExecute(null),
+                $"HasError={shell.HasError}");
+
+            shell.DismissErrorCommand.Execute(null);
+
+            Check("错误提示条：点关闭之后立刻收起",
+                !shell.HasError,
+                $"HasError={shell.HasError}");
         }
         finally
         {

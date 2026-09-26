@@ -331,7 +331,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnSnackbarMessageChanged(string? value) => OnPropertyChanged(nameof(IsSnackbarVisible));
 
-    partial void OnErrorMessageChanged(string? value) => OnPropertyChanged(nameof(HasError));
+    partial void OnErrorMessageChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasError));
+        StartErrorTimeout();
+    }
 
     partial void OnIsConnectedChanged(bool value)
     {
@@ -386,6 +390,57 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             catch (OperationCanceledException)
             {
                 // 被新的提示顶掉属于正常流程
+            }
+        });
+    }
+
+    // ======================== 顶部那条错误提示 ========================
+
+    private CancellationTokenSource? _errorCts;
+
+    /// <summary>错误提示条停留多久。</summary>
+    /// <remarks>
+    /// 比浮动提示（3 秒）长得多：错误信息通常有一两句解释（"连接超时：请检查地址…"），
+    /// 3 秒根本读不完。但**也不能一直挂在上面** —— 顶栏那条横幅关不掉又不会消失，
+    /// 会一直占着屏幕顶端，让人以为现在还是坏的。
+    /// </remarks>
+    public const int ErrorBannerSeconds = 15;
+
+    /// <summary>关掉顶部的错误提示条。</summary>
+    [RelayCommand]
+    private void DismissError() => ErrorMessage = null;
+
+    /// <summary>错误提示条出现之后到点自己收起（有关闭按钮，只是不指望人一定会点）。</summary>
+    private void StartErrorTimeout()
+    {
+        _errorCts?.Cancel();
+        _errorCts?.Dispose();
+        _errorCts = null;
+
+        if (string.IsNullOrEmpty(ErrorMessage))
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _errorCts = cts;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(ErrorBannerSeconds), cts.Token).ConfigureAwait(false);
+                Post(() =>
+                {
+                    if (ReferenceEquals(_errorCts, cts))
+                    {
+                        ErrorMessage = null;
+                    }
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                // 被新的错误顶掉、或用户手动关掉，都属于正常流程
             }
         });
     }

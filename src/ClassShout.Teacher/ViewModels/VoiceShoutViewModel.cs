@@ -78,12 +78,64 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
 
     public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
 
+    /// <summary>关掉录音区那条错误提示（它同样会自动收起，见下面的超时）。</summary>
+    [RelayCommand]
+    private void DismissError() => ErrorMessage = null;
+
+    private CancellationTokenSource? _errorCts;
+
+    /// <summary>
+    /// 录音/发送失败的那条提示自己收起。
+    ///
+    /// 和顶栏那条错误横幅一个道理：关不掉又不会消失的提示会一直占着位置，
+    /// 让人以为"现在还是坏的"—— 而麦克风被占用这类问题往往过一会儿就好了。
+    /// </summary>
+    private void StartErrorTimeout()
+    {
+        _errorCts?.Cancel();
+        _errorCts?.Dispose();
+        _errorCts = null;
+
+        if (string.IsNullOrWhiteSpace(ErrorMessage))
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _errorCts = cts;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(TeacherShellViewModel.ErrorBannerSeconds), cts.Token)
+                    .ConfigureAwait(false);
+
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (ReferenceEquals(_errorCts, cts))
+                    {
+                        ErrorMessage = null;
+                    }
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                // 被新的错误顶掉、或用户手动关掉，都属正常
+            }
+        });
+    }
+
     /// <summary>录音区标题，随录音状态切换。</summary>
     public string TitleText => IsRecording ? "正在录音，说完了点一下发送" : "点击麦克风开始喊话";
 
     public string ElapsedText => TimeSpan.FromSeconds(Elapsed).ToString(@"mm\:ss");
 
-    partial void OnErrorMessageChanged(string? value) => OnPropertyChanged(nameof(HasError));
+    partial void OnErrorMessageChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasError));
+        StartErrorTimeout();
+    }
 
     partial void OnIsRecordingChanged(bool value)
     {

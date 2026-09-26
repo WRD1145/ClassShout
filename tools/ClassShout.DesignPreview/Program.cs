@@ -1111,8 +1111,21 @@ internal static class Program
                 }, 430, 900,
                 _ => null),
 
-            // 教师端「设备」页：服务器绑定、账号、以及语音转文字的密钥自填都在这里。
-            // 单独一个场景是因为它和首页内容完全不同，而配置类界面最容易排版走样。
+            // 顶部那条错误提示：右边要有一个能点掉的叉（以前既不会自己消失、也关不掉，
+            // 一直占着屏幕顶端，让人以为现在还是坏的）。
+            new("teacher-error-banner",
+                () =>
+                {
+                    var vm = new TeacherShellViewModel
+                    {
+                        ErrorMessage = "连接超时：请检查地址是否正确、教室端是否已启动、防火墙是否放行。",
+                    };
+
+                    return new TeacherView { DataContext = vm };
+                }, 430, 420,
+                _ => null),
+
+            // 教师端「设备」页：服务器绑定、账号、以及语音转文字的密钥自填都在这里。            // 单独一个场景是因为它和首页内容完全不同，而配置类界面最容易排版走样。
             new("teacher-devices",
                 () =>
                 {

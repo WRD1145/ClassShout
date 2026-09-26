@@ -113,15 +113,23 @@
         </Grid>
       </Border>
 
-      <!-- ==================== 错误提示条 ==================== -->
+      <!-- ==================== 错误提示条 ====================
+           会自动收起（15 秒，见 ErrorBannerSeconds），也可以点右边的叉立刻关掉：
+           顶栏横幅关不掉又不会消失的话，会一直占着屏幕顶端，让人以为现在还是坏的。 -->
       <Border Grid.Row="1" IsVisible="{Binding HasError}"
               Background="{DynamicResource Md3.ErrorContainer}" Padding="20,12">
-        <StackPanel Orientation="Horizontal" Spacing="10">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
           <md3:Md3Icon Kind="AlertCircle" Size="20" IconBrush="{DynamicResource Md3.OnErrorContainer}" />
-          <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+          <TextBlock Grid.Column="1" Classes="bodySmall" TextWrapping="Wrap"
+                     VerticalAlignment="Center"
                      Foreground="{DynamicResource Md3.OnErrorContainer}"
                      Text="{Binding ErrorMessage}" />
-        </StackPanel>
+          <Button Grid.Column="2" Classes="icon" VerticalAlignment="Center"
+                  Command="{Binding DismissErrorCommand}"
+                  ToolTip.Tip="关掉这条提示">
+            <md3:Md3Icon Kind="Close" Size="18" IconBrush="{DynamicResource Md3.OnErrorContainer}" />
+          </Button>
+        </Grid>
       </Border>
 
       <!-- ==================== 内容区 ==================== -->
@@ -867,14 +875,22 @@
                        Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                        Text="{Binding Voice.FormatText}" />
 
-            <!-- 录音失败时必须让用户看见原因（缺权限、麦克风被占用等） -->
+            <!-- 录音失败时必须让用户看见原因（缺权限、麦克风被占用等）；
+                 它也会自己收起（15 秒），右边的叉可以立刻关掉。 -->
             <Border IsVisible="{Binding Voice.HasError}"
                     Background="{DynamicResource Md3.ErrorContainer}"
                     CornerRadius="10" Padding="12,8"
                     MaxWidth="340" Margin="0,8,0,0">
-              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
-                         Foreground="{DynamicResource Md3.OnErrorContainer}"
-                         Text="{Binding Voice.ErrorMessage}" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap" VerticalAlignment="Center"
+                           Foreground="{DynamicResource Md3.OnErrorContainer}"
+                           Text="{Binding Voice.ErrorMessage}" />
+                <Button Grid.Column="1" Classes="icon" VerticalAlignment="Center"
+                        Command="{Binding Voice.DismissErrorCommand}"
+                        ToolTip.Tip="关掉这条提示">
+                  <md3:Md3Icon Kind="Close" Size="16" IconBrush="{DynamicResource Md3.OnErrorContainer}" />
+                </Button>
+              </Grid>
             </Border>
           </StackPanel>
 
