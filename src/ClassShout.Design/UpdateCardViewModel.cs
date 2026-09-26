@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
@@ -9,7 +10,7 @@ namespace ClassShout.Design;
 /// 「检查更新」那张卡片的状态与动作。
 ///
 /// 放在设计层而不是各端各写一份：教室端与教师端要的是同一张卡片、同一套设置、
-/// 同一个镜像列表 —— 两边都写一遍的话，镜像源这种"三个月就要改一次"的东西
+/// 同一份镜像列表 —— 两边都写一遍的话，镜像源这种"三个月就要改一次"的东西
 /// 迟早会只改一边。
 ///
 /// 检查**只在用户按下按钮时发生**：后台定时去问"有没有新版本"，
@@ -25,19 +26,37 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     private string _latestVersion = string.Empty;
     private string _notes = string.Empty;
     private bool _isBusy;
+    private bool _isTesting;
     private UpdateAsset? _download;
     private string? _pageUrl;
+    private string _testSummary = string.Empty;
 
-    public UpdateCardViewModel(HttpClient http, UpdateSettings settings, Func<string, Task>? openUrl = null)
+    // 新增镜像用的输入框
+    private string _newLabel = string.Empty;
+    private string _newApiBase = string.Empty;
+    private string _newRepository = string.Empty;
+    private string _newTemplate = string.Empty;
+    private bool _newIsGitee;
+
+    public UpdateCardViewModel(HttpClient? http, UpdateSettings settings, Func<string, Task>? openUrl = null)
     {
         _settings = settings.Normalized();
-        _checker = new UpdateChecker(http, _settings);
+
+        // http 参数保留只是为了不动各端的构造调用；检查器自己按代理设置建连接，
+        // 这样"改了代理立刻生效"，不必让各端重建 HttpClient。
+        _ = http;
+
+        _checker = new UpdateChecker(_settings);
         _openUrl = openUrl;
 
         CheckCommand = new SimpleCommand(async () => await CheckAsync().ConfigureAwait(true), () => !IsBusy);
+        TestAllCommand = new SimpleCommand(async () => await TestAllAsync().ConfigureAwait(true), () => !IsTesting);
         OpenDownloadCommand = new SimpleCommand(async () => await OpenDownloadAsync().ConfigureAwait(true), () => CanDownload);
         OpenPageCommand = new SimpleCommand(async () => await OpenPageAsync().ConfigureAwait(true), () => CanOpenPage);
         SaveCommand = new SimpleCommand(Save);
+        AddMirrorCommand = new SimpleCommand(AddMirror, () => NewLabel.Trim().Length > 0);
+
+        RefreshMirrors();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -51,103 +70,145 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     /// <summary>当前版本一行字。</summary>
     public string CurrentVersionText => $"当前版本 v{CurrentVersion}";
 
-    /// <summary>可选的镜像（含"直连 GitHub"）。</summary>
-    public IReadOnlyList<UpdateMirror> Mirrors => UpdateSettings.Presets;
-
-    /// <summary>
-    /// 要下载哪个附件。桌面端填 <c>ClassShout.Teacher.Desktop.exe</c> 之类；
-    /// 留空表示只提示、不直接给下载按钮。
-    /// </summary>
+    /// <summary>要下载哪个附件。留空表示只提示、不直接给下载按钮。</summary>
     public string? PreferredAssetName { get; set; }
 
     /// <summary>
     /// 按后缀挑附件，例如 <c>.apk</c>。
     ///
-    /// 为什么需要它：附件名里带着版本号（<c>classshout-teacher-1.8.0-universal.apk</c>），
+    /// 为什么需要它：附件名里带着版本号（<c>classshout-teacher-1.10.0-universal.apk</c>），
     /// 而"我要的是哪个包"这件事跟版本号无关 —— 精确匹配会因为版本号变了就找不到。
     /// </summary>
     public string? PreferredAssetSuffix { get; set; }
 
-    /// <summary>检查更新。绑到按钮上。</summary>
+    /// <summary>镜像列表（内置的 + 自己加的），界面直接绑它。</summary>
+    public ObservableCollection<MirrorRow> Mirrors { get; } = [];
+
+    // ======================== 命令 ========================
+
+    /// <summary>用当前选中的镜像检查更新。</summary>
     public ICommand CheckCommand { get; }
 
-    /// <summary>打开下载地址（镜像已经在检查时换算好了）。</summary>
+    /// <summary>一键把**所有**镜像并发测一遍。</summary>
+    public ICommand TestAllCommand { get; }
+
     public ICommand OpenDownloadCommand { get; }
 
-    /// <summary>打开发行版页面。</summary>
     public ICommand OpenPageCommand { get; }
 
-    /// <summary>把改过的镜像设置存下来。</summary>
     public ICommand SaveCommand { get; }
 
-    /// <summary>仓库，例如 WRD1145/ClassShout。</summary>
-    public string Repository
+    /// <summary>把下面填的那条镜像加进列表。</summary>
+    public ICommand AddMirrorCommand { get; }
+
+    // ======================== 新增镜像的表单 ========================
+
+    public string NewLabel
     {
-        get => _settings.Repository;
+        get => _newLabel;
         set
         {
-            if (_settings.Repository == value)
+            if (Set(ref _newLabel, value))
+            {
+                (AddMirrorCommand as SimpleCommand)?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>新镜像的 API 地址（留空＝用该类型的默认地址）。</summary>
+    public string NewApiBase
+    {
+        get => _newApiBase;
+        set => Set(ref _newApiBase, value);
+    }
+
+    /// <summary>新镜像上的仓库（留空＝与默认仓库相同）。</summary>
+    public string NewRepository
+    {
+        get => _newRepository;
+        set => Set(ref _newRepository, value);
+    }
+
+    /// <summary>新镜像的下载地址模板（留空＝用该站原地址）。</summary>
+    public string NewTemplate
+    {
+        get => _newTemplate;
+        set => Set(ref _newTemplate, value);
+    }
+
+    /// <summary>新镜像是不是 Gitee。</summary>
+    public bool NewIsGitee
+    {
+        get => _newIsGitee;
+        set => Set(ref _newIsGitee, value);
+    }
+
+    /// <summary>「一键检测」之后的一句话汇总。</summary>
+    public string TestSummary
+    {
+        get => _testSummary;
+        private set => Set(ref _testSummary, value);
+    }
+
+    // ======================== 代理 ========================
+
+    /// <summary>代理三档：跟随系统 / 不使用 / 自定义。</summary>
+    public IReadOnlyList<ProxyModeOption> ProxyModes { get; } =
+    [
+        new(UpdateProxyMode.System, "跟随系统代理"),
+        new(UpdateProxyMode.None, "不使用代理"),
+        new(UpdateProxyMode.Custom, "自己填代理地址"),
+    ];
+
+    /// <summary>当前选中的代理档位。</summary>
+    public ProxyModeOption? SelectedProxyMode
+    {
+        get => ProxyModes.FirstOrDefault(option => option.Mode == _settings.ProxyMode);
+        set
+        {
+            if (value is null || _settings.ProxyMode == value.Mode)
             {
                 return;
             }
 
-            _settings.Repository = value;
+            _settings.ProxyMode = value.Mode;
+            LocalSettings.SaveUpdate(_settings);
             Raise();
+            Raise(nameof(ProxyHintText));
+            Raise(nameof(IsCustomProxy));
         }
     }
 
-    /// <summary>GitHub API 基址（镜像自带 API 时填镜像的）。</summary>
-    public string ApiBase
+    /// <summary>自定义代理地址，例如 http://127.0.0.1:7890。</summary>
+    public string ProxyUrl
     {
-        get => _settings.ApiBase;
+        get => _settings.ProxyUrl;
         set
         {
-            if (_settings.ApiBase == value)
+            if (_settings.ProxyUrl == value)
             {
                 return;
             }
 
-            _settings.ApiBase = value;
+            _settings.ProxyUrl = value;
+            LocalSettings.SaveUpdate(_settings);
             Raise();
+            Raise(nameof(ProxyHintText));
         }
     }
 
-    /// <summary>下载地址模板，支持 {url} 与 {path} 两个占位符。</summary>
-    public string DownloadTemplate
-    {
-        get => _settings.DownloadTemplate;
-        set
-        {
-            if (_settings.DownloadTemplate == value)
-            {
-                return;
-            }
+    /// <summary>能不能填代理地址（只有选了"自己填"才显示输入框）。</summary>
+    public bool IsCustomProxy => _settings.ProxyMode == UpdateProxyMode.Custom;
 
-            _settings.DownloadTemplate = value;
-            Raise();
-        }
-    }
+    /// <summary>
+    /// 当前实际会走什么。
+    ///
+    /// 这一行是刻意显示的：代理没生效时（系统里挂着代理、应用读不到）它会写
+    /// "系统没有配置代理（直连）" —— 比让用户对着"连不上"猜要省事得多。
+    /// </summary>
+    public string ProxyHintText => _checker.CurrentProxy.Description;
 
-    /// <summary>当前选中的镜像（按 API 基址 + 模板匹配预设；对不上就是"自定义"）。</summary>
-    public UpdateMirror? SelectedMirror
-    {
-        get => UpdateSettings.Presets.FirstOrDefault(mirror =>
-            string.Equals(mirror.ApiBase, ApiBase.TrimEnd('/'), StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(mirror.DownloadTemplate, DownloadTemplate.Trim(), StringComparison.OrdinalIgnoreCase));
-
-        set
-        {
-            if (value is not { } mirror)
-            {
-                return;
-            }
-
-            ApiBase = mirror.ApiBase;
-            DownloadTemplate = mirror.DownloadTemplate;
-            Status = $"已选「{mirror.Label}」。点「检查更新」试试这条源通不通。";
-            Raise();
-        }
-    }
+    // ======================== 状态 ========================
 
     /// <summary>检查中。</summary>
     public bool IsBusy
@@ -155,13 +216,23 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         get => _isBusy;
         private set
         {
-            if (_isBusy == value)
+            if (Set(ref _isBusy, value))
             {
-                return;
+                (CheckCommand as SimpleCommand)?.RaiseCanExecuteChanged();
             }
+        }
+    }
 
-            _isBusy = value;
-            Raise();
+    /// <summary>正在检测所有镜像。</summary>
+    public bool IsTesting
+    {
+        get => _isTesting;
+        private set
+        {
+            if (Set(ref _isTesting, value))
+            {
+                (TestAllCommand as SimpleCommand)?.RaiseCanExecuteChanged();
+            }
         }
     }
 
@@ -169,16 +240,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     public string Status
     {
         get => _status;
-        private set
-        {
-            if (_status == value)
-            {
-                return;
-            }
-
-            _status = value;
-            Raise();
-        }
+        private set => Set(ref _status, value);
     }
 
     /// <summary>查到的新版本号（没查到或已是最新时为空）。</summary>
@@ -187,14 +249,10 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         get => _latestVersion;
         private set
         {
-            if (_latestVersion == value)
+            if (Set(ref _latestVersion, value))
             {
-                return;
+                Raise(nameof(UpdateHintText));
             }
-
-            _latestVersion = value;
-            Raise();
-            Raise(nameof(UpdateHintText));
         }
     }
 
@@ -202,16 +260,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     public string Notes
     {
         get => _notes;
-        private set
-        {
-            if (_notes == value)
-            {
-                return;
-            }
-
-            _notes = value;
-            Raise();
-        }
+        private set => Set(ref _notes, value);
     }
 
     /// <summary>有新版本时的一句话。</summary>
@@ -219,7 +268,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         ? $"有新版本 v{LatestVersion}（当前 v{CurrentVersion}）"
         : string.Empty;
 
-    /// <summary>能不能直接下载（查到新版本、且这次要求直接给附件）。</summary>
+    /// <summary>能不能直接下载。</summary>
     public bool CanDownload => _download is not null;
 
     /// <summary>能不能打开发行版页面。</summary>
@@ -228,14 +277,14 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     /// <summary>有没有可下载的东西（界面据此显示按钮）。</summary>
     public bool HasDownload => CanDownload;
 
-    /// <summary>上次检查时间（取自设置，供界面显示）。</summary>
+    /// <summary>上次检查时间。</summary>
     public string LastCheckedText => _settings.LastCheckedAt is { } at
         ? $"上次检查：{at.ToLocalTime():MM-dd HH:mm}"
         : "还没检查过。";
 
-    /// <summary>
-    /// 先按当前设置查一次，查完把结果记进设置（含"上次检查时间"）。
-    /// </summary>
+    // ======================== 动作 ========================
+
+    /// <summary>用当前选中的镜像查一次，结果记进设置。</summary>
     public async Task CheckAsync(CancellationToken cancellationToken = default)
     {
         if (IsBusy)
@@ -244,24 +293,29 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         }
 
         IsBusy = true;
-        Status = "正在检查…";
+        Status = $"正在通过「{_settings.SelectedMirror.Label}」检查…";
         LatestVersion = string.Empty;
         Notes = string.Empty;
         _download = null;
         _pageUrl = null;
-        Raise(nameof(CanDownload));
-        Raise(nameof(CanOpenPage));
-        Raise(nameof(HasDownload));
+        RaiseResults();
 
         try
         {
             var result = await _checker.CheckAsync(CurrentVersion, cancellationToken).ConfigureAwait(true);
 
             _settings.LastCheckedAt = DateTimeOffset.Now;
+            ApplyMirrorResult(new MirrorTestResult(
+                _settings.SelectedMirror.Id,
+                _settings.SelectedMirror.Label,
+                result.Ok,
+                result.LatencyMs,
+                result.LatestVersion,
+                result.Error));
 
             if (!result.Ok)
             {
-                Status = result.Error ?? "检查失败。";
+                Status = $"{result.Error}（走的是「{result.MirrorLabel}」，{result.ProxyDescription}）";
                 return;
             }
 
@@ -272,22 +326,15 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
             {
                 LatestVersion = result.LatestVersion ?? string.Empty;
                 Notes = Summarize(result.Notes);
-
-                _download = PreferredAssetName is { Length: > 0 }
-                    ? result.FindAsset(PreferredAssetName)
-                    : null;
-
-                _download ??= PreferredAssetSuffix is { Length: > 0 }
-                    ? result.FindAssetEndingWith(PreferredAssetSuffix)
-                    : null;
+                _download = PickAsset(result);
 
                 Status = _download is not null
-                    ? $"发现新版本 v{result.LatestVersion}，可以直接下载。"
-                    : $"发现新版本 v{result.LatestVersion}。";
+                    ? $"发现新版本 v{result.LatestVersion}（{result.MirrorLabel} · {result.LatencyMs} ms · {result.ProxyDescription}）"
+                    : $"发现新版本 v{result.LatestVersion}（{result.MirrorLabel} · {result.LatencyMs} ms）";
             }
             else
             {
-                Status = $"已经是最新的 v{CurrentVersion}。";
+                Status = $"已经是最新的 v{CurrentVersion}（{result.MirrorLabel} · {result.LatencyMs} ms）。";
             }
         }
         finally
@@ -295,13 +342,124 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
             LocalSettings.SaveUpdate(_settings);
             IsBusy = false;
             Raise(nameof(LastCheckedText));
-            Raise(nameof(CanDownload));
-            Raise(nameof(CanOpenPage));
-            Raise(nameof(HasDownload));
+            RaiseResults();
         }
     }
 
-    /// <summary>打开下载地址（镜像已在检查时换好）。</summary>
+    /// <summary>
+    /// 一键检测所有镜像：**并发**发出去。
+    ///
+    /// 串行检测的话，六条源里有一条不通就要等它超时（10 秒起），
+    /// 而用户按下这个按钮想要的正是"立刻知道哪条能用"。
+    /// </summary>
+    public async Task TestAllAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsTesting)
+        {
+            return;
+        }
+
+        IsTesting = true;
+        TestSummary = $"正在并发检测 {Mirrors.Count} 条镜像…";
+
+        try
+        {
+            var results = await _checker.TestAllAsync(_settings.Mirrors, cancellationToken).ConfigureAwait(true);
+
+            foreach (var result in results)
+            {
+                ApplyMirrorResult(result);
+            }
+
+            var ok = results.Where(r => r.Ok).OrderBy(r => r.LatencyMs).ToList();
+
+            TestSummary = ok.Count == 0
+                ? $"{results.Count} 条镜像全部不通。检查一下代理设置，或者换个网络再试。"
+                : $"通 {ok.Count}/{results.Count} 条，最快的是「{ok[0].Label}」（{ok[0].LatencyMs} ms）"
+                  + (ok[0].LatestVersion is { Length: > 0 } version ? $"，最新 v{version}" : string.Empty)
+                  + "。已经自动切过去了。";
+
+            // 最快的自动选中：检测的目的就是挑一条能用的
+            if (ok.Count > 0)
+            {
+                _settings.SelectedMirrorId = ok[0].MirrorId;
+            }
+        }
+        finally
+        {
+            LocalSettings.SaveUpdate(_settings);
+            RefreshMirrors();
+            IsTesting = false;
+        }
+    }
+
+    /// <summary>切到某条镜像（点「用这个」）。</summary>
+    public void SelectMirror(MirrorRow row)
+    {
+        _settings.SelectedMirrorId = row.Mirror.Id;
+        LocalSettings.SaveUpdate(_settings);
+        RefreshMirrors();
+
+        Status = $"已切换到「{row.Mirror.Label}」。点「检查更新」试试。";
+    }
+
+    /// <summary>删掉某条自定义镜像（内置的删不掉，它们是兜底的）。</summary>
+    public void RemoveMirror(MirrorRow row)
+    {
+        if (row.Mirror.BuiltIn)
+        {
+            Status = "内置镜像不能删 —— 它们是兜底的那几条。可以改，或者加一条自己的。";
+            return;
+        }
+
+        _settings.Mirrors.RemoveAll(mirror => string.Equals(mirror.Id, row.Mirror.Id, StringComparison.OrdinalIgnoreCase));
+
+        if (string.Equals(_settings.SelectedMirrorId, row.Mirror.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            _settings.SelectedMirrorId = _settings.Mirrors.FirstOrDefault()?.Id;
+        }
+
+        LocalSettings.SaveUpdate(_settings);
+        RefreshMirrors();
+        Status = $"已删除「{row.Mirror.Label}」。";
+    }
+
+    /// <summary>把表单里填的那条镜像加进来。</summary>
+    public void AddMirror()
+    {
+        var label = NewLabel.Trim();
+
+        if (label.Length == 0)
+        {
+            Status = "先给这条镜像起个名字。";
+            return;
+        }
+
+        var mirror = new UpdateMirror
+        {
+            Label = label,
+            Provider = NewIsGitee ? UpdateMirrorProvider.Gitee : UpdateMirrorProvider.GitHub,
+            ApiBase = NewApiBase.Trim(),
+            Repository = NewRepository.Trim(),
+            DownloadTemplate = NewTemplate.Trim(),
+            BuiltIn = false,
+        }.Normalized();
+
+        _settings.Mirrors.Add(mirror);
+        _settings.SelectedMirrorId = mirror.Id;
+
+        LocalSettings.SaveUpdate(_settings);
+
+        NewLabel = string.Empty;
+        NewApiBase = string.Empty;
+        NewRepository = string.Empty;
+        NewTemplate = string.Empty;
+
+        RefreshMirrors();
+        Status = $"已添加「{mirror.Label}」并选中。点「一键检测全部镜像」可以试试它通不通。";
+    }
+
+    /// <summary>打开下载地址（镜像已在检查时换算好）。</summary>
     public async Task OpenDownloadAsync()
     {
         if (_download is null || _openUrl is null)
@@ -310,10 +468,10 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         }
 
         await _openUrl(_download.Url).ConfigureAwait(true);
-        Status = $"已在浏览器里打开 {_download.Name} 的下载地址。";
+        Status = $"已在浏览器里打开 {_download.Name} 的下载地址（走的是「{_settings.SelectedMirror.Label}」）。";
     }
 
-    /// <summary>打开发行版页面（看完整的更新说明）。</summary>
+    /// <summary>打开发行版页面。</summary>
     public async Task OpenPageAsync()
     {
         if (string.IsNullOrWhiteSpace(_pageUrl) || _openUrl is null)
@@ -324,12 +482,73 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         await _openUrl(_pageUrl).ConfigureAwait(true);
     }
 
-    /// <summary>保存这次改的镜像设置。检查本身也会保存，这里给"只想存下来"的人一个按钮。</summary>
+    /// <summary>保存设置。</summary>
     public void Save()
     {
+        _settings = _settings.Normalized();
         LocalSettings.SaveUpdate(_settings);
+        RefreshMirrors();
         Status = "设置已保存。";
         Raise(nameof(LastCheckedText));
+        Raise(nameof(ProxyHintText));
+    }
+
+    // ======================== 内部 ========================
+
+    private void RefreshMirrors()
+    {
+        Mirrors.Clear();
+
+        foreach (var mirror in _settings.Mirrors)
+        {
+            Mirrors.Add(new MirrorRow(
+                mirror,
+                isSelected: string.Equals(mirror.Id, _settings.SelectedMirrorId, StringComparison.OrdinalIgnoreCase),
+                select: SelectMirror,
+                remove: RemoveMirror));
+        }
+
+        Raise(nameof(IsCustomProxy));
+        Raise(nameof(ProxyHintText));
+    }
+
+    private void ApplyMirrorResult(MirrorTestResult result)
+    {
+        var mirror = _settings.Mirrors
+            .FirstOrDefault(m => string.Equals(m.Id, result.MirrorId, StringComparison.OrdinalIgnoreCase));
+
+        if (mirror is null)
+        {
+            return;
+        }
+
+        mirror.LastOk = result.Ok;
+        mirror.LastLatencyMs = result.LatencyMs;
+        mirror.LastVersion = result.LatestVersion;
+        mirror.LastError = result.Error;
+        mirror.LastTestedAt = DateTimeOffset.Now;
+
+        Mirrors
+            .FirstOrDefault(row => string.Equals(row.Mirror.Id, result.MirrorId, StringComparison.OrdinalIgnoreCase))
+            ?.Refresh();
+    }
+
+    private UpdateAsset? PickAsset(UpdateCheckResult result)
+    {
+        var exact = PreferredAssetName is { Length: > 0 }
+            ? result.FindAsset(PreferredAssetName)
+            : null;
+
+        return exact
+               ?? (PreferredAssetSuffix is { Length: > 0 } ? result.FindAssetEndingWith(PreferredAssetSuffix) : null);
+    }
+
+    private void RaiseResults()
+    {
+        Raise(nameof(CanDownload));
+        Raise(nameof(CanOpenPage));
+        Raise(nameof(HasDownload));
+        Raise(nameof(IsCustomProxy));
     }
 
     /// <summary>把发行说明裁成一小段：整篇 Markdown 贴在手机上是灾难。</summary>
@@ -344,8 +563,90 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         return text.Length <= 400 ? text : text[..400] + "…";
     }
 
+    private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return false;
+        }
+
+        field = value;
+        Raise(name);
+        return true;
+    }
+
     private void Raise([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+/// <summary>代理档位的一项（下拉框用）。</summary>
+/// <param name="Mode">档位。</param>
+/// <param name="Label">显示名。</param>
+public sealed record ProxyModeOption(UpdateProxyMode Mode, string Label);
+
+/// <summary>
+/// 镜像列表里的一行。
+///
+/// 命令挂在行自己身上，XAML 模板里就不必写父级转换绑定
+/// （和这个项目里其它列表一个写法）。
+/// </summary>
+public sealed class MirrorRow : INotifyPropertyChanged
+{
+    public MirrorRow(UpdateMirror mirror, bool isSelected, Action<MirrorRow> select, Action<MirrorRow> remove)
+    {
+        Mirror = mirror;
+        IsSelected = isSelected;
+
+        SelectCommand = new SimpleCommand(() => select(this));
+        RemoveCommand = new SimpleCommand(() => remove(this));
+
+        // 内置的不能删 —— 它们是"一条源都不剩"时的那几条兜底
+        CanRemove = !mirror.BuiltIn;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public UpdateMirror Mirror { get; }
+
+    public string Label => Mirror.Label;
+
+    /// <summary>当前用的是不是这条。</summary>
+    public bool IsSelected { get; }
+
+    /// <summary>不能删的就是内置的那几条。</summary>
+    public bool CanRemove { get; }
+
+    /// <summary>「Gitee」/「GitHub」+ 仓库 + 下载方式，一眼看出这条通向哪里。</summary>
+    public string DetailText
+    {
+        get
+        {
+            var repository = string.IsNullOrWhiteSpace(Mirror.Repository) ? "（与默认仓库相同）" : Mirror.Repository;
+            var template = string.IsNullOrWhiteSpace(Mirror.DownloadTemplate) ? "原地址" : Mirror.DownloadTemplate;
+
+            return $"{Mirror.ProviderLabel} · {repository} · 下载：{template}";
+        }
+    }
+
+    /// <summary>检测结果那一行。</summary>
+    public string ResultText => Mirror.ResultText;
+
+    /// <summary>检测结果通不通（界面用它上色）。</summary>
+    public bool IsOk => Mirror.LastOk == true;
+
+    public bool IsBad => Mirror.LastOk == false;
+
+    public ICommand SelectCommand { get; }
+
+    public ICommand RemoveCommand { get; }
+
+    /// <summary>检测结果更新之后通知界面重画（对象还是同一个）。</summary>
+    public void Refresh()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ResultText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsOk)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsBad)));
+    }
 }
 
 /// <summary>

@@ -1,7 +1,7 @@
 # 单实例约束的运行时验证。
 #
 #   pwsh -File scripts/smoke-single-instance.ps1
-#   pwsh -File scripts/smoke-single-instance.ps1 -Exe dist\windows\ClassShout.Classroom.exe
+#   pwsh -File scripts/smoke-single-instance.ps1 -Exe dist\windows\classroom\ClassShout.Classroom.exe
 #
 # 靠窗口标题判定，而不是靠"第二个进程有没有退出" ——
 # 第二个实例是弹一个提示窗、等用户关掉再退出，所以它**应该**是活着的。
@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $Exe) {
     $root = Split-Path -Parent $PSScriptRoot
     $Exe = @(
-        (Join-Path $root 'dist\windows\ClassShout.Classroom.exe'),
+        (Join-Path $root 'dist\windows\classroom\ClassShout.Classroom.exe'),
         (Join-Path $root 'src\ClassShout.Classroom\bin\Release\net10.0-windows\ClassShout.Classroom.exe')
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 }

@@ -184,9 +184,11 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             CurrentVersion = ClassShout.Design.DeveloperMode.Version,
             BuildDescription = ClassShout.Design.DeveloperMode.BuildDescription,
 
-            // 教室端在 Windows 上是单文件 exe；Linux 上按后缀挑不到就先只给页面
-            PreferredAssetName = OperatingSystem.IsWindows() ? "ClassShout.Classroom.exe" : null,
-            PreferredAssetSuffix = OperatingSystem.IsWindows() ? null : "ClassShout.Classroom-linux-x64",
+            // 教室端在 Windows 上是压缩包（1.10.0 起不再单文件），Linux 上是 tar.gz
+            PreferredAssetName = OperatingSystem.IsWindows()
+                ? "ClassShout.Classroom-win-x64.zip"
+                : "ClassShout.Classroom-linux-x64.tar.gz",
+            PreferredAssetSuffix = null,
         };
 
         // 注意方向：是把已保存的名字读进字段，不是把字段写进已存配置。
@@ -1816,6 +1818,10 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         {
             Logs.RemoveAt(Logs.Count - 1);
         }
+
+        // 同时落一份到磁盘：界面上这份一关就没了，而排障时最常见的问法是
+        // "昨天下午那节课教室里怎么没声音"。按天分文件、只留 7 天，见 AppLog。
+        AppLog.Write(kind, message);
     }
 
     private static void Post(Action action)

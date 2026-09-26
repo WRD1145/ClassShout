@@ -4,6 +4,7 @@
              xmlns:vm="using:ClassShout.Teacher.ViewModels"
              xmlns:proto="using:ClassShout.Core.Protocol"
              xmlns:remote="using:ClassShout.Core.Remote"
+             xmlns:design="using:ClassShout.Design"
              x:Class="ClassShout.Teacher.Views.MainView"
              x:DataType="vm:TeacherShellViewModel"
              Background="{DynamicResource Md3.Surface}">
@@ -1404,28 +1405,107 @@
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                            Text="{Binding Update.LastCheckedText}" />
 
-                <!-- 镜像源：预置几个常用的，也可以自己填 -->
+                <!-- ===== 镜像源：内置几条，也可以自己加 ===== -->
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="bodySmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="镜像源（点「用这个」切换）" />
+                  <Button Grid.Column="1" Classes="tonal small" Content="一键检测全部"
+                          Command="{Binding Update.TestAllCommand}" />
+                </Grid>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           IsVisible="{Binding Update.TestSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           Foreground="{DynamicResource Md3.Primary}"
+                           Text="{Binding Update.TestSummary}" />
+
+                <ItemsControl ItemsSource="{Binding Update.Mirrors}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="design:MirrorRow">
+                      <Border CornerRadius="10" Margin="0,0,0,6" Padding="10"
+                              Background="{DynamicResource Md3.SurfaceContainerHigh}">
+                        <StackPanel Spacing="3">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Classes="bodyMedium" Text="{Binding Label}" />
+                            <Border IsVisible="{Binding IsSelected}"
+                                    CornerRadius="9999" Padding="7,1" VerticalAlignment="Center"
+                                    Background="{DynamicResource Md3.PrimaryContainer}">
+                              <TextBlock Classes="labelSmall"
+                                         Foreground="{DynamicResource Md3.OnPrimaryContainer}"
+                                         Text="使用中" />
+                            </Border>
+                          </StackPanel>
+                          <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                                     Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                     Text="{Binding DetailText}" />
+                          <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                                     Text="{Binding ResultText}" />
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Classes="tonal small" Content="用这个"
+                                    Command="{Binding SelectCommand}" />
+                            <Button Classes="text small" Content="删除"
+                                    IsVisible="{Binding CanRemove}"
+                                    Command="{Binding RemoveCommand}" />
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- 加一条自己的镜像 -->
+                <Expander Header="添加镜像源" HorizontalAlignment="Stretch">
+                  <StackPanel Spacing="8" Margin="0,8,0,0">
+                    <TextBox Classes="outlined dense" Watermark="名字，例如 校园代理"
+                             Text="{Binding Update.NewLabel}" />
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Classes="bodySmall" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                 Text="这条镜像在 Gitee 上" />
+                      <ToggleSwitch Grid.Column="1" IsChecked="{Binding Update.NewIsGitee}" />
+                    </Grid>
+                    <TextBox Classes="outlined dense"
+                             Watermark="API 地址，留空＝按上面那项用默认"
+                             Text="{Binding Update.NewApiBase}" />
+                    <TextBox Classes="outlined dense"
+                             Watermark="仓库，例如 li-hansen136/ClassShout（留空＝与默认相同）"
+                             Text="{Binding Update.NewRepository}" />
+                    <TextBox Classes="outlined dense"
+                             Watermark="下载地址模板，例如 https://ghproxy.net/{url}"
+                             Text="{Binding Update.NewTemplate}" />
+                    <Button Classes="tonal small" HorizontalAlignment="Left" Content="添加"
+                            Command="{Binding Update.AddMirrorCommand}" />
+                    <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="模板里 {url} 是整段原始地址、{path} 是去掉 github.com/ 之后的部分；留空表示用该站原地址。" />
+                  </StackPanel>
+                </Expander>
+
+                <!-- ===== 代理：连不上 GitHub 时最常要改的就是这里 ===== -->
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="bodySmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="代理" />
+                </Grid>
+
                 <ComboBox HorizontalAlignment="Stretch"
-                          ItemsSource="{Binding Update.Mirrors}"
-                          SelectedItem="{Binding Update.SelectedMirror}">
+                          ItemsSource="{Binding Update.ProxyModes}"
+                          SelectedItem="{Binding Update.SelectedProxyMode}">
                   <ComboBox.ItemTemplate>
-                    <DataTemplate x:DataType="remote:UpdateMirror">
+                    <DataTemplate x:DataType="design:ProxyModeOption">
                       <TextBlock Text="{Binding Label}" />
                     </DataTemplate>
                   </ComboBox.ItemTemplate>
                 </ComboBox>
 
                 <TextBox Classes="outlined dense"
-                         Watermark="下载地址模板，例如 https://ghproxy.net/{url}"
-                         Text="{Binding Update.DownloadTemplate}" />
-
-                <TextBox Classes="outlined dense"
-                         Watermark="GitHub API 地址（镜像自带 API 时填它的）"
-                         Text="{Binding Update.ApiBase}" />
+                         IsVisible="{Binding Update.IsCustomProxy}"
+                         Watermark="代理地址，例如 http://127.0.0.1:7890"
+                         Text="{Binding Update.ProxyUrl}" />
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
-                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="模板里 {url} 是原始下载地址、{path} 是去掉 github.com/ 之后的部分；留空表示直连 GitHub。" />
+                           Foreground="{DynamicResource Md3.Primary}"
+                           Text="{Binding Update.ProxyHintText}" />
 
                 <Button Classes="text small" HorizontalAlignment="Left" Content="保存设置"
                         Command="{Binding Update.SaveCommand}" />

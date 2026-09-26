@@ -181,21 +181,29 @@ cd ClassShout
 
 ```
 dist/
-├─ windows/
-│  ├─ ClassShout.Classroom.exe           教室端（拷到教室电脑）
-│  ├─ ClassShout.Teacher.Desktop.exe     教师端桌面头（调试用，可不分发）
+├─ windows/                              每个应用一个文件夹（1.10.0 起不再单文件）
+│  ├─ classroom/ClassShout.Classroom.exe 教室端
+│  ├─ teacher/ClassShout.Teacher.Desktop.exe  教师端桌面头（调试用，可不分发）
 │  └─ server/ClassShout.RelayServer.exe  中继服务器（跨局域网部署用，见 3.6）
 ├─ android/
 │  └─ classshout-teacher-<版本>-universal.apk   教师端（发到老师手机）
 ├─ linux/                                加 -IncludeLinuxServer 时才有
-│  ├─ ClassShout.RelayServer             Linux 中继服务器
-│  └─ ClassShout.Classroom               Linux 教室端
+│  ├─ server/ClassShout.RelayServer      Linux 中继服务器
+│  └─ classroom/ClassShout.Classroom     Linux 教室端
 └─ release/                              **可直接上传的资产目录**
-   ├─ ClassShout.Classroom.exe          文件名就是发行版附件名
-   ├─ ClassShout.RelayServer-linux-x64
+   ├─ ClassShout.Classroom-win-x64.zip        文件名就是发行版附件名
+   ├─ ClassShout.Teacher-win-x64.zip
+   ├─ ClassShout.RelayServer-win-x64.zip
+   ├─ ClassShout.RelayServer-linux-x64.tar.gz
+   ├─ ClassShout.Classroom-linux-x64.tar.gz
    ├─ classshout-teacher-<版本>-universal.apk
    └─ SHA256SUMS.txt                    校验清单（LF 换行，sha256sum -c 可直接用）
 ```
+
+**为什么不再打成单文件**：单文件每次启动都要把 Skia 这类原生库解压到临时目录，
+首次启动明显变慢，体积还比"文件夹 + 压缩包"更大；而"解压到哪里就在哪里双击"
+对使用者并不更难。压缩包里套了一层以应用命名的目录 —— 解压出来是一整个目录，
+而不是十几个 dll 散落在"下载"文件夹里（后者在教室那台机器上基本等于"从此找不到"）。
 
 `dist\release\` 是发布时唯一需要的东西：`pack.ps1` 已经把每个产物按**最终附件名**摆好，
 发布脚本不必再靠记忆去拼"哪个文件叫什么名字"。
@@ -254,7 +262,9 @@ dist/
 
 ### 3.4 第二步：部署教室端
 
-1. 把 `ClassShout.Classroom.exe` 拷到教室电脑，放在一个固定目录，例如 `C:\ClassShout\`。
+1. 把 `ClassShout.Classroom-win-x64.zip` 解压到一个固定目录，例如 `C:\ClassShout\`
+   （解压出来是 `ClassShout.Classroom\` 一层目录，里面的 `ClassShout.Classroom.exe`
+   就是入口）。**整个目录一起留着** —— 依赖文件就在它旁边；升级时解压覆盖同一个目录。
 
    教室端的配置**不在 exe 旁边**，而是写在当前 Windows 账户的用户目录里：
 
@@ -264,6 +274,7 @@ dist/
    %LOCALAPPDATA%\ClassShout\classroom-speech.json        朗读设置
    %LOCALAPPDATA%\ClassShout\classroom-stt.json           语音转文字（接口地址与密钥）
    %LOCALAPPDATA%\ClassShout\appearance.json              主题色（个性化，两端共用同一份格式）
+   %LOCALAPPDATA%\ClassShout\logs\                        运行日志（按天一个文件，只留 7 天）
    ```
 
    这一点是有意为之：程序可能被装在 `Program Files` 这类只读位置，
@@ -365,7 +376,7 @@ dist/
 > 需要「无人登录也能跑」或「以最高权限运行」时，仍要用**计划任务**（启动文件夹做不到这两点）：
 >
 > ```powershell
-> $exe = "C:\ClassShout\ClassShout.Classroom.exe"
+> $exe = "C:\ClassShout\ClassShout.Classroom\ClassShout.Classroom.exe"
 > $action  = New-ScheduledTaskAction -Execute $exe
 > $trigger = New-ScheduledTaskTrigger -AtLogOn
 > Register-ScheduledTask -TaskName "ClassShout 教室端" -Action $action -Trigger $trigger `
@@ -739,34 +750,37 @@ export CLASSSHOUT_SCHEDULE_TICK_MS=5000
 
 两端设置页的最后一张卡片是「版本与更新」：显示当前版本，点「检查更新」就去问一次
 有没有新版本；查到了可以直接打开下载地址（默认按平台挑附件：教师端挑 `.apk`、
-教室端挑 `ClassShout.Classroom.exe`），也可以打开完整的发行版页面。
+教室端挑 `ClassShout.Classroom-win-x64.zip`），也可以打开完整的发行版页面。
 
-**镜像源可以自己定。** GitHub 在校园网里常常慢到不能用，而每所学校能用的加速镜像
-不一样、还可能过几个月就换一个，所以：预置了几个常用的（直连 / ghproxy.net /
-gh-proxy.com / ghfast.top / kkgithub），也可以自己填。两个字段：
+**镜像源可以自己定，也可以一键检测哪条能用。** GitHub 在校园网里常常慢到不能用，
+而每所学校能用的加速镜像不一样、还可能过几个月就换一个，所以内置了几条、也能自己加：
 
-| 字段 | 作用 |
+| 内置镜像 | 走哪套接口 |
 |---|---|
-| GitHub API 地址 | 查"最新的是哪一版"走这里。镜像自带 API 时填镜像的（如 `https://api.kkgithub.com`） |
-| 下载地址模板 | 把原始下载地址换成镜像地址。留空＝直连 |
+| 直连 GitHub | `api.github.com` |
+| **Gitee 码云（li-hansen136）** | `gitee.com/api/v5`，仓库是码云上那份镜像 |
+| ghproxy.net / gh-proxy.com / ghfast.top | GitHub 的 API + 下载地址走代理前缀 |
+| kkgithub | `api.kkgithub.com` + 域名替换 |
 
-模板支持两个占位符，覆盖常见镜像的两种做法：
+点「一键检测全部镜像」会**并发**把每条都测一遍（六条约 200 毫秒全部回来，
+而不是一条一条等），列出通不通、耗时、查到的最新版本，并自动切到最快的那条。
+每条镜像也能自己加、自己删（内置的删不掉 —— 它们是"一条都不剩"时的兜底）。
 
-- `{url}` —— 整段原始地址，用于"前缀式"镜像：`https://ghproxy.net/{url}`；
-- `{path}` —— 去掉 `https://github.com/` 之后的部分，用于"换域名式"镜像：
-  `https://kkgithub.com/{path}`。
+**连不上多半是代理的问题**，所以代理是显式的一档：跟随系统 / 不使用 / 自己填地址。
+界面下方会显示**实际解析出来的代理**（「系统代理 → http://127.0.0.1:7890」
+或「系统没有配置代理（直连）」）—— 出问题时一眼能看出是系统代理没读到，
+还是地址填错了，而不是对着"连不上"猜。
 
-几条取舍：
+其余取舍：
 
 - **只在你按下按钮时检查**，不做后台轮询。每次开应用都去外面问一次"有没有新版本"，
   对一台放在教室里的机器没有任何必要。
-- **镜像只影响下载地址**，不影响"有没有新版本"这个判断 —— 这正是那些加速下载的
-  代理镜像的工作方式。
+- **镜像只影响"去哪里问、去哪里下"**，判断依据始终是那个站点上的 release tag。
 - **版本比对按段比数字**，不是按字符串："1.10.0" 与 "1.9.0" 按字符串比会得出相反的
   结论，而这种错要到第 10 个次版本才显形。带预发布后缀的（`1.9.0-rc1`）算比同号
   正式版旧。
 - **失败要说人话**：仓库名写错、被限流、校园网把返回内容换成登录页，三种情况给三句
-  不同的话 —— 把 JSON 解析异常甩给老师看毫无帮助。
+  不同的话；直连失败时还会顺带提醒"可以设个代理"。
 - 服务器那边不用这张卡片：它的版本号直接在 `/api/health` 里（升级完 `curl` 一下
   就知道新版本部署上去了没有），控制台概览页也显示。
 
@@ -785,8 +799,12 @@ gh-proxy.com / ghfast.top / kkgithub），也可以自己填。两个字段：
 
 #### 升级
 
-教室端与教师端都是**单文件替换**：关掉旧的、覆盖新文件、重新打开。
-配置（教室名、UUID、口令、账号）都存在用户目录里，升级不会丢。
+教室端与教师端都是**解压覆盖**：关掉旧的 → 把压缩包解压到**同一个目录**（覆盖）→ 重新打开。
+配置（教室名、UUID、口令、账号、日志）都存在用户目录里，升级不会丢。
+
+> 1.10.0 起不再打成单文件，所以升级是"覆盖一个目录"而不是"换一个 exe"。
+> 之前用单文件版本的，第一次升级时先把新的压缩包解压到一个干净目录，
+> 再把旧的那个 exe 删掉即可 —— 配置从来不在程序旁边，所以不影响任何东西。
 
 ```powershell
 # 教室端配置位置（升级前建议备份）
@@ -794,9 +812,26 @@ gh-proxy.com / ghfast.top / kkgithub），也可以自己填。两个字段：
 %LOCALAPPDATA%\ClassShout\classroom-notification.json
 ```
 
-服务器升级：停服务 → 覆盖程序文件 → **保留所有 `relay-*.json` 与
-`relay-schedule-audio/` 目录** → 启服务。
+服务器升级：停服务 → 解压新的 `ClassShout.RelayServer-linux-x64.tar.gz` 覆盖程序目录 →
+**保留所有 `relay-*.json`、`relay-schedule-audio/` 与 `logs/`** → 启服务。
 状态文件都在，教室与账号不需要重新注册，老师排的服务器定时也还在。
+
+#### 运行日志
+
+两端都会把界面上的那 200 行日志同时写一份到磁盘：
+
+```
+%LOCALAPPDATA%\ClassShout\logs\classshout-2026-09-26.log     Windows
+~/.local/share/ClassShout/logs/classshout-2026-09-26.log     Linux
+```
+
+- **按天一个文件**：单个文件一直追加的话，几个月后会大到打不开，
+  而"按天"正好对得上"那节课是几号"这个问题；
+- **只留最近 7 天**：教室电脑长期没人管，不清理会被慢慢吃掉，
+  而排障要看的几乎都是这几天内的事；
+- 判断依据是**文件名里的日期**，不是文件时间戳 —— 后者会被复制、备份、
+  解压改掉，而"这个文件是哪一天的"写在它名字里；
+- 写不进去（目录只读、磁盘满）不会影响应用继续干活：日志是辅助，不该成为新的故障点。
 
 #### 备份
 
@@ -845,6 +880,7 @@ cat /opt/classshout/relay-config.json
 | 中文显示成方块（Android） | 已知问题的修复已包含在代码里；若自行改过设计系统，见「踩过的坑：Android 上非 Normal 字重的中文会变方块」 |
 
 还有一条通用手段：教师端「设备」页有**运行日志**，教室端右下角也有，
+而且两边都会同时落到磁盘（按天分文件、留 7 天，见 3.13），
 绝大多数连接问题直接看日志比猜快。
 
 ---
@@ -856,7 +892,8 @@ cat /opt/classshout/relay-config.json
 
 ### 教室端也能跑在 Linux 上
 
-教室端有两个产物：`ClassShout.Classroom.exe`（Windows）与 `ClassShout.Classroom`（linux-x64）。
+教室端有两个产物：`ClassShout.Classroom-win-x64.zip`（Windows）与
+`ClassShout.Classroom-linux-x64.tar.gz`（linux-x64，解压出来的可执行文件叫 `ClassShout.Classroom`）。
 Linux 版的定位是「教室里那台便宜的小主机」——无桌面、开机自启、整天挂着收喊话。
 
 **先装上音频依赖**，否则它装得上、界面也正常，就是不发声：
@@ -1567,7 +1604,7 @@ dotnet run --project tools\ClassShout.EndToEnd -- --relay http://127.0.0.1:8090
 
 ```powershell
 pwsh -File scripts\smoke-tray.ps1
-pwsh -File scripts\smoke-tray.ps1 -Exe dist\windows\ClassShout.Classroom.exe   # 直接测打包产物
+pwsh -File scripts\smoke-tray.ps1 -Exe dist\windows\classroom\ClassShout.Classroom.exe   # 直接测打包产物
 ```
 
 做法是给主窗口发 `WM_CLOSE`（等价于用户点右上角的 ×），然后断言**进程仍存活

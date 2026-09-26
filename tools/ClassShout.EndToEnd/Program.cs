@@ -251,6 +251,9 @@ internal static class Program
         // ---------- 3s. 开发者模式的连点手势 ----------
         AssertDeveloperTapGesture();
 
+        // ---------- 3t. 日志按天分文件、只留 7 天 ----------
+        AssertLogRetention();
+
         // ---------- 3n. 发送队列 ----------
         await AssertShoutQueueAsync();
 
@@ -2493,19 +2496,95 @@ internal static class Program
             UpdateSettings.NormalizeRepository("  ") == UpdateSettings.DefaultRepository,
             UpdateSettings.DefaultRepository);
 
-        Check("预置了几个镜像，且第一个是直连",
-            UpdateSettings.Presets.Count >= 3 && UpdateSettings.Presets[0].DownloadTemplate.Length == 0,
-            string.Join("、", UpdateSettings.Presets.Select(m => m.Label)));
+        Check("预置了几条内置镜像，且第一条是直连",
+            UpdateMirror.BuiltIns().Count >= 5 && UpdateMirror.BuiltIns()[0].DownloadTemplate.Length == 0,
+            string.Join("、", UpdateMirror.BuiltIns().Select(m => m.Label)));
+
+        // —— 内置的 Gitee 镜像 ——
+        var gitee = UpdateMirror.BuiltIns().FirstOrDefault(m => m.Provider == UpdateMirrorProvider.Gitee);
+
+        Check("内置了 Gitee 镜像（码云上那份镜像仓库）",
+            gitee is { Repository: "li-hansen136/ClassShout" },
+            gitee is null ? "没有 Gitee 那一条" : $"{gitee.Label} → {gitee.EffectiveRepository(UpdateSettings.DefaultRepository)}");
+
+        Check("Gitee 镜像走的是码云的接口地址",
+            gitee?.LatestReleaseUrl(UpdateSettings.DefaultRepository)
+                == "https://gitee.com/api/v5/repos/li-hansen136/ClassShout/releases/latest",
+            gitee?.LatestReleaseUrl(UpdateSettings.DefaultRepository) ?? "(没找到)");
+
+        Check("GitHub 镜像走的是 GitHub 的接口地址",
+            UpdateMirror.BuiltIns()[0].LatestReleaseUrl(UpdateSettings.DefaultRepository)
+                == "https://api.github.com/repos/WRD1145/ClassShout/releases/latest",
+            UpdateMirror.BuiltIns()[0].LatestReleaseUrl(UpdateSettings.DefaultRepository));
+
+        Check("仓库名容错：整条 Gitee 地址也能认",
+            UpdateSettings.NormalizeRepository("https://gitee.com/li-hansen136/ClassShout.git") == "li-hansen136/ClassShout",
+            UpdateSettings.NormalizeRepository("https://gitee.com/li-hansen136/ClassShout.git"));
+
+        Check("下载模板：{path} 对 Gitee 的地址也剪得对",
+            UpdateSettings.ApplyTemplate(
+                "https://myproxy/{path}",
+                "https://gitee.com/li-hansen136/ClassShout/releases/download/v1.10.0/x.zip")
+            == "https://myproxy/li-hansen136/ClassShout/releases/download/v1.10.0/x.zip",
+            "剪掉了 gitee.com/ 前缀");
+
+        // —— 镜像列表：能加、能删、内置的删不掉 ——
+        var withCustom = new UpdateSettings
+        {
+            Mirrors = [.. UpdateMirror.BuiltIns()],
+            SelectedMirrorId = "gitee",
+        }.Normalized();
+
+        withCustom.Mirrors.Add(new UpdateMirror { Label = "校园代理", ApiBase = "https://mirror.school.edu" });
+        var afterAdd = withCustom.Normalized();
+
+        Check("可以往列表里加自定义镜像",
+            afterAdd.Mirrors.Count == UpdateMirror.BuiltIns().Count + 1
+            && afterAdd.Mirrors.Any(m => m.Label == "校园代理"),
+            $"共 {afterAdd.Mirrors.Count} 条");
+
+        Check("选中的镜像会记住",
+            afterAdd.SelectedMirror.Id == "gitee",
+            afterAdd.SelectedMirror.Label);
+
+        var emptied = new UpdateSettings { Mirrors = [], SelectedMirrorId = "nope" }.Normalized();
+
+        Check("把镜像删光之后内置的会补回来（总有一条能试）",
+            emptied.Mirrors.Count == UpdateMirror.BuiltIns().Count && emptied.SelectedMirror.Id == UpdateMirror.BuiltIns()[0].Id,
+            $"补回 {emptied.Mirrors.Count} 条");
+
+        // —— 代理解析 ——
+        var noProxy = UpdateProxy.Resolve(UpdateProxyMode.None, null);
+        Check("代理：选「不使用」就是直连", !noProxy.UseProxy && noProxy.Description.Contains("直连"), noProxy.Description);
+
+        var customProxy = UpdateProxy.Resolve(UpdateProxyMode.Custom, "http://127.0.0.1:7890");
+        Check("代理：自己填的地址会被用上",
+            customProxy.UseProxy && customProxy.Address.Contains("127.0.0.1:7890"),
+            customProxy.Description);
+
+        var badProxy = UpdateProxy.Resolve(UpdateProxyMode.Custom, "这不是地址");
+        Check("代理：地址填错时说清楚，而不是悄悄直连",
+            !badProxy.UseProxy && badProxy.Description.Contains("看不懂"),
+            badProxy.Description);
+
+        var systemProxy = UpdateProxy.Resolve(UpdateProxyMode.System, null);
+        Check("代理：跟随系统时会把实际解析结果说出来（没配就是直连）",
+            systemProxy.Description.Contains("系统"),
+            systemProxy.Description);
+
+        Check("代理：选了自定义却没填地址，会退回跟随系统（不会假装走了代理）",
+            new UpdateSettings { ProxyMode = UpdateProxyMode.Custom, ProxyUrl = "  " }.Normalized().ProxyMode == UpdateProxyMode.System,
+            "退回跟随系统");
 
         // —— 端到端：请求打到哪、拿到什么、算出什么 ——
         const string releaseJson = """
             {
-              "tag_name": "v1.9.0",
+              "tag_name": "v1.10.0",
               "body": "这一版修了几个问题。",
-              "html_url": "https://github.com/WRD1145/ClassShout/releases/tag/v1.9.0",
+              "html_url": "https://github.com/WRD1145/ClassShout/releases/tag/v1.10.0",
               "assets": [
-                { "name": "ClassShout.Classroom.exe", "size": 1234, "browser_download_url": "https://github.com/WRD1145/ClassShout/releases/download/v1.9.0/ClassShout.Classroom.exe" },
-                { "name": "classshout-teacher-1.9.0-universal.apk", "size": 5678, "browser_download_url": "https://github.com/WRD1145/ClassShout/releases/download/v1.9.0/classshout-teacher-1.9.0-universal.apk" }
+                { "name": "ClassShout.Classroom-win-x64.zip", "size": 1234, "browser_download_url": "https://github.com/WRD1145/ClassShout/releases/download/v1.10.0/ClassShout.Classroom-win-x64.zip" },
+                { "name": "classshout-teacher-1.10.0-universal.apk", "size": 5678, "browser_download_url": "https://github.com/WRD1145/ClassShout/releases/download/v1.10.0/classshout-teacher-1.10.0-universal.apk" }
               ]
             }
             """;
@@ -2515,16 +2594,34 @@ internal static class Program
             Content = new StringContent(releaseJson, System.Text.Encoding.UTF8, "application/json"),
         });
 
-        using var stubHttp = new HttpClient(handler);
-        var settings = new UpdateSettings
-        {
-            DownloadTemplate = "https://ghproxy.net/{url}",
-        };
+        // 处理器按代理解析结果来造：于是"这次有没有走代理"也能断言
+        ProxyResolution? seenProxy = null;
+        var checker = new UpdateChecker(
+            new UpdateSettings
+            {
+                Mirrors =
+                [
+                    new UpdateMirror
+                    {
+                        Id = "ghproxy",
+                        Label = "ghproxy.net",
+                        DownloadTemplate = "https://ghproxy.net/{url}",
+                    },
+                ],
+                SelectedMirrorId = "ghproxy",
+                ProxyMode = UpdateProxyMode.Custom,
+                ProxyUrl = "http://127.0.0.1:7890",
+            },
+            proxy =>
+            {
+                seenProxy = proxy;
+                return handler;
+            });
 
-        var found = await new UpdateChecker(stubHttp, settings).CheckAsync("1.8.0");
+        var found = await checker.CheckAsync("1.9.0");
 
         Check("检查更新：查得到新版本",
-            found is { Ok: true, HasUpdate: true } && found.LatestVersion == "1.9.0",
+            found is { Ok: true, HasUpdate: true } && found.LatestVersion == "1.10.0",
             found.Error ?? $"最新 {found.LatestVersion}");
 
         Check("检查更新：请求打到了正确的 API 地址",
@@ -2535,13 +2632,21 @@ internal static class Program
             handler.LastUserAgent == "ClassShout-Updater",
             handler.LastUserAgent ?? "(没有)");
 
+        Check("检查更新：自己填的代理真的传给了 HTTP 层",
+            seenProxy is { UseProxy: true } && seenProxy.Value.Address.Contains("7890"),
+            seenProxy?.Description ?? "(没解析)");
+
+        Check("检查更新：结果里带回走的哪个镜像与代理（出问题时说得清）",
+            found.MirrorLabel == "ghproxy.net" && found.ProxyDescription?.Contains("7890") == true,
+            $"{found.MirrorLabel} / {found.ProxyDescription}");
+
         Check("检查更新：附件地址已经过镜像换算",
-            found.FindAsset("ClassShout.Classroom.exe")?.Url
-                == "https://ghproxy.net/https://github.com/WRD1145/ClassShout/releases/download/v1.9.0/ClassShout.Classroom.exe",
-            found.FindAsset("ClassShout.Classroom.exe")?.Url ?? "(没找到)");
+            found.FindAsset("ClassShout.Classroom-win-x64.zip")?.Url
+                == "https://ghproxy.net/https://github.com/WRD1145/ClassShout/releases/download/v1.10.0/ClassShout.Classroom-win-x64.zip",
+            found.FindAsset("ClassShout.Classroom-win-x64.zip")?.Url ?? "(没找到)");
 
         Check("检查更新：按后缀也能挑到附件（附件名里带着版本号）",
-            found.FindAssetEndingWith(".apk")?.Name == "classshout-teacher-1.9.0-universal.apk",
+            found.FindAssetEndingWith(".apk")?.Name == "classshout-teacher-1.10.0-universal.apk",
             found.FindAssetEndingWith(".apk")?.Name ?? "(没找到)");
 
         Check("检查更新：带上发行说明与页面地址",
@@ -2549,58 +2654,82 @@ internal static class Program
             "说明与页面都在");
 
         // —— 已经是最新 ——
-        var upToDate = await new UpdateChecker(stubHttp, settings).CheckAsync("1.9.0");
+        var upToDate = await checker.CheckAsync("1.10.0");
 
         Check("已经是最新时不报有新版本",
             upToDate is { Ok: true, HasUpdate: false },
             $"最新 {upToDate.LatestVersion}");
 
-        // —— 换镜像：API 也跟着走 ——
-        var mirrorSettings = new UpdateSettings
-        {
-            ApiBase = "https://api.kkgithub.com",
-            DownloadTemplate = "https://kkgithub.com/{path}",
-        };
+        // —— 一键检测：必须真的并发 ——
+        //
+        // 串行检测是这里最现实的一种退化（写起来更自然），而它的代价是
+        // "六条源里有一条不通就要等它超时"，用户按下按钮后要干等十几秒。
+        // 所以用"每个请求睡 200 毫秒"来断言：六条并发应当在 500 毫秒内回来，
+        // 串行则至少 1.2 秒。
+        var slowHandler = new StubHandler(
+            _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(releaseJson, System.Text.Encoding.UTF8, "application/json"),
+            },
+            TimeSpan.FromMilliseconds(200));
 
-        await new UpdateChecker(stubHttp, mirrorSettings).CheckAsync("1.8.0");
+        var parallelChecker = new UpdateChecker(
+            new UpdateSettings { Mirrors = [.. UpdateMirror.BuiltIns()] },
+            _ => slowHandler,
+            (_, _) => new ProxyResolution(false, null, "直连", string.Empty));
 
-        Check("换镜像时 API 地址也跟着换（自带 API 的镜像）",
-            handler.LastUri == "https://api.kkgithub.com/repos/WRD1145/ClassShout/releases/latest",
-            handler.LastUri ?? "(没请求)");
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var results = await parallelChecker.TestAllAsync(UpdateMirror.BuiltIns());
+        stopwatch.Stop();
+
+        Check("一键检测：所有镜像都测到了",
+            results.Count == UpdateMirror.BuiltIns().Count && results.All(r => r.Ok),
+            $"测了 {results.Count} 条，通 {results.Count(r => r.Ok)} 条");
+
+        Check("一键检测：并发发出，而不是一条一条等（6 × 200ms 远小于串行的 1.2s）",
+            stopwatch.ElapsedMilliseconds < 900 && slowHandler.PeakConcurrency > 1,
+            $"{stopwatch.ElapsedMilliseconds} ms，同时在跑的请求数峰值 {slowHandler.PeakConcurrency}");
+
+        Check("一键检测：每条结果都带回自己的名字与耗时",
+            results.All(r => r.Label.Length > 0 && r.LatencyMs >= 0),
+            string.Join("、", results.Select(r => $"{r.Label}={r.LatencyMs}ms")));
 
         // —— 失败路径：要给人话，不要异常 ——
-        var missing = new UpdateChecker(
-            new HttpClient(new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound))),
-            settings);
+        var notFound = await new UpdateChecker(
+            new UpdateSettings(),
+            _ => new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound))).CheckAsync("1.9.0");
 
-        var notFound = await missing.CheckAsync("1.8.0");
-
-        Check("仓库不存在时给一句人话（而不是抛异常）",
-            !notFound.Ok && notFound.Error?.Contains("没找到") == true,
+        Check("仓库不存在时给一句人话（并指出是这个镜像上没有发行版）",
+            !notFound.Ok && notFound.Error?.Contains("发行版") == true,
             notFound.Error ?? "(没有原因)");
 
-        var throttled = new UpdateChecker(
-            new HttpClient(new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden))),
-            settings);
-
-        var limited = await throttled.CheckAsync("1.8.0");
+        var limited = await new UpdateChecker(
+            new UpdateSettings(),
+            _ => new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden))).CheckAsync("1.9.0");
 
         Check("被限流时说清是限流（换个镜像还能救）",
             !limited.Ok && limited.Error?.Contains("频率限制") == true,
             limited.Error ?? "(没有原因)");
 
-        var broken = new UpdateChecker(
-            new HttpClient(new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        var garbled = await new UpdateChecker(
+            new UpdateSettings(),
+            _ => new StubHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new StringContent("这不是 JSON", System.Text.Encoding.UTF8, "application/json"),
-            })),
-            settings);
-
-        var garbled = await broken.CheckAsync("1.8.0");
+            })).CheckAsync("1.9.0");
 
         Check("返回内容被中间层改过时给一句人话（而不是把 JSON 解析异常甩出来）",
             !garbled.Ok && garbled.Error?.Contains("看不懂") == true,
             garbled.Error ?? "(没有原因)");
+
+        // 没走代理时，"连不上"这句里要顺带提醒可以设代理 —— 这正是用户这次踩到的坑
+        var offline = await new UpdateChecker(
+            new UpdateSettings { ProxyMode = UpdateProxyMode.None },
+            _ => new StubHandler(_ => throw new HttpRequestException("无法连接"))).CheckAsync("1.9.0");
+
+        Check("直连失败时提示「可以设个代理」（校园网里这是最常见的原因）",
+            !offline.Ok && offline.Error?.Contains("代理") == true,
+            offline.Error ?? "(没有原因)");
     }
 
     /// <summary>
@@ -2705,28 +2834,127 @@ internal static class Program
     }
 
     /// <summary>
-    /// 一个只回固定响应的 HTTP 处理器，顺便记下最后一次请求的地址与 User-Agent。
+    /// 日志按天分文件、只留 7 天。
+    ///
+    /// 教室电脑长期没人管，日志不清理会被慢慢吃掉；而排障要看的几乎都是这几天内的事。
+    /// 判断依据刻意用**文件名里的日期**而不是文件时间戳：后者会被复制、备份、
+    /// 解压改掉，而"这个文件是哪一天的"是它名字里写着的。
+    /// </summary>
+    private static void AssertLogRetention()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cs-logtest-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(directory);
+
+        var today = new DateTimeOffset(2026, 9, 26, 10, 0, 0, TimeSpan.Zero);
+
+        try
+        {
+            // 造 10 天的日志文件
+            for (var i = 0; i < 10; i++)
+            {
+                var day = today.AddDays(-i);
+                File.WriteAllText(
+                    Path.Combine(directory, ClassShout.Core.Remote.AppLog.FileNameFor(day)),
+                    $"第 {i} 天的日志");
+            }
+
+            // 一个名字不像我们写的文件：不该被当成日志删掉
+            var foreign = Path.Combine(directory, "notes.txt");
+            File.WriteAllText(foreign, "手工放的文件");
+
+            var removed = ClassShout.Core.Remote.AppLog.PruneFiles(directory, today, ClassShout.Core.Remote.AppLog.RetainDays);
+
+            var left = Directory.GetFiles(directory, "classshout-*.log").Length;
+
+            Check("日志只保留最近 7 天", left == ClassShout.Core.Remote.AppLog.RetainDays, $"剩 {left} 个");
+            Check("日志清理会删掉 7 天前的文件", removed == 3, $"删了 {removed} 个");
+            Check("今天那份不会被删",
+                File.Exists(Path.Combine(directory, ClassShout.Core.Remote.AppLog.FileNameFor(today))),
+                "今天还在");
+            Check("恰好第 7 天那份还在（边界不算过期）",
+                File.Exists(Path.Combine(directory, ClassShout.Core.Remote.AppLog.FileNameFor(today.AddDays(-6)))),
+                "第 7 天还在");
+            Check("第 8 天那份已经被删",
+                !File.Exists(Path.Combine(directory, ClassShout.Core.Remote.AppLog.FileNameFor(today.AddDays(-7)))),
+                "第 8 天已删");
+            Check("不认识的日志文件不会被误删", File.Exists(foreign), "notes.txt 还在");
+
+            // 文件名按天分：同一天写多次是追加到同一个文件
+            var name = ClassShout.Core.Remote.AppLog.FileNameFor(today);
+            Check("日志文件名里带着日期（按天分文件）",
+                name == "classshout-2026-09-26.log",
+                name);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // 删不掉就算了，临时目录会自己清
+            }
+        }
+    }
+
+    /// <summary>
+    /// 一个只回固定响应的 HTTP 处理器，顺便记下每次请求的地址与 User-Agent。
     ///
     /// 自检机器上没有外网也要能跑，所以"检查更新"这一段完全不打真网络。
+    /// 支持按请求延迟，用来断言"多条镜像是不是真的并发在测"。
     /// </summary>
     private sealed class StubHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _respond;
+        private readonly TimeSpan _delay;
 
-        public StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) => _respond = respond;
+        public StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond, TimeSpan delay = default)
+        {
+            _respond = respond;
+            _delay = delay;
+        }
 
         public string? LastUri { get; private set; }
 
         public string? LastUserAgent { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        /// <summary>收到的每一个请求地址（用来断言"有没有真的并发发出去"）。</summary>
+        public List<string> Urls { get; } = [];
+
+        /// <summary>同一时刻正在处理的请求数峰值。</summary>
+        public int PeakConcurrency { get; private set; }
+
+        private int _active;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastUri = request.RequestUri?.ToString();
             LastUserAgent = request.Headers.TryGetValues("User-Agent", out var values)
                 ? values.FirstOrDefault()
                 : null;
 
-            return Task.FromResult(_respond(request));
+            lock (Urls)
+            {
+                Urls.Add(LastUri ?? string.Empty);
+
+                var active = Interlocked.Increment(ref _active);
+                PeakConcurrency = Math.Max(PeakConcurrency, active);
+            }
+
+            try
+            {
+                if (_delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(_delay, cancellationToken).ConfigureAwait(false);
+                }
+
+                return _respond(request);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _active);
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 # 托盘驻留的运行时验证。
 #
 #   pwsh -File scripts/smoke-tray.ps1
-#   pwsh -File scripts/smoke-tray.ps1 -Exe dist\windows\ClassShout.Classroom.exe
+#   pwsh -File scripts/smoke-tray.ps1 -Exe dist\windows\classroom\ClassShout.Classroom.exe
 #
 # 思路：给主窗口发 WM_CLOSE（等价于用户点右上角的 ×），然后看进程是否还活着。
 #   · 进程存活 + 主窗口句柄消失  ->  关闭被拦下、窗口被藏进托盘，功能成立
@@ -23,7 +23,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $Exe) {
     $root = Split-Path -Parent $PSScriptRoot
     $candidates = @(
-        (Join-Path $root 'dist\windows\ClassShout.Classroom.exe'),
+        (Join-Path $root 'dist\windows\classroom\ClassShout.Classroom.exe'),
         (Join-Path $root 'src\ClassShout.Classroom\bin\Release\net10.0-windows\ClassShout.Classroom.exe')
     )
     $Exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1

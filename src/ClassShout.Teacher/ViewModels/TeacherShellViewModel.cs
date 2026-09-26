@@ -135,14 +135,15 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
         _account = new AccountClient(_http, _relaySettings);
 
-        // 检查更新：与教室端共用同一张卡片（设计层里），这边只补上"我是哪个包"
+        // 检查更新：与教室端共用同一张卡片（设计层里），这边只补上"我是哪个包"。
+        // 手机上是 .apk，桌面头是 Windows 的压缩包（附件名里带版本号，所以桌面按精确名挑、
+        // 手机按 .apk 后缀挑）。
         Update = new ClassShout.Design.UpdateCardViewModel(_http, LocalSettings.LoadUpdate(), ClassShout.Design.PlatformLinks.OpenAsync)
         {
             CurrentVersion = ClassShout.Design.DeveloperMode.Version,
             BuildDescription = ClassShout.Design.DeveloperMode.BuildDescription,
-
-            // 附件名里带着版本号，所以按后缀挑：老师端的手机包是 .apk
-            PreferredAssetSuffix = ".apk",
+            PreferredAssetName = OperatingSystem.IsAndroid() ? null : "ClassShout.Teacher-win-x64.zip",
+            PreferredAssetSuffix = OperatingSystem.IsAndroid() ? ".apk" : null,
         };
 
         // 已保存的教室要在构造里就读进来：老师打开应用看到的第一件事，
@@ -2457,6 +2458,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         {
             Logs.RemoveAt(Logs.Count - 1);
         }
+
+        // 同时落一份到磁盘：界面上这份一关就没了，而排障时最常见的问法是
+        // "昨天下午那条喊话到底发出去没有"。按天分文件、只留 7 天，见 AppLog。
+        AppLog.Write("教师端", message);
     }
 
     private static void Post(Action action)

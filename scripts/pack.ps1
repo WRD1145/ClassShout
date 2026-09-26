@@ -4,13 +4,15 @@
 
 .DESCRIPTION
     默认产出：
-      dist\windows\ClassShout.Classroom.exe      教室端（自包含，目标机无需装 .NET）
-      dist\windows\ClassShout.Teacher.Desktop.exe 教师端桌面头（同上）
+      dist\windows\classroom\ClassShout.Classroom.exe       教室端（自包含，目标机无需装 .NET）
+      dist\windows\teacher\ClassShout.Teacher.Desktop.exe    教师端桌面头（同上）
+      dist\windows\server\ClassShout.RelayServer.exe         中继服务器（Windows）
       dist\android\classshout-teacher-<版本>-universal.apk   含 arm64 + x64
 
-    另外生成 dist\release\ —— 按「最终附件名」摆好的可发布资产目录，内含 SHA256SUMS.txt。
-    发布脚本（scripts\release.ps1）只需把这个目录里的东西全传上去、再逐个核对，
-    不必再靠记忆去拼"哪个文件叫什么名字"。
+    自 1.10.0 起**不再打成单文件**，而是"每个应用一个文件夹"；
+    另外生成 dist\release\ —— 按「最终附件名」摆好的可发布资产目录（每个应用一个
+    zip / tar.gz），内含 SHA256SUMS.txt。发布脚本（scripts\release.ps1）只需把这个
+    目录里的东西全传上去、再逐个核对，不必再靠记忆去拼"哪个文件叫什么名字"。
 
 .PARAMETER FrameworkDependent
     改为依赖框架发布，体积从约 60 MB 降到约 15 MB，但目标机必须已安装 .NET 10 运行时。
@@ -81,116 +83,104 @@ try {
     Write-Host ''
     Write-Host "[Windows] 发布模式：$modeText" -ForegroundColor Yellow
 
-    # Framework 一列是必须的：教室端自 1.1.0 起是多目标（net10.0-windows;net10.0，
-    # 后者给 Linux 用），不显式指定框架时 dotnet publish 会以 NETSDK1129 直接拒绝。
-    $windowsProjects = @(
-        @{ Name = '教室端';        Project = 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'; Framework = 'net10.0-windows' }
-        @{ Name = '教师端桌面头';  Project = 'src\ClassShout.Teacher.Desktop\ClassShout.Teacher.Desktop.csproj'; Framework = $null }
-    )
-
-    # 单文件发布参数：
-    #   IncludeNativeLibrariesForSelfExtract —— Skia 等原生库也要进单文件
-    #   EnableCompressionInSingleFile        —— 体积约减半，代价是首次启动稍慢
+    # 发布参数。
+    #
+    # 自 1.10.0 起**不再打成单文件**：单文件每次启动都要把 Skia 这类原生库解压到
+    # 临时目录，首次启动明显变慢，体积还比"文件夹 + 压缩包"更大。
+    # 对使用者来说并没有更难 —— 解压到哪里就在哪里双击运行。
     # 注意：-r 与 RID 必须作为两个独立参数传入，写成 -rwin-x64 会被 MSBuild 当成未知开关。
     $publishArgs = @(
         '-c', $Configuration
         '-r', $Runtime
         "--self-contained=$selfContained"
-        '-p:PublishSingleFile=true'
-        '-p:IncludeNativeLibrariesForSelfExtract=true'
         '-p:DebugType=none'
     )
 
-    if (-not $FrameworkDependent) {
-        # 压缩只在自包含模式下受支持，依赖框架时加上会报 NETSDK1176
-        $publishArgs += '-p:EnableCompressionInSingleFile=true'
-    }
+    # 三个应用各自一个子目录。它们引用同一批程序集（Core / Design），
+    # 平铺在同一个目录里会互相覆盖 —— 单文件时代可以平铺，现在不行。
+    $windowsApps = @(
+        @{ Name = '教室端';       Project = 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'; Framework = 'net10.0-windows'; Folder = 'classroom' }
+        @{ Name = '教师端桌面头'; Project = 'src\ClassShout.Teacher.Desktop\ClassShout.Teacher.Desktop.csproj'; Framework = $null; Folder = 'teacher' }
+        @{ Name = '中继服务器';   Project = 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj'; Framework = $null; Folder = 'server' }
+    )
 
-    foreach ($item in $windowsProjects) {
+    # Framework 一列是必须的：教室端自 1.1.0 起是多目标（net10.0-windows;net10.0，
+    # 后者给 Linux 用），不显式指定框架时 dotnet publish 会以 NETSDK1129 直接拒绝。
+    foreach ($item in $windowsApps) {
         Write-Host "  正在发布 $($item.Name)…"
+
+        $out = Join-Path $windowsOut $item.Folder
+        New-Item -ItemType Directory -Force -Path $out | Out-Null
 
         $args = $publishArgs
         if ($item.Framework) {
             $args = @('-f', $item.Framework) + $publishArgs
         }
 
-        & dotnet publish $item.Project @args -o $windowsOut --nologo -v q
+        & dotnet publish $item.Project @args -o $out --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "$($item.Name) 发布失败（退出码 $LASTEXITCODE）"
         }
-    }
 
-    # 清掉发布目录里不需要分发的文件
-    Get-ChildItem $windowsOut -File | Where-Object { $_.Extension -notin '.exe', '.dll', '.json' } |
-        Remove-Item -Force -ErrorAction SilentlyContinue
+        # Web SDK 会带出 web.config 这类只对 IIS 有意义的文件，独立运行时用不到
+        Get-ChildItem $out -File |
+            Where-Object { $_.Extension -in '.config', '.pdb' } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
 
-    # 中继服务器：跨局域网部署要用，一起打出来省得部署时再翻命令。
-    # 单独放子目录，避免和桌面应用的依赖文件混在一起。
-    Write-Host '  正在发布中继服务器…'
-    $serverOut = Join-Path $windowsOut 'server'
-    New-Item -ItemType Directory -Force -Path $serverOut | Out-Null
-
-    & dotnet publish 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj' @publishArgs -o $serverOut --nologo -v q
-    if ($LASTEXITCODE -ne 0) {
-        throw "中继服务器发布失败（退出码 $LASTEXITCODE）"
-    }
-
-    # 同上：把 web.config 之类的 IIS 专用文件清掉
-    Get-ChildItem $serverOut -File |
-        Where-Object { $_.Name -ne 'ClassShout.RelayServer.exe' } |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-
-    Write-Host ("    server\{0,-32} {1,8:N1} MB" -f 'ClassShout.RelayServer.exe', ((Get-Item (Join-Path $serverOut 'ClassShout.RelayServer.exe')).Length / 1MB))
-
-    Write-Host ''
-    Get-ChildItem $windowsOut -File | Sort-Object Name | ForEach-Object {
-        Write-Host ("    {0,-40} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB))
+        $size = (Get-ChildItem $out -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
+        Write-Host ("    {0,-12} {1,8:N1} MB（{2} 个文件）" -f $item.Folder, $size, (Get-ChildItem $out -Recurse -File).Count)
     }
 
     # ---------- 中继服务器（Linux） ----------
     if ($IncludeLinuxServer) {
         Write-Host ''
-        Write-Host '[Linux] 发布中继服务器（linux-x64）' -ForegroundColor Yellow
+        Write-Host '[Linux] 发布 linux-x64（服务器 + 教室端）' -ForegroundColor Yellow
 
         $linuxOut = Join-Path $OutputRoot 'linux'
-        New-Item -ItemType Directory -Force -Path $linuxOut | Out-Null
 
+        # 同样不再单文件；两个应用各一个子目录（理由同 Windows）
         $linuxArgs = @(
             '-c', $Configuration
             '-r', 'linux-x64'
             '--self-contained=true'
-            '-p:PublishSingleFile=true'
-            '-p:IncludeNativeLibrariesForSelfExtract=true'
-            '-p:EnableCompressionInSingleFile=true'
             '-p:DebugType=none'
         )
 
-        & dotnet publish 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj' @linuxArgs -o $linuxOut --nologo -v q
+        $serverLinuxOut = Join-Path $linuxOut 'server'
+        New-Item -ItemType Directory -Force -Path $serverLinuxOut | Out-Null
+
+        & dotnet publish 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj' @linuxArgs -o $serverLinuxOut --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "Linux 服务器发布失败（退出码 $LASTEXITCODE）"
         }
 
         # Web SDK 会带出几个只对 IIS 有意义的文件，独立运行时用不到，清掉免得干扰部署
-        Get-ChildItem $linuxOut -File |
-            Where-Object { $_.Name -notin 'ClassShout.RelayServer', 'ClassShout.Classroom' } |
+        Get-ChildItem $serverLinuxOut -File |
+            Where-Object { $_.Extension -in '.config', '.pdb' } |
             Remove-Item -Force -ErrorAction SilentlyContinue
-
-        Write-Host ''
-        Write-Host '[Linux] 发布教室端（linux-x64）' -ForegroundColor Yellow
 
         # 教室端的 Linux 目标是 net10.0（不是 net10.0-windows）：
         # 播放走 aplay/paplay 管道，保底朗读走 spd-say/espeak，主力朗读是 Edge 在线语音。
         # 必须显式指定 -f，否则多目标项目会要求选一个框架而直接报错。
+        $classroomLinuxOut = Join-Path $linuxOut 'classroom'
+        New-Item -ItemType Directory -Force -Path $classroomLinuxOut | Out-Null
+
         $classroomLinuxArgs = @('-f', 'net10.0') + $linuxArgs
 
-        & dotnet publish 'src\ClassShout.Classroom\ClassShout.Classroom.csproj' @classroomLinuxArgs -o $linuxOut --nologo -v q
+        & dotnet publish 'src\ClassShout.Classroom\ClassShout.Classroom.csproj' @classroomLinuxArgs -o $classroomLinuxOut --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "Linux 教室端发布失败（退出码 $LASTEXITCODE）"
         }
 
+        Get-ChildItem $classroomLinuxOut -File |
+            Where-Object { $_.Extension -in '.config', '.pdb' } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
         Write-Host ''
-        Get-ChildItem $linuxOut -File | Sort-Object Name | ForEach-Object {
-            Write-Host ("    {0,-40} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB))
+        foreach ($folder in 'server', 'classroom') {
+            $path = Join-Path $linuxOut $folder
+            $size = (Get-ChildItem $path -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
+            Write-Host ("    {0,-12} {1,8:N1} MB（{2} 个文件）" -f $folder, $size, (Get-ChildItem $path -Recurse -File).Count)
         }
     }
 
@@ -271,28 +261,65 @@ try {
     $releaseOut = Join-Path $OutputRoot 'release'
     New-Item -ItemType Directory -Force -Path $releaseOut | Out-Null
 
+    # 自 1.10.0 起每个应用打成一个压缩包（附件名见下）。
+    #
+    # 为什么压缩包里还套一层以应用命名的目录：解压出来是一整个目录，
+    # 而不是十几个 dll 散落在"下载"文件夹里 —— 后者在教室里那台机器上
+    # 基本等于"从此找不到它装在哪"。
+    #
+    # 用系统自带的 tar（Windows 10 起就有，bsdtar）而不是 Compress-Archive：
+    # 后者对上百个文件慢得多，而且 -a 让它按扩展名自动选 zip 还是 gzip。
+    function New-AppArchive {
+        param(
+            [string]$SourceDir,
+            [string]$RootName,
+            [string]$TargetPath,
+            [switch]$Gzip
+        )
+
+        if (-not (Test-Path $SourceDir)) {
+            throw "缺少产物目录：$SourceDir —— 打包没有真正完成"
+        }
+
+        $staging = Join-Path $OutputRoot ('obj\stage\' + $RootName)
+        Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path (Split-Path $staging -Parent) | Out-Null
+
+        Copy-Item $SourceDir $staging -Recurse -Force
+        Remove-Item $TargetPath -Force -ErrorAction SilentlyContinue
+
+        if ($Gzip) {
+            & tar -czf $TargetPath -C (Split-Path $staging -Parent) $RootName
+        }
+        else {
+            & tar -a -c -f $TargetPath -C (Split-Path $staging -Parent) $RootName
+        }
+
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $TargetPath)) {
+            throw "打包 $RootName 失败"
+        }
+
+        Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     # 附件名一经发布就不要再改：README、历史发行版、别人的脚本都按它引用。
-    $assetMap = @(
-        @{ Source = (Join-Path $windowsOut 'ClassShout.Classroom.exe');           Asset = 'ClassShout.Classroom.exe' }
-        @{ Source = (Join-Path $windowsOut 'ClassShout.Teacher.Desktop.exe');     Asset = 'ClassShout.Teacher.Desktop.exe' }
-        @{ Source = (Join-Path $windowsOut 'server\ClassShout.RelayServer.exe');  Asset = 'ClassShout.RelayServer-win-x64.exe' }
-    )
+    New-AppArchive -SourceDir (Join-Path $windowsOut 'classroom') -RootName 'ClassShout.Classroom' `
+        -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-win-x64.zip')
+    New-AppArchive -SourceDir (Join-Path $windowsOut 'teacher') -RootName 'ClassShout.Teacher' `
+        -TargetPath (Join-Path $releaseOut 'ClassShout.Teacher-win-x64.zip')
+    New-AppArchive -SourceDir (Join-Path $windowsOut 'server') -RootName 'ClassShout.RelayServer' `
+        -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-win-x64.zip')
 
     if ($IncludeLinuxServer) {
-        $assetMap += @{ Source = (Join-Path $OutputRoot 'linux\ClassShout.RelayServer'); Asset = 'ClassShout.RelayServer-linux-x64' }
-        $assetMap += @{ Source = (Join-Path $OutputRoot 'linux\ClassShout.Classroom');   Asset = 'ClassShout.Classroom-linux-x64' }
+        New-AppArchive -SourceDir (Join-Path $OutputRoot 'linux\server') -RootName 'ClassShout.RelayServer' `
+            -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-linux-x64.tar.gz') -Gzip
+        New-AppArchive -SourceDir (Join-Path $OutputRoot 'linux\classroom') -RootName 'ClassShout.Classroom' `
+            -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-linux-x64.tar.gz') -Gzip
     }
 
     # APK 的文件名本来就是最终附件名（含版本号），直接沿用
     Get-ChildItem $androidOut -Filter '*.apk' -ErrorAction SilentlyContinue | ForEach-Object {
-        $assetMap += @{ Source = $_.FullName; Asset = $_.Name }
-    }
-
-    foreach ($item in $assetMap) {
-        if (-not (Test-Path $item.Source)) {
-            throw "缺少产物：$($item.Source) —— 打包没有真正完成"
-        }
-        Copy-Item $item.Source (Join-Path $releaseOut $item.Asset) -Force
+        Copy-Item $_.FullName (Join-Path $releaseOut $_.Name) -Force
     }
 
     # ---------- 校验清单 ----------
@@ -328,17 +355,15 @@ try {
     Write-Host ('=' * 66)
     Write-Host '打包完成。' -ForegroundColor Green
     Write-Host ''
-    Write-Host '  教师端：adb install -r <APK>；首次启动会申请麦克风权限。'
+    Write-Host '  教师端（手机）：adb install -r <APK>；首次启动会申请麦克风权限。'
+    Write-Host '  桌面端：把对应的压缩包解压到一个固定目录，双击里面的 exe 即可。'
 
     if ($FrameworkDependent) {
-        Write-Host '  教室端：把 exe 拷到教室电脑，' -NoNewline
-        Write-Host '该机器必须先安装 .NET 10 运行时' -ForegroundColor Yellow -NoNewline
-        Write-Host '。'
+        Write-Host '          该机器必须先安装 .NET 10 运行时' -ForegroundColor Yellow
         Write-Host '          官方下载：https://dotnet.microsoft.com/download/dotnet/10.0' -ForegroundColor DarkGray
-        Write-Host '          （也可用 dotnet publish 时改回默认的自包含模式，免去这一步）' -ForegroundColor DarkGray
     }
     else {
-        Write-Host '  教室端：把 ClassShout.Classroom.exe 拷到教室电脑双击即可，无需安装任何运行时。'
+        Write-Host '          免运行时（自包含）；升级就是解压覆盖同一个目录。'
     }
 }
 finally {
