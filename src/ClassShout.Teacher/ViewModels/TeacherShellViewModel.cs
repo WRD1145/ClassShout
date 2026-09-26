@@ -76,8 +76,7 @@ public sealed class ClassroomListItem
 public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly ShoutChannel _channel = new();
-    private readonly ClassroomDiscovery _discovery = new();
-    private readonly ShoutTransportRouter _transport = new();
+    private readonly ClassroomDiscovery _discovery = new();    private readonly ShoutTransportRouter _transport = new();
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
     private readonly ShoutQueue _shoutQueue = new();
     private readonly TeacherRelaySettings _relaySettings;
@@ -209,6 +208,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         _logSettings = LogSettings.LoadAndApply();
         _selectedLogLevel = AppLogLevels.Options.FirstOrDefault(o => o.Value == _logSettings.Resolved)
                             ?? AppLogLevels.Options[2];
+
+        // 发现的细节写进"跟踪"档：扫不到教室时，这几行会说明探测发给了哪几个地址、
+        // 哪个地址发失败、有没有回包 —— 否则界面上只剩"没有发现教室端"这一句。
+        _discovery.LogTrace = message => Post(() => AddLog(AppLogLevel.Trace, $"发现：{message}"));
     }
 
     public TextShoutViewModel Text { get; }
@@ -1237,9 +1240,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         {
             // 扫描的细节值得记下来：这一条路上出问题时（"就是扫不到教室"），
             // 要知道广播发给了哪些地址、等了多久、有没有回包 —— 那才有得排查。
-            var broadcastAddresses = NetworkUtility.GetBroadcastAddresses()
-                .Append(IPAddress.Broadcast)
-                .Distinct()
+            var broadcastAddresses = NetworkUtility.DiscoveryTargets()
                 .Select(address => address.ToString())
                 .ToList();
 

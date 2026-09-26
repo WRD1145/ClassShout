@@ -161,6 +161,56 @@ internal static class Program
         Check("发现结果带回正确端口", found.Any(f => f.Port == TcpPort),
             found.Count > 0 ? $"端口={found[0].Port}" : "无结果");
 
+        // 连接地址必须取**回包的来源地址**，而不是教室端自己在包里写的 Host：
+        // 装了 WSL / Docker / VPN 的机器上，教室端挑出来的那个地址常常是虚拟网卡的，
+        // 别的设备根本连不上 —— 表现成"搜得到、连不上"，而两端都看不出原因。
+        Check("连接地址取回包的来源地址（不是教室端自报的 Host）",
+            found.Count > 0 && found[0].Host is "127.0.0.1" or "::1",
+            found.Count > 0 ? $"Host={found[0].Host}" : "无结果");
+
+        // 探测目标里要有本机地址与回环：教室端与教师端跑在同一台机器上时
+        // （用桌面端当教师端就是这么用的），广播可能被 VPN / WSL 的默认路由吞掉。
+        var targets = NetworkUtility.DiscoveryTargets();
+
+        Check("广播探测也发给 127.0.0.1（同一台机器上的教室端一定收得到）",
+            targets.Contains(IPAddress.Loopback),
+            string.Join("、", targets.Select(t => t.ToString())));
+
+        Check("广播探测包含各网段的广播地址",
+            targets.Contains(IPAddress.Broadcast) && targets.Count >= 3,
+            $"共 {targets.Count} 个目标");
+
+        // —— 教室端该报哪个地址：装了 WSL / Docker / VPN 的机器上很容易报错 ——
+        var realLan = NetworkUtility.Score(
+            "以太网", System.Net.NetworkInformation.NetworkInterfaceType.Ethernet, "192.168.1.5", hasGateway: true);
+        var wslAdapter = NetworkUtility.Score(
+            "vEthernet (WSL)", System.Net.NetworkInformation.NetworkInterfaceType.Ethernet, "172.28.0.1", hasGateway: true);
+
+        Check("地址打分：有网关的真实网卡排在虚拟网卡前面",
+            realLan > wslAdapter,
+            $"以太网 {realLan} 分 > vEthernet (WSL) {wslAdapter} 分");
+
+        Check("地址打分：没有网关的真网卡也比虚拟网卡强（回到只有一张网卡的机器上也对）",
+            NetworkUtility.Score(
+                "以太网", System.Net.NetworkInformation.NetworkInterfaceType.Ethernet, "192.168.1.5", hasGateway: false)
+            > wslAdapter,
+            "物理网卡 50 分 > 虚拟网卡负分");
+
+        Check("地址打分：没拿到 DHCP 的 169.254 地址会被压下去",
+            NetworkUtility.Score(
+                "Wi-Fi", System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211, "169.254.10.20", hasGateway: false)
+            < NetworkUtility.Score(
+                "Wi-Fi", System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211, "10.0.0.20", hasGateway: false),
+            "169.254 的排名低于正常地址");
+
+        Check("名字像虚拟网卡的能被认出来",
+            NetworkUtility.LooksVirtual("vEthernet (WSL)")
+            && NetworkUtility.LooksVirtual("Docker Desktop")
+            && NetworkUtility.LooksVirtual("Tailscale")
+            && !NetworkUtility.LooksVirtual("以太网")
+            && !NetworkUtility.LooksVirtual("Wi-Fi"),
+            "vEthernet / Docker / Tailscale 认得出，以太网与 Wi-Fi 不误判");
+
         // ---------- 2. TCP 连接与握手 ----------
         await using var client = new TeacherClient();
         var statusMessage = new TaskCompletionSource<StatusMessage>(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -172,6 +172,9 @@ public sealed class ClassroomDiscovery
         _timeout = timeout ?? TimeSpan.FromSeconds(1.5);
     }
 
+    /// <summary>过程日志（"跟踪"档）：发给了哪些地址、哪个地址发失败。给排障用。</summary>
+    public Action<string>? LogTrace { get; set; }
+
     /// <summary>广播探测，收集在 <see cref="_timeout"/> 内响应的所有教室端。</summary>
     public async Task<IReadOnlyList<ClassroomAnnouncement>> ScanAsync(CancellationToken cancellationToken = default)
     {
@@ -182,19 +185,23 @@ public sealed class ClassroomDiscovery
         udp.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
 
         var probe = Encoding.UTF8.GetBytes(ShoutProtocol.DiscoveryProbe);
-        var targets = NetworkUtility.GetBroadcastAddresses()
-            .Append(IPAddress.Broadcast)
-            .Distinct();
+
+        // 除了各网段的广播地址，还发给本机各地址与回环：教室端与教师端在同一台机器上时
+        // （用桌面端当教师端就是这么用的），广播可能被 VPN / WSL 那种默认路由吞掉。
+        var targets = NetworkUtility.DiscoveryTargets();
 
         foreach (var target in targets)
         {
             try
             {
                 await udp.SendAsync(probe, new IPEndPoint(target, _port), cancellationToken).ConfigureAwait(false);
+                LogTrace?.Invoke($"已向 {target}:{_port} 发出探测。");
             }
-            catch (SocketException)
+            catch (SocketException ex)
             {
-                // 某些网卡不允许广播，跳过。
+                // 某些网卡不允许广播：跳过它，但把原因记下来 —— "一个回包都没有"时，
+                // 这几行正是要说清"到底哪几个地址没发出去"。
+                LogTrace?.Invoke($"向 {target}:{_port} 发探测失败（{ex.SocketErrorCode}），跳过。");
             }
         }
 
@@ -212,16 +219,18 @@ public sealed class ClassroomDiscovery
                     continue;
                 }
 
-                // 广播回包可能来自 0.0.0.0，用实际来源地址补齐 Host。
-                if (string.IsNullOrWhiteSpace(announcement.Host) ||
-                    announcement.Host is "0.0.0.0" or "::")
-                {
-                    announcement = announcement with { Host = result.RemoteEndPoint.Address.ToString() };
-                }
+                // 一律用**回包的来源地址**当连接地址，而不是包里的 Host：
+                // 来源地址按定义就是从这台机器能走通的地址（本机探测就是 127.0.0.1），
+                // 而包里的 Host 是教室端自己挑的，装了 WSL / VPN 的机器上它可能报出一个
+                // 别人连不上的虚拟网卡地址 —— 那会表现成"搜得到、连不上"。
+                var source = result.RemoteEndPoint.Address.ToString();
+                announcement = announcement with { Host = source };
 
                 var key = string.IsNullOrEmpty(announcement.Id)
                     ? $"{announcement.Host}:{announcement.Port}"
                     : announcement.Id;
+
+                LogTrace?.Invoke($"收到来自 {result.RemoteEndPoint} 的回应：「{announcement.Name}」，连接地址取 {source}:{announcement.Port}。");
 
                 found[key] = announcement;
             }
