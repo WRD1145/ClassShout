@@ -3269,6 +3269,39 @@ internal static class Program
                 && fresh.Targets[1].IsSelected,
                 string.Join("、", fresh.Targets.Select(t => $"{t.Name}{(t.IsSelected ? "(已勾)" : string.Empty)}")));
 
+            // —— 呼叫页的学生行：构造顺序曾经把安卓端直接崩掉 ——
+            //
+            // StudentPickRow 的 _isSelected 原先在 Display 赋值**之前**求值，
+            // 而 IsSelectable 看的就是 Display。只要"上次勾过学生"（勾选存在本机，
+            // LoadStudents 会把它们带上），&& 就不会短路 → 读到一个 null 的 Display
+            // → 启动即 FATAL EXCEPTION。第一次用的人不会触发（没有勾选 → 短路 → 不崩），
+            // 所以这个坑在"用过一次呼叫"的机器上才现形。
+            var pickStudent = new Student
+            {
+                Id = "s1",
+                Name = "张三",
+                StudentNo = "20250101",
+                ShortName = "小张",
+                Group = "A组",
+            };
+
+            var pickedRow = new ClassShout.Teacher.ViewModels.StudentPickRow(
+                pickStudent, StudentLabelStyles.Name, isSelected: true, _ => { });
+
+            Check("呼叫页的学生行：上次勾过的那位也构造得出来（这条曾经让安卓端启动即崩）",
+                pickedRow is { IsSelected: true, Display: "张三" } && pickedRow.Detail.Contains("20250101"),
+                $"IsSelected={pickedRow.IsSelected}，Display={pickedRow.Display}");
+
+            // 按学号显示时，没填学号的学生应当"不可选"，且请求的勾选要被否掉
+            var noStudentNo = new Student { Id = "s2", Name = "李四" };
+
+            var unavailableRow = new ClassShout.Teacher.ViewModels.StudentPickRow(
+                noStudentNo, StudentLabelStyles.StudentNo, isSelected: true, _ => { });
+
+            Check("呼叫页的学生行：该样式下没内容的条目不可选（哪怕请求里勾着）",
+                !unavailableRow.IsSelectable && !unavailableRow.IsSelected && unavailableRow.UnavailableHint.Contains("学号"),
+                $"Display=「{unavailableRow.Display}」，提示=「{unavailableRow.UnavailableHint}」");
+
             // —— 顶部那条错误提示：能点掉，而且到点自己收起 ——
             Check("错误提示条：停留时间比浮动提示长得多（3 秒读不完一整句原因）",
                 ClassShout.Teacher.ViewModels.TeacherShellViewModel.ErrorBannerSeconds >= 10,

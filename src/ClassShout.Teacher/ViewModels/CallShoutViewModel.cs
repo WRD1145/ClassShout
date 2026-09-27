@@ -61,7 +61,6 @@ public sealed partial class StudentPickRow : ObservableObject
         Student = student;
         LabelStyle = labelStyle;
         _changed = changed;
-        _isSelected = isSelected && IsSelectable;
 
         Display = labelStyle switch
         {
@@ -71,6 +70,14 @@ public sealed partial class StudentPickRow : ObservableObject
         };
 
         Detail = StudentLabel.Format(student.Name, student.StudentNo, student.ShortName, student.Group);
+
+        // 这一行必须在 Display 赋值**之后**：IsSelectable 看的就是 Display。
+        //
+        // 写在前面时，只要调用方传了 isSelected: true（老师上次勾过学生，本机记着这次的勾选），
+        // `&&` 就不会短路，于是读到一个还没赋值的 Display —— 启动即崩：
+        // 安卓上表现为一打开应用就 FATAL EXCEPTION，而桌面端"第一次用"时不会触发
+        // （没有勾选记录 → isSelected 为 false → 短路 → 侥幸不崩）。
+        _isSelected = isSelected && IsSelectable;
     }
 
     public Student Student { get; }
