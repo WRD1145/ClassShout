@@ -305,6 +305,7 @@ internal static class Program
         AssertLogRetention();
         AssertLogLevels();
         AssertShoutTargetCard();
+        await AssertVoiceTimerResetsAsync();
 
         // ---------- 3n. 发送队列 ----------
         await AssertShoutQueueAsync();
@@ -3358,6 +3359,67 @@ internal static class Program
         {
             Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", originalDataDir);
         }
+    }
+
+    /// <summary>语音页的假采集器：不碰真麦克风，只为把"开始/结束"这条路走通。</summary>
+    private sealed class FakeAudioRecorder : ClassShout.Core.Audio.IAudioRecorder
+    {
+        public bool IsRecording { get; private set; }
+
+        public ClassShout.Core.Audio.AudioFormat Format => ClassShout.Core.Audio.AudioFormat.Default;
+
+#pragma warning disable CS0067 // 自检里用不到这两个事件，但接口要求有
+        public event EventHandler<float>? LevelChanged;
+
+        public event EventHandler<string>? Failed;
+#pragma warning restore CS0067
+
+        public Task StartAsync(Action<ReadOnlyMemory<byte>> onData, CancellationToken cancellationToken = default)
+        {
+            _ = onData;
+            IsRecording = true;
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync()
+        {
+            IsRecording = false;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// 语音页：录完发出去之后，计时必须归零。
+    ///
+    /// 这条以前是坏的：计到 3 秒、发出去之后屏幕上还挂着「00:03」，
+    /// 看起来像是"还在录"或者"刚才那段没发出去"。
+    /// </summary>
+    private static async Task AssertVoiceTimerResetsAsync()
+    {
+        ClassShout.Teacher.Services.TeacherPlatform.RegisterAudioRecorder(() => new FakeAudioRecorder());
+
+        var voice = new ClassShout.Teacher.ViewModels.VoiceShoutViewModel(
+            new ClassShout.Teacher.Services.ShoutTransportRouter())
+        {
+            IsConnected = true,
+        };
+
+        await voice.ToggleCommand.ExecuteAsync(null);
+
+        Check("语音页：开始录音后计时从 0 起",
+            voice.IsRecording && voice.Elapsed == 0,
+            $"IsRecording={voice.IsRecording}，Elapsed={voice.ElapsedText}");
+
+        // 假装计时器已经走了 3.2 秒（自检里没有 UI 线程的 DispatcherTimer 在跑）
+        voice.Elapsed = 3.2;
+
+        await voice.ToggleCommand.ExecuteAsync(null);
+
+        Check("语音页：发完之后计时归零（屏幕上不该还挂着 00:03）",
+            !voice.IsRecording && voice.Elapsed == 0 && voice.ElapsedText == "00:00",
+            $"IsRecording={voice.IsRecording}，Elapsed={voice.ElapsedText}");
     }
 
     /// <summary>

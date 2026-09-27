@@ -34,10 +34,11 @@
   <PropertyGroup>
     <Product>ClassShout</Product>
     <Company>ClassShout</Company>
-    <Version>1.12.1</Version>
+    <Version>1.12.2</Version>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
   </PropertyGroup>
 
 </Project>
+
 
 

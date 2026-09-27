@@ -214,6 +214,10 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         IsRecording = false;
         Level = 0;
 
+        // 计时归零：这一条已经发出去了，屏幕上还挂着「00:03」会让人以为**还在录**，
+        // 或者以为刚才那段没发出去。留着秒数记录在这一句之上（先取再清）。
+        ResetElapsed();
+
         await CleanupAsync(closeChannel: true).ConfigureAwait(true);
 
         // 只在真的发出去过的时候记：中途取消不该出现在"我喊过什么"里。
@@ -222,6 +226,13 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         {
             ShoutHistoryStore.Record($"（语音喊话 {seconds:0} 秒）", isVoice: true);
         }
+    }
+
+    /// <summary>把计时清回 00:00（发完、取消、采集失败都要清）。</summary>
+    private void ResetElapsed()
+    {
+        _elapsedSeconds = 0;
+        Elapsed = 0;
     }
 
     /// <summary>
@@ -239,6 +250,7 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         StopTimer();
         IsRecording = false;
         Level = 0;
+        ResetElapsed();
 
         await CleanupAsync(closeChannel: true).ConfigureAwait(true);
     }
