@@ -57,16 +57,31 @@ public static class RelayPaths
     public const string AuthScheduleItem = "/api/auth/schedule/{0}";
 
     /// <summary>老师（网页端）能喊话的班级。与 App 的「已授权教室」是同一套规则。</summary>
+    /// <remarks>
+    /// 它同时是 App 里那份「可发送班级」的来源：登录之后带着自己的账号 Id 问一次，
+    /// 服务器把这些账号绑定的班级与**在线状态**一起回成一份 JSON。
+    /// 账号绑定多个班时就回多条 —— 一次绑定多个班级这件事不必再有第二套接口。
+    /// </remarks>
     public const string TeacherClassrooms = "/api/teacher/classrooms";
 
     /// <summary>老师（网页端）给自己的班喊话。</summary>
     public const string TeacherShout = "/api/teacher/shout";
 
     /// <summary>老师同步到服务器上的名单与呼叫模板（WebUI 的呼叫要用同一份）。</summary>
+    /// <remarks>带 <c>?classroomUuid=</c> 时指的是"这个班的那一份"，名单按班隔离。</remarks>
     public const string TeacherRoster = "/api/teacher/roster";
+
+    /// <summary>班主任给某个班上传的统一名单，以及"是否强制"这个开关。</summary>
+    public const string TeacherClassroomRoster = "/api/teacher/classroom-roster";
 
     /// <summary>WebUI 上按客户端那套规则拼一次呼叫。</summary>
     public const string TeacherCall = "/api/teacher/call";
+
+    /// <summary>班主任：我当班主任的那几个班（含每个班已授权的老师）。</summary>
+    public const string HeadTeacherClassrooms = "/api/head-teacher/classrooms";
+
+    /// <summary>班主任：给自己管的班授权 / 收回某位老师。</summary>
+    public const string HeadTeacherBindings = "/api/head-teacher/bindings";
 
     /// <summary>教师端列出「管理员授权给我使用的教室」。登录后无需再填 UUID 与口令即可绑定。</summary>
     public const string TeacherAuthorized = "/api/teachers/authorized";
@@ -346,7 +361,8 @@ public sealed record UserProfileDto(
     bool Disabled,
     bool IsAdmin,
     string? Subject = null,
-    IReadOnlyDictionary<string, string>? SubjectByClassroom = null);
+    IReadOnlyDictionary<string, string>? SubjectByClassroom = null,
+    string Role = UserRoles.Teacher);
 
 /// <summary>
 /// 一位老师的任教科目：默认那份 + 按班级的覆盖。
@@ -394,16 +410,26 @@ public sealed record ConsoleOverview(
 public sealed record ConsoleFlagRequest(bool Value);
 
 /// <summary>管理员把某个班级授权给某位老师。</summary>
-public sealed record GrantBindingRequest(string UserId, string Uuid);
+/// <param name="UserId">被授权的账号。</param>
+/// <param name="Uuid">教室 UUID。</param>
+/// <param name="AsHeadTeacher">
+/// 是否把这位老师指定为这个班的**班主任**。
+///
+/// 指定之后他就能管这个班的权限（给别人授权、收回）与这个班统一使用的名单；
+/// 同一个班可以有多个班主任（年级组共同管理是常见做法），刻意不做成"只能有一个"。
+/// </param>
+public sealed record GrantBindingRequest(string UserId, string Uuid, bool AsHeadTeacher = false);
 
 /// <summary>控制台里的授权记录，带上双方名称便于阅读。</summary>
+/// <param name="AsHeadTeacher">这条授权是不是"班主任"授权。</param>
 public sealed record ConsoleBinding(
     string UserId,
     string UserDisplayName,
     string Uuid,
     string ClassroomName,
     string GrantedBy,
-    DateTimeOffset GrantedAt);
+    DateTimeOffset GrantedAt,
+    bool AsHeadTeacher = false);
 
 /// <summary>教师端可见的「已授权教室」。</summary>
 /// <param name="Online">该教室当前是否在线（最近有向服务器注册）。</param>

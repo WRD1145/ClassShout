@@ -49,11 +49,21 @@ var shareStatePath = Environment.GetEnvironmentVariable("CLASSSHOUT_SHARE_STATE"
 
 builder.Services.AddSingleton(sp => new ShareStore(shareStatePath, sp.GetRequiredService<ILogger<ShareStore>>()));
 
-// 老师同步到服务器上的名单与呼叫模板：WebUI 的「呼叫」要用同一份（见 relay-rosters.json）
+// 老师同步到服务器上的名单与呼叫模板：WebUI 的「呼叫」要用同一份（见 relay-rosters.json）。
+// 自 1.14.0 起**按班隔离**：同一个文件里每位老师每个班各一份（键是 账号 + 班级）。
 var rosterStatePath = Environment.GetEnvironmentVariable("CLASSSHOUT_ROSTER_STATE")
     ?? Path.Combine(AppContext.BaseDirectory, "relay-rosters.json");
 
 builder.Services.AddSingleton(sp => new RosterStore(rosterStatePath, sp.GetRequiredService<ILogger<RosterStore>>()));
+
+// 班主任给某个班上传的统一名单（属于班级，不属于某位老师），以及"是否强制"那个开关。
+// 单独一个文件：它的生命周期跟着班级走（班级删了就该清掉），
+// 而且备份策略与"老师各自的名单"不一样 —— 混在一起会让"只想导出某个班的名单"变得别扭。
+var classroomRosterStatePath = Environment.GetEnvironmentVariable("CLASSSHOUT_CLASSROOM_ROSTER_STATE")
+    ?? Path.Combine(AppContext.BaseDirectory, "relay-classroom-rosters.json");
+
+builder.Services.AddSingleton(sp => new ClassroomRosterStore(
+    classroomRosterStatePath, sp.GetRequiredService<ILogger<ClassroomRosterStore>>()));
 builder.Services.AddSingleton<UserSessions>();
 builder.Services.AddSingleton<RelaySessions>();
 builder.Services.AddSingleton<MessageHub>();
@@ -153,6 +163,7 @@ var users = app.Services.GetRequiredService<UserStore>();
 var bindings = app.Services.GetRequiredService<BindingStore>();
 var shares = app.Services.GetRequiredService<ShareStore>();
 var rosters = app.Services.GetRequiredService<RosterStore>();
+var classroomRosters = app.Services.GetRequiredService<ClassroomRosterStore>();
 var userSessions = app.Services.GetRequiredService<UserSessions>();
 var sessions = app.Services.GetRequiredService<RelaySessions>();
 var hub = app.Services.GetRequiredService<MessageHub>();
@@ -659,7 +670,10 @@ app.MapGet(RelayPaths.TeacherAuthorized, ([FromHeader(Name = RelayPaths.AuthToke
 // 权限与 App 完全一致：只喊得了「管理员授权给自己」的班级（内置管理员不受限）。
 // 来源也照旧由服务器算（科目按各个班取），客户端填不了。
 
-app.MapGet(RelayPaths.TeacherClassrooms, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+app.MapGet(RelayPaths.TeacherClassrooms, (
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken,
+    string? accountId,
+    string? uuid) =>
 {
     var profile = ResolveUser(authToken);
     if (profile is null)
@@ -667,14 +681,25 @@ app.MapGet(RelayPaths.TeacherClassrooms, ([FromHeader(Name = RelayPaths.AuthToke
         return Results.Unauthorized();
     }
 
+    // 客户端会把自己的账号 Id 一起带上（"这条请求是谁发的"在客户端那一侧也必须说清，
+    // 而不是只能靠令牌反推 —— 令牌过期时那种"看起来已登录"的状态最难查）。
+    // 但它只是个**自述**：与令牌里的账号对不上就拒绝，绝不能拿它当授权依据。
+    if (!string.IsNullOrWhiteSpace(accountId) &&
+        !string.Equals(accountId.Trim(), profile.Id, StringComparison.Ordinal))
+    {
+        logger.LogWarning("账号 {Token} 自称是 {Claimed}，与令牌不符，已拒绝。", profile.Id, accountId);
+        return Results.Json(new { ok = false, error = "账号 Id 与登录令牌不一致，请重新登录。" }, statusCode: StatusCodes.Status403Forbidden);
+    }
+
     var cutoff = DateTimeOffset.UtcNow - OnlineWindow;
 
+    // 带了 uuid 就只回这一间（App 里"刷新当前这间"用），省得每次拉一整张表。
+    var wanted = uuid?.Trim();
+
     var list = ShoutableClassrooms(profile)
-        .Select(record => new TeacherClassroomDto(
-            record.Uuid,
-            record.Name,
-            record.LastSeenAt >= cutoff,
-            record.LastSeenAt))
+        .Where(record => string.IsNullOrEmpty(wanted)
+                         || string.Equals(record.Uuid, wanted, StringComparison.OrdinalIgnoreCase))
+        .Select(record => DescribeClassroom(profile, record, cutoff))
         .OrderBy(item => item.Name, StringComparer.CurrentCulture)
         .ToList();
 
@@ -762,7 +787,9 @@ app.MapPost(RelayPaths.TeacherShout, (
 // 而网页跑在服务器上。拼装用的是 Core 里的 CallComposer —— 与客户端**同一段代码**，
 // 所以「要求与客户端一致」不是靠对齐参数，而是结构上就只有一份实现。
 
-app.MapGet(RelayPaths.TeacherRoster, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+app.MapGet(RelayPaths.TeacherRoster, (
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken,
+    string? classroomUuid) =>
 {
     var profile = ResolveUser(authToken);
     if (profile is null)
@@ -770,14 +797,23 @@ app.MapGet(RelayPaths.TeacherRoster, ([FromHeader(Name = RelayPaths.AuthTokenHea
         return Results.Unauthorized();
     }
 
-    var record = rosters.Get(profile.Id);
+    var uuid = classroomUuid?.Trim() ?? string.Empty;
+    var (_, _, source) = ResolveRoster(profile, uuid);
+
+    // 名单按班隔离：带 classroomUuid 时回的就是这个班那一份。
+    // 顺带把"该用谁的名单""能不能上传"一起回给客户端 —— 让客户端自己按
+    // 有没有班主任名单去推，等于把规则复制一份到客户端，两边迟早不一致。
+    var record = rosters.Get(profile.Id, uuid);
 
     return Results.Ok(new TeacherRosterSnapshot(
         record?.Rosters ?? [],
         record?.ActiveRosterId,
         record?.Templates ?? [],
         record?.ActiveTemplateId,
-        record?.UpdatedAt));
+        record?.UpdatedAt,
+        uuid,
+        source,
+        ClassroomRosterRules.CanUploadOwn(source)));
 });
 
 app.MapPut(RelayPaths.TeacherRoster, (
@@ -790,11 +826,29 @@ app.MapPut(RelayPaths.TeacherRoster, (
         return Results.Unauthorized();
     }
 
-    var current = rosters.Get(profile.Id) ?? new TeacherRosterRecord { UserId = profile.Id };
+    var uuid = upload.ClassroomUuid?.Trim() ?? string.Empty;
+    var (head, _, source) = ResolveRoster(profile, uuid);
+
+    // 班主任把名单设成强制之后，任课老师的上传一律拒绝 —— 界面上那里本来就不该有入口，
+    // 但接口必须自己也拦一道：一个班按哪份名单叫人只能有一个答案，
+    // 而"界面没显示"从来不是一条授权规则。
+    if (!ClassroomRosterRules.CanUploadOwn(source))
+    {
+        return Results.Ok(new
+        {
+            ok = false,
+            error = ClassroomRosterRules.LockedHint(store.Get(uuid)?.Name),
+            source,
+            enforced = head is { Enforced: true },
+        });
+    }
+
+    var current = rosters.Get(profile.Id, uuid) ?? new TeacherRosterRecord { UserId = profile.Id, ClassroomUuid = uuid };
 
     var next = new TeacherRosterRecord
     {
         UserId = profile.Id,
+        ClassroomUuid = uuid,
         Rosters = upload.Rosters is not null ? upload.Rosters.ToList() : current.Rosters,
         ActiveRosterId = upload.ActiveRosterId ?? current.ActiveRosterId,
         Templates = upload.Templates is not null ? upload.Templates.ToList() : current.Templates,
@@ -840,6 +894,299 @@ app.MapPut(RelayPaths.TeacherRoster, (
 });
 
 /// <summary>
+/// 班主任：读取自己管的那个班的统一名单（含"是否强制"）。
+///
+/// 与"老师自己那份"分开两个端点，是因为它们的**归属**不同：这份属于班级、
+/// 由班主任维护；那份属于个人。合成一个端点的话，就得靠请求体里一个可选的布尔量
+/// 去决定"这次到底在改谁的东西"—— 那种接口迟早会被误用成"任课老师改掉了全班名单"。
+/// </summary>
+app.MapGet(RelayPaths.TeacherClassroomRoster, (
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken,
+    string? classroomUuid) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var uuid = classroomUuid?.Trim();
+    if (string.IsNullOrEmpty(uuid))
+    {
+        return Results.BadRequest(new { ok = false, error = "请指定要看哪个班的名单。" });
+    }
+
+    if (!ManagesClassroom(profile, uuid))
+    {
+        return Results.Json(
+            new { ok = false, error = "这个班不是你当班主任的班，看不到它的统一名单。" },
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    var record = classroomRosters.Get(uuid);
+    var classroom = store.Get(uuid);
+
+    return Results.Ok(new ClassroomRosterSnapshot(
+        uuid,
+        classroom?.Name ?? uuid,
+        record?.Rosters ?? [],
+        record?.ActiveRosterId,
+        record is { Enforced: true, Rosters.Count: > 0 },
+        record?.UpdatedAt,
+        record?.UpdatedByUserId is { } by ? users.FindById(by)?.DisplayName : null));
+});
+
+/// <summary>
+/// 班主任：上传 / 修改自己那个班的统一名单，并决定要不要设为强制。
+///
+/// 强制开关的语义（与 Core 里那份判定一致）：开了之后这个班的任课老师只能用它，
+/// 连上传入口都没有；关着的时候它只是一份"默认名单"—— 别人没传时用它，传了就用自己的。
+/// </summary>
+app.MapPut(RelayPaths.TeacherClassroomRoster, (
+    ClassroomRosterUpload upload,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var uuid = upload.ClassroomUuid?.Trim();
+    if (string.IsNullOrEmpty(uuid))
+    {
+        return Results.BadRequest(new { ok = false, error = "请指定要上传给哪个班。" });
+    }
+
+    if (store.Get(uuid) is null)
+    {
+        return Results.BadRequest(new { ok = false, error = "这个班级还没有注册过。" });
+    }
+
+    // 只有这个班的班主任（或管理员）能改它的统一名单 —— 这条判断就是"班主任"这个
+    // 角色存在的意义，所以它写在服务端，而不是靠界面上把入口藏起来。
+    if (!ManagesClassroom(profile, uuid))
+    {
+        return Results.Json(
+            new { ok = false, error = "只有这个班的班主任（或管理员）能上传班级统一名单。" },
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    var current = classroomRosters.Get(uuid) ?? new ClassroomRosterRecord { ClassroomUuid = uuid };
+
+    var next = new ClassroomRosterRecord
+    {
+        ClassroomUuid = uuid,
+        Rosters = upload.Rosters is not null ? upload.Rosters.ToList() : current.Rosters,
+        ActiveRosterId = upload.ActiveRosterId ?? current.ActiveRosterId,
+        Enforced = upload.Enforced ?? current.Enforced,
+        UpdatedByUserId = profile.Id,
+        UpdatedAt = DateTimeOffset.UtcNow,
+    };
+
+    if (!string.IsNullOrWhiteSpace(upload.CsvText))
+    {
+        var parsed = RosterCsv.Parse(upload.CsvText, upload.RosterName ?? "学生名单");
+        if (!parsed.Ok)
+        {
+            return Results.BadRequest(new { ok = false, error = "这份名单一行都没能解析出来。", skipped = parsed.SkippedLines });
+        }
+
+        var imported = parsed.Roster!;
+        next.Rosters.RemoveAll(r => string.Equals(r.Name, imported.Name, StringComparison.OrdinalIgnoreCase));
+        next.Rosters.Add(imported);
+        next.ActiveRosterId = imported.Id;
+    }
+
+    if (next.Rosters.Count == 0)
+    {
+        // 空名单 + 强制 = 这个班谁都叫不了。宁可拒绝，也不要留下这种状态。
+        return Results.BadRequest(new { ok = false, error = "请先上传一份名单，再决定要不要强制。" });
+    }
+
+    if (next.Rosters.All(r => r.Id != next.ActiveRosterId))
+    {
+        next.ActiveRosterId = next.Rosters[0].Id;
+    }
+
+    if (!classroomRosters.Save(next))
+    {
+        return Results.Ok(new { ok = false, error = "班级名单没能存到服务器上（磁盘不可写？），这次修改没有生效。" });
+    }
+
+    logger.LogInformation("{User} 更新了 {Uuid} 的班级统一名单：{Count} 份，强制={Enforced}",
+        profile.DisplayName, uuid, next.Rosters.Count, next.Enforced);
+
+    return Results.Ok(new
+    {
+        ok = true,
+        students = next.Rosters.Sum(r => r.Students.Count),
+        rosters = next.Rosters.Count,
+        enforced = next.Enforced,
+    });
+});
+
+// ======================== 班主任：我管的班级与它们的权限 ========================
+//
+// 这一组端点是"班主任"这个角色唯一的落点：他能看见自己当班主任的那几间班、
+// 每间班现在授权给了哪些老师，并给自己管的班授权 / 收回。
+//
+// 三条边界写在代码里（不是写在文档里）：
+//   · 只看得见、只改得了**自己被授予班主任**的班（管理员不受限）；
+//   · 只能增删**普通任课老师**的授权，班主任的任免仍然只在管理员手里 ——
+//     否则一位班主任可以给自己拉一个"班主任同伴"，然后两个人的权限互相兜底；
+//   · 收回时不会顺手把别人的班主任授权一起收掉。
+
+app.MapGet(RelayPaths.HeadTeacherClassrooms, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var cutoff = DateTimeOffset.UtcNow - OnlineWindow;
+
+    var uuids = profile.Id == AdminUserId
+        ? store.ListForConsole().Select(r => r.Uuid).ToList()
+        : bindings.HeadTeacherClassroomsOf(profile.Id);
+
+    var list = new List<HeadTeacherClassroomDto>();
+
+    foreach (var uuid in uuids)
+    {
+        if (store.Get(uuid) is not { } classroom)
+        {
+            continue;
+        }
+
+        var roster = classroomRosters.Get(uuid);
+
+        var teachers = bindings.OfClassroom(uuid)
+            .Select(binding => (Binding: binding, User: users.FindById(binding.UserId)))
+            .Where(pair => pair.User is not null)
+            .Select(pair => new HeadTeacherTeacherDto(
+                pair.Binding.UserId,
+                pair.User!.DisplayName,
+                pair.User.Username,
+                pair.User.Subject,
+                pair.Binding.AsHeadTeacher,
+                pair.Binding.GrantedAt))
+            .OrderByDescending(item => item.AsHeadTeacher)
+            .ThenBy(item => item.DisplayName, StringComparer.CurrentCulture)
+            .ToList();
+
+        list.Add(new HeadTeacherClassroomDto(
+            classroom.Uuid,
+            classroom.Name,
+            classroom.LastSeenAt >= cutoff,
+            classroom.LastSeenAt,
+            teachers,
+            roster is { Rosters.Count: > 0 },
+            roster is { Enforced: true, Rosters.Count: > 0 },
+            roster?.UpdatedAt));
+    }
+
+    return Results.Ok(list
+        .OrderBy(item => item.Name, StringComparer.CurrentCulture)
+        .ToList());
+});
+
+/// <summary>班主任给自己管的班授权一位老师（只查账号存在与否，不做班主任任免）。</summary>
+app.MapPost(RelayPaths.HeadTeacherBindings, (
+    HeadTeacherGrantRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var uuid = request.ClassroomUuid?.Trim() ?? string.Empty;
+
+    if (!ManagesClassroom(profile, uuid))
+    {
+        return Results.Json(
+            new { ok = false, error = "这个班不是你当班主任的班，不能改它的权限。" },
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    if (store.Get(uuid) is not { } classroom)
+    {
+        return Results.BadRequest(new { ok = false, error = "这个班级还没有注册过。" });
+    }
+
+    if (users.FindById(request.UserId) is not { } target)
+    {
+        return Results.BadRequest(new { ok = false, error = "找不到这个账号。" });
+    }
+
+    if (target.Id == profile.Id)
+    {
+        return Results.BadRequest(new { ok = false, error = "你自己已经有这个班的权限了。" });
+    }
+
+    var (ok, already) = bindings.Grant(target.Id, uuid, $"{profile.DisplayName}（班主任）");
+
+    if (!ok && !already)
+    {
+        return Results.Ok(new { ok = false, error = "授权没能存到服务器上（磁盘不可写？），这次授权没有生效。" });
+    }
+
+    logger.LogInformation("{Head} 给 {Teacher} 授予了 {Classroom} 的权限。", profile.DisplayName, target.DisplayName, classroom.Name);
+
+    return Results.Ok(new
+    {
+        ok = true,
+        already,
+        message = already
+            ? $"{target.DisplayName} 本来就有「{classroom.Name}」的权限。"
+            : $"已把「{classroom.Name}」授权给 {target.DisplayName}。",
+    });
+});
+
+/// <summary>班主任收回自己管的班上某位老师的权限（收不到别人的班主任授权）。</summary>
+app.MapDelete(RelayPaths.HeadTeacherBindings, (
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken,
+    string? classroomUuid,
+    string? userId) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var uuid = classroomUuid?.Trim() ?? string.Empty;
+
+    if (!ManagesClassroom(profile, uuid))
+    {
+        return Results.Json(
+            new { ok = false, error = "这个班不是你当班主任的班，不能改它的权限。" },
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    if (string.IsNullOrWhiteSpace(userId))
+    {
+        return Results.BadRequest(new { ok = false, error = "请指定要收回哪一位老师的权限。" });
+    }
+
+    if (bindings.IsHeadTeacherOf(userId, uuid))
+    {
+        return Results.BadRequest(new { ok = false, error = "班主任的任免只有管理员能做，这里只能收回普通任课老师的权限。" });
+    }
+
+    if (!bindings.Revoke(userId, uuid))
+    {
+        return Results.Ok(new { ok = false, error = "没能收回：这条授权不存在，或者服务器写不进去。" });
+    }
+
+    logger.LogInformation("{Head} 收回了 {Teacher} 在 {Uuid} 的权限。", profile.DisplayName, userId, uuid);
+    return Results.Ok(new { ok = true });
+});
+
+/// <summary>
 /// WebUI 上拼一次呼叫：与客户端「呼叫」页同一套规则 ——
 /// 需要名单、可以多选学生、含"小组成员"组件时按组归并，展示参数也一并带上。
 /// </summary>
@@ -853,56 +1200,48 @@ app.MapPost(RelayPaths.TeacherCall, (
         return Results.Unauthorized();
     }
 
-    var record = rosters.Get(profile.Id);
-    var roster = record is null
-        ? null
-        : record.Rosters.FirstOrDefault(r => r.Id == record.ActiveRosterId) ?? record.Rosters.FirstOrDefault();
+    var allowed = ShoutableClassrooms(profile).ToDictionary(record => record.Uuid, StringComparer.OrdinalIgnoreCase);
 
-    if (roster is null || roster.Students.Count == 0)
-    {
-        return Results.BadRequest(new TeacherCallResponse(
-            false, 0, [], [],
-            "服务器上还没有你的名单：先在教师端「名单」页导入，再点「同步到服务器」。"));
-    }
-
-    var template = request.Components is { Count: > 0 }
-        ? new CallTemplate { Name = "（本次拼装）", Components = request.Components.ToList() }
-        : record!.Templates.FirstOrDefault(t => t.Id == request.TemplateId)
-          ?? record.Templates.FirstOrDefault(t => t.Id == record.ActiveTemplateId)
-          ?? record.Templates.FirstOrDefault();
-
-    if (template is null || template.Components.Count == 0)
-    {
-        return Results.BadRequest(new TeacherCallResponse(
-            false, 0, [], [], "还没有可用的呼叫模板：先在教师端「呼叫」页拼一个，再点「同步到服务器」。"));
-    }
-
-    if (request.StudentIds.Count == 0)
-    {
-        return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "一个学生都没选。"));
-    }
-
-    if (request.TargetUuids.Count == 0 && !request.PreviewOnly)
-    {
-        return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "请至少选择一个班级。"));
-    }
+    // 模板是"这位老师的"，不随班级走；名单是"这个班的"，随班级走。
+    // 所以模板取第一个目标班的记录（每个班同步上来的模板本来是同一批）。
+    var firstUuid = request.TargetUuids.FirstOrDefault();
+    var record = RosterRecord(profile, firstUuid);
 
     // 学生按**名单里的顺序**取，而不是按前端传过来的顺序：
     // 组内成员、多人一条的句子顺序都跟着名单走，两种客户端拼出来的话才会一样。
     var wanted = request.StudentIds.ToHashSet(StringComparer.Ordinal);
-    var students = roster.Students.Where(s => wanted.Contains(s.Id)).ToList();
-
-    if (students.Count == 0)
-    {
-        return Results.BadRequest(new TeacherCallResponse(
-            false, 0, [], [], "选中的学生在服务器上的名单里找不到 —— 可能名单更新过，请刷新页面重选。"));
-    }
 
     // 预览可以先不勾班级：整句话里与班级有关的只有"来源里的科目"一处，
     // 这时按老师的默认科目拼一份给他看就行（真正发送仍然必须勾班级）。
+    // 名单用"他第一间班的那份"—— 名单按班隔离之后，本来就不存在"一份公共名单"了。
     if (request.PreviewOnly && request.TargetUuids.Count == 0)
     {
-        var previewMessages = CallComposer.Compose(template, students, roster, profile.ShoutNameFor(null));
+        var previewRoster = DefaultRoster(profile);
+
+        if (previewRoster is null || previewRoster.Students.Count == 0)
+        {
+            return Results.BadRequest(new TeacherCallResponse(
+                false, 0, [], [],
+                "服务器上还没有你的名单：先在教师端「名单」页导入，再点「同步到服务器」。"));
+        }
+
+        var previewTemplate = TemplateFor(record, request);
+
+        if (previewTemplate is null)
+        {
+            return Results.BadRequest(new TeacherCallResponse(
+                false, 0, [], [], "还没有可用的呼叫模板：先在教师端「呼叫」页拼一个，再点「同步到服务器」。"));
+        }
+
+        var previewStudents = previewRoster.Students.Where(s => wanted.Contains(s.Id)).ToList();
+
+        if (previewStudents.Count == 0)
+        {
+            return Results.BadRequest(new TeacherCallResponse(
+                false, 0, [], [], "选中的学生在服务器上的名单里找不到 —— 可能名单更新过，请刷新页面重选。"));
+        }
+
+        var previewMessages = CallComposer.Compose(previewTemplate, previewStudents, previewRoster, profile.ShoutNameFor(null));
 
         return Results.Ok(new TeacherCallResponse(
             true,
@@ -914,7 +1253,24 @@ app.MapPost(RelayPaths.TeacherCall, (
                 : $"预览（按你的默认科目「{profile.ShoutNameFor(null)}」拼的）：会喊出 {previewMessages.Count} 条。"));
     }
 
-    var allowed = ShoutableClassrooms(profile).ToDictionary(record => record.Uuid, StringComparer.OrdinalIgnoreCase);
+    if (request.TargetUuids.Count == 0)
+    {
+        return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "请至少选择一个班级。"));
+    }
+
+    if (request.StudentIds.Count == 0)
+    {
+        return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "一个学生都没选。"));
+    }
+
+    var template = TemplateFor(record, request);
+
+    if (template is null)
+    {
+        return Results.BadRequest(new TeacherCallResponse(
+            false, 0, [], [], "还没有可用的呼叫模板：先在教师端「呼叫」页拼一个，再点「同步到服务器」。"));
+    }
+
     var results = new List<TeacherShoutResult>();
     var allMessages = new List<string>();
     var sent = 0;
@@ -927,9 +1283,32 @@ app.MapPost(RelayPaths.TeacherCall, (
             continue;
         }
 
+        // 每个班用它**自己那份名单**：名单按班隔离之后，"选中的学生"要先在那个班的
+        // 名单里找得到。找不到就说清是哪一间对不上 —— 直接拿另一份名单硬拼，
+        // 教室里会喊出一个这个班根本没有的名字。
+        var classroomRoster = EffectiveRoster(profile, classroom.Uuid);
+
+        if (classroomRoster is null || classroomRoster.Students.Count == 0)
+        {
+            results.Add(new TeacherShoutResult(classroom.Uuid, classroom.Name, false, "这个班在服务器上还没有名单。"));
+            continue;
+        }
+
+        var students = classroomRoster.Students.Where(s => wanted.Contains(s.Id)).ToList();
+
+        if (students.Count == 0)
+        {
+            results.Add(new TeacherShoutResult(
+                classroom.Uuid,
+                classroom.Name,
+                false,
+                $"选中的学生在「{classroom.Name}」的名单里找不到 —— 这个班用的是另一份名单，请切换名单后重选。"));
+            continue;
+        }
+
         // 每个班各拼一遍：来源里的科目是**按班**取的（"数学张老师"/"物理张老师"），
         // 与 App 那条路同一个规则。
-        var messages = CallComposer.Compose(template, students, roster, profile.ShoutNameFor(classroom.Uuid));
+        var messages = CallComposer.Compose(template, students, classroomRoster, profile.ShoutNameFor(classroom.Uuid));
 
         if (messages.Count == 0)
         {
@@ -981,7 +1360,7 @@ app.MapPost(RelayPaths.TeacherCall, (
     }
 
     logger.LogInformation("老师 {Teacher} 从网页呼叫：{Students} 位学生、{Messages} 条、{Count} 个班",
-        profile.DisplayName, students.Count, allMessages.Count, sent);
+        profile.DisplayName, request.StudentIds.Count, allMessages.Count, sent);
 
     var message = sent switch
     {
@@ -1005,6 +1384,124 @@ List<ClassroomRecord> ShoutableClassrooms(UserProfile profile)
         .Select(uuid => store.Get(uuid))
         .OfType<ClassroomRecord>()
         .ToList();
+}
+
+/// <summary>
+/// 这位老师在这个班里到底该用哪一份名单。
+///
+/// 判定规则本身在 Core 里（<see cref="ClassroomRosterRules"/>），服务器与客户端共用同一段 ——
+/// 这里只负责"把两份名单取出来、按规则挑一份"。
+/// </summary>
+(ClassroomRosterRecord? Head, TeacherRosterRecord? Own, string Source) ResolveRoster(UserProfile profile, string classroomUuid)
+{
+    var head = classroomRosters.Get(classroomUuid);
+    var own = rosters.Get(profile.Id, classroomUuid);
+
+    var hasHead = head is { Rosters.Count: > 0 };
+    var enforced = hasHead && head!.Enforced;
+    var hasOwn = own is { Rosters.Count: > 0 };
+
+    return (head, own, ClassroomRosterRules.Resolve(hasHead, enforced, hasOwn));
+}
+
+/// <summary>某个班的统一名单是不是处于"强制"状态。</summary>
+bool IsEnforced(string classroomUuid)
+    => classroomRosters.Get(classroomUuid) is { Enforced: true, Rosters.Count: > 0 };
+
+/// <summary>这位老师在某个班里是不是班主任（内置管理员一律算）。</summary>
+bool ManagesClassroom(UserProfile profile, string classroomUuid)
+    => profile.Id == AdminUserId || bindings.IsHeadTeacherOf(profile.Id, classroomUuid);
+
+/// <summary>把一间教室描述成客户端/网页要的那条 JSON（在线状态、我的角色、名单来源都在这里定）。</summary>
+TeacherClassroomDto DescribeClassroom(UserProfile profile, ClassroomRecord record, DateTimeOffset cutoff)
+{
+    var (_, _, source) = ResolveRoster(profile, record.Uuid);
+    var manages = ManagesClassroom(profile, record.Uuid);
+
+    return new TeacherClassroomDto(
+        record.Uuid,
+        record.Name,
+        record.LastSeenAt >= cutoff,
+        record.LastSeenAt,
+        manages ? UserRoles.HeadTeacher : UserRoles.Teacher,
+        manages,
+        source,
+        IsEnforced(record.Uuid));
+}
+
+/// <summary>这位老师在某个班呼叫时要用的那份名单（模板永远用他自己那份）。</summary>
+StudentRoster? EffectiveRoster(UserProfile profile, string classroomUuid)
+{
+    var (head, own, source) = ResolveRoster(profile, classroomUuid);
+
+    var preferHead = source == ClassroomRosterRules.HeadTeacher;
+
+    // 规则说"用班主任那份"时先看它，否则先看老师自己那份；两份的类型不同，
+    // 所以这里直接把"名单列表 + 当前是哪一份"摘出来比，而不是在两种记录之间选。
+    var preferred = preferHead ? head?.Rosters : own?.Rosters;
+    var preferredActive = preferHead ? head?.ActiveRosterId : own?.ActiveRosterId;
+
+    var fallback = preferHead ? own?.Rosters : head?.Rosters;
+    var fallbackActive = preferHead ? own?.ActiveRosterId : head?.ActiveRosterId;
+
+    // 兜底那一份只在"首选那份是空的"时才用得上：规则说用班主任那份、而那份
+    // 恰好被清空时，别把老师自己的名单也一起丢了。
+    return PickRoster(preferred, preferredActive) ?? PickRoster(fallback, fallbackActive);
+}
+
+/// <summary>从一组名单里挑出"当前那一份"。</summary>
+static StudentRoster? PickRoster(IReadOnlyList<StudentRoster>? rosters, string? activeId)
+{
+    if (rosters is not { Count: > 0 })
+    {
+        return null;
+    }
+
+    return rosters.FirstOrDefault(r => r.Id == activeId) ?? rosters[0];
+}
+
+/// <summary>
+/// 没指定班级时用哪份名单（预览、以及"你到底有没有名单"这个判断）。
+///
+/// 名单按班隔离之后就不存在"一份公共名单"了，于是这里挨个班问一遍、
+/// 取第一份非空的；一个班都没有时才回退到升级前那份"没指定班级"的记录。
+/// </summary>
+StudentRoster? DefaultRoster(UserProfile profile)
+{
+    foreach (var classroom in ShoutableClassrooms(profile))
+    {
+        if (EffectiveRoster(profile, classroom.Uuid) is { Students.Count: > 0 } roster)
+        {
+            return roster;
+        }
+    }
+
+    return LegacyRoster(rosters.Get(profile.Id));
+}
+
+/// <summary>某位老师在某个班的名单记录；这个班还没有专门同步过时退回他那份旧的。</summary>
+TeacherRosterRecord? RosterRecord(UserProfile profile, string? classroomUuid)
+    => rosters.Get(profile.Id, classroomUuid) ?? rosters.Get(profile.Id);
+
+/// <summary>从一份记录里取出当前选中的名单。</summary>
+StudentRoster? LegacyRoster(TeacherRosterRecord? record)
+    => record is not { Rosters.Count: > 0 }
+        ? null
+        : record.Rosters.FirstOrDefault(r => r.Id == record.ActiveRosterId) ?? record.Rosters[0];
+
+/// <summary>这次呼叫用哪个模板：临时拼的 &gt; 指定的 &gt; 当前的 &gt; 第一个。</summary>
+CallTemplate? TemplateFor(TeacherRosterRecord? record, TeacherCallRequest request)
+{
+    if (request.Components is { Count: > 0 })
+    {
+        return new CallTemplate { Name = "（本次拼装）", Components = request.Components.ToList() };
+    }
+
+    var template = record?.Templates.FirstOrDefault(t => t.Id == request.TemplateId)
+                   ?? record?.Templates.FirstOrDefault(t => t.Id == record.ActiveTemplateId)
+                   ?? record?.Templates.FirstOrDefault();
+
+    return template is { Components.Count: > 0 } ? template : null;
 }
 
 // ======================== 教师端：绑定 ========================
@@ -1559,8 +2056,11 @@ app.MapDelete("/api/console/classrooms/{uuid}", (
     sessions.RevokeClassroomTokens(uuid);
     hub.Remove(MessageHub.ClassroomKey(uuid));
 
-    // 教室没了，指向它的授权就是悬空记录，一并清掉
+    // 教室没了，指向它的授权、挂在它名下的名单就都是悬空记录，一并清掉。
+    // 名单不清的话，将来新注册的教室万一复用了同一个 UUID，会看到上一间班的名单。
     var revoked = bindings.RevokeClassroom(uuid);
+    rosters.RemoveClassroom(uuid);
+    classroomRosters.Remove(uuid);
 
     logger.LogWarning("管理员删除了教室注册：{Uuid}（同时清理 {Count} 条授权）", uuid, revoked);
     return Results.Ok(new { ok = removed });
@@ -2080,6 +2580,36 @@ app.MapPost("/api/console/users/{id}/subject", (
     return Results.Ok(new { ok = true });
 });
 
+/// <summary>改一个账号的角色（教师 ↔ 班主任）。</summary>
+/// <remarks>
+/// 这里只改"有没有资格当班主任"这一层；**具体管哪几个班**是在班级授权上打标记
+/// （见下面的班级授权，或班主任自己的「我的班级」）。两者同时成立才算数。
+/// </remarks>
+app.MapPost("/api/console/users/{id}/role", (
+    string id,
+    ConsoleRoleRequest request,
+    [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    if (!userSessions.IsAdminSession(authToken))
+    {
+        return Results.Unauthorized();
+    }
+
+    if (id == AdminUserId)
+    {
+        return Results.BadRequest(new { error = "内置管理员本来就是最高权限，没有「角色」可改。" });
+    }
+
+    var (ok, error) = users.SetRole(id, request.Role);
+
+    if (!ok)
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    return Results.Ok(new { ok = true, role = UserRoles.Normalize(request.Role), label = UserRoles.Label(request.Role) });
+});
+
 /// <summary>班级授权列表。</summary>
 app.MapGet(RelayPaths.ConsoleBindings, ([FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
 {
@@ -2099,13 +2629,14 @@ app.MapGet(RelayPaths.ConsoleBindings, ([FromHeader(Name = RelayPaths.AuthTokenH
             binding.ClassroomUuid,
             classroom?.Name ?? "（已删除的教室）",
             binding.GrantedBy,
-            binding.GrantedAt);
+            binding.GrantedAt,
+            binding.AsHeadTeacher);
     });
 
     return Results.Ok(result);
 });
 
-/// <summary>把某个班级授权给某位老师。授权后该老师无需口令即可绑定。</summary>
+/// <summary>把某个班级授权给某位老师（也可以顺手指定为这个班的班主任）。授权后该老师无需口令即可绑定。</summary>
 app.MapPost(RelayPaths.ConsoleBindings, (
     GrantBindingRequest request,
     [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
@@ -2134,16 +2665,34 @@ app.MapPost(RelayPaths.ConsoleBindings, (
         return Results.BadRequest(new { error = "教室不存在，请先让教室端连接一次服务器完成注册。" });
     }
 
-    var (granted, alreadyExists) = bindings.Grant(user.Id, classroom.Uuid, config.AdminUsername);
+    var (granted, alreadyExists) = bindings.Grant(user.Id, classroom.Uuid, config.AdminUsername, request.AsHeadTeacher);
+
+    // 指定为班主任时，顺手把账号角色升上去。
+    //
+    // 不然管理员要做两件事（先改角色、再勾班主任），而漏掉第一件时现象是
+    // "勾了班主任却什么也管不了"—— 界面上的勾是打着的，只有他知道自己还差一步。
+    // 反过来（降回教师）不会自动发生：那属于"这个人还是不是班主任"，
+    // 由管理员在账号页上明确改，见 UserStore.SetRole 的说明。
+    if (request.AsHeadTeacher && !user.IsHeadTeacher)
+    {
+        users.SetRole(user.Id, UserRoles.HeadTeacher);
+    }
 
     if (granted)
     {
-        return Results.Ok(new { ok = true, message = $"已把「{classroom.Name}」授权给「{user.DisplayName}」。" });
+        var role = request.AsHeadTeacher ? "，并设为该班班主任" : string.Empty;
+        return Results.Ok(new { ok = true, message = $"已把「{classroom.Name}」授权给「{user.DisplayName}」{role}。" });
     }
 
     if (alreadyExists)
     {
-        return Results.Ok(new { ok = true, message = $"「{user.DisplayName}」本来就可以使用「{classroom.Name}」。" });
+        return Results.Ok(new
+        {
+            ok = true,
+            message = request.AsHeadTeacher
+                ? $"「{user.DisplayName}」本来就可以使用「{classroom.Name}」。"
+                : $"「{user.DisplayName}」本来就可以使用「{classroom.Name}」（他是这个班的班主任）。",
+        });
     }
 
     // 写盘失败。这里必须报失败 —— 界面说"已授权"、重启后授权消失，
@@ -2304,10 +2853,17 @@ UserProfileDto ToDto(UserProfile profile)
         profile.CreatedAt,
         profile.LastLoginAt,
         profile.Disabled,
-        false,
+        profile.Id == AdminUserId,
         profile.Subject,
-        profile.SubjectByClassroom);
+        profile.SubjectByClassroom,
+        UserRoles.Normalize(profile.Role));
 
 /// <summary>内置管理员的档案。它不是用户库里的一条记录，而是由配置文件描述的。</summary>
+/// <remarks>
+/// 角色给的是**班主任**：管理员之上没有别的角色了，而"班主任"这个字段在界面上
+/// 只用来解释"为什么这个人能管班级权限"。真正的判断始终是 IsAdminSession，
+/// 不要靠这个字段去授权。
+/// </remarks>
 UserProfileDto ToAdminDto()
-    => new(AdminUserId, config.AdminUsername, null, "管理员", config.AdminPasswordGeneratedAt, null, false, true);
+    => new(AdminUserId, config.AdminUsername, null, "管理员", config.AdminPasswordGeneratedAt, null, false, true,
+        Role: UserRoles.HeadTeacher);

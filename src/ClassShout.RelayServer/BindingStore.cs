@@ -8,7 +8,7 @@ namespace ClassShout.RelayServer;
 ///
 /// 它和教室口令是两条并行的通路，区别在于谁来说"可以"：
 ///   · 教室口令 —— 教室端把口令交给老师，老师自己填。适合没有控制台的场合；
-///   · 绑定授权 —— 管理员在控制台上直接把班级指给某位老师。老师手机上一点即用，
+///   · 绑定授权 —— 管理员（或这个班的班主任）直接把班级指给某位老师。老师手机上一点即用，
 ///     不必抄 UUID、也不必传口令。口令一旦转发就会扩散，授权则始终收在服务器上。
 /// </summary>
 public sealed class ClassroomBinding
@@ -19,7 +19,19 @@ public sealed class ClassroomBinding
     /// <summary>被授权的教室 UUID。</summary>
     public string ClassroomUuid { get; set; } = string.Empty;
 
-    /// <summary>授权人（管理员账号名），便于事后追查是谁开的权限。</summary>
+    /// <summary>
+    /// 这条授权是不是"班主任"授权。
+    ///
+    /// 班主任与普通任课老师用的是同一张表：他们都能给这个班喊话，差别只在
+    /// 班主任**还能管这个班的权限**。分成两张表的话，"他到底有没有这个班的权限"
+    /// 每次都要问两处，而两处迟早会出现"授权了但喊不了"这种自相矛盾的状态。
+    ///
+    /// 老数据里没有这个字段，反序列化出来是 false —— 正好就是"普通任课老师"，
+    /// 与升级前的行为一致。
+    /// </summary>
+    public bool AsHeadTeacher { get; set; }
+
+    /// <summary>授权人（管理员账号名或班主任姓名），便于事后追查是谁开的权限。</summary>
     public string GrantedBy { get; set; } = string.Empty;
 
     public DateTimeOffset GrantedAt { get; set; }
@@ -77,6 +89,41 @@ public sealed class BindingStore
         }
     }
 
+    /// <summary>某位老师**当班主任**的那些教室 UUID —— 他能管权限的就是这几间。</summary>
+    public IReadOnlyList<string> HeadTeacherClassroomsOf(string userId)
+    {
+        lock (_lock)
+        {
+            return _bindings
+                .Where(b => b.UserId == userId && b.AsHeadTeacher)
+                .Select(b => b.ClassroomUuid)
+                .ToList();
+        }
+    }
+
+    /// <summary>某位老师在这个班是不是班主任。</summary>
+    public bool IsHeadTeacherOf(string userId, string classroomUuid)
+    {
+        lock (_lock)
+        {
+            return _bindings.Any(b =>
+                b.UserId == userId &&
+                b.AsHeadTeacher &&
+                string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    /// <summary>某个教室的全部授权（含是不是班主任），控制台与"我的班级"都用它。</summary>
+    public IReadOnlyList<ClassroomBinding> OfClassroom(string classroomUuid)
+    {
+        lock (_lock)
+        {
+            return _bindings
+                .Where(b => string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+    }
+
     /// <summary>某个教室被授权给哪些老师。</summary>
     public IReadOnlyList<string> UsersOf(string classroomUuid)
     {
@@ -103,20 +150,45 @@ public sealed class BindingStore
     /// 授权。已存在则返回 false，让调用方能区分"新建"与"本来就有"。
     /// 返回 <paramref name="Ok"/> 为 false 且 <paramref name="AlreadyExists"/> 为 false
     /// 时表示写盘失败 —— 调用方必须如实报告，否则管理员会以为授权成功了。
+    ///
+    /// 已经授权过的老师再被指定为班主任时**升级那条记录**（而不是报"本来就有"）：
+    /// 管理员在控制台上做的事就是"把张老师也设成二班班主任"，回一句"已存在"
+    /// 会让人以为没生效。
     /// </summary>
-    public (bool Ok, bool AlreadyExists) Grant(string userId, string classroomUuid, string grantedBy)
+    public (bool Ok, bool AlreadyExists) Grant(string userId, string classroomUuid, string grantedBy, bool asHeadTeacher = false)
     {
         lock (_lock)
         {
-            if (IsAuthorizedLocked(userId, classroomUuid))
+            var existing = _bindings.FirstOrDefault(b =>
+                b.UserId == userId &&
+                string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase));
+
+            if (existing is not null)
             {
-                return (false, true);
+                if (!asHeadTeacher || existing.AsHeadTeacher)
+                {
+                    return (false, true);
+                }
+
+                existing.AsHeadTeacher = true;
+                existing.GrantedBy = grantedBy;
+                existing.GrantedAt = DateTimeOffset.UtcNow;
+
+                if (!SaveLocked())
+                {
+                    existing.AsHeadTeacher = false;
+                    return (false, true);
+                }
+
+                _logger.LogInformation("{By} 把教室 {Uuid} 的班主任权限加给了用户 {UserId}", grantedBy, classroomUuid, userId);
+                return (true, false);
             }
 
             var binding = new ClassroomBinding
             {
                 UserId = userId,
                 ClassroomUuid = classroomUuid,
+                AsHeadTeacher = asHeadTeacher,
                 GrantedBy = grantedBy,
                 GrantedAt = DateTimeOffset.UtcNow,
             };
@@ -131,7 +203,8 @@ public sealed class BindingStore
                 return (false, false);
             }
 
-            _logger.LogInformation("管理员 {Admin} 把教室 {Uuid} 授权给用户 {UserId}", grantedBy, classroomUuid, userId);
+            _logger.LogInformation("{By} 把教室 {Uuid} 授权给用户 {UserId}{Head}",
+                grantedBy, classroomUuid, userId, asHeadTeacher ? "（班主任）" : string.Empty);
             return (true, false);
         }
     }
@@ -207,11 +280,6 @@ public sealed class BindingStore
             return removed.Count;
         }
     }
-
-    private bool IsAuthorizedLocked(string userId, string classroomUuid)
-        => _bindings.Any(b =>
-            b.UserId == userId &&
-            string.Equals(b.ClassroomUuid, classroomUuid, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// 落盘。返回 false 表示这次修改没有写到磁盘上 —— 调用方必须据此回滚内存状态。

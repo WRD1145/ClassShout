@@ -45,6 +45,16 @@ public sealed class UserRecord
 
     public string PasswordSalt { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 账号角色：教师（默认）或班主任。取值见 <see cref="UserRoles"/>。
+    ///
+    /// 这是"这个账号有没有资格当班主任"的那一层；**具体管哪几个班**记在授权表里
+    /// （见 <see cref="ClassroomBinding.AsHeadTeacher"/>）—— 一位老师完全可能既是
+    /// 二班的班主任、又只是三班的任课老师，一个账号级字段表达不了这件事。
+    /// 管理员不是这里的一个取值：管理员是配置里写死的那个身份。
+    /// </summary>
+    public string Role { get; set; } = UserRoles.Teacher;
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? LastLoginAt { get; set; }
@@ -62,10 +72,14 @@ public sealed record UserProfile(
     DateTimeOffset? LastLoginAt,
     bool Disabled,
     string? Subject = null,
-    IReadOnlyDictionary<string, string>? SubjectByClassroom = null)
+    IReadOnlyDictionary<string, string>? SubjectByClassroom = null,
+    string Role = UserRoles.Teacher)
 {
     /// <summary>喊话来源里显示的名字：有科目就带上（"数学张老师"），没有就只报姓名。</summary>
     public string ShoutName => TeachingSubjects.Format(Subject, DisplayName);
+
+    /// <summary>账号级角色是不是班主任（"有没有资格"，不是"管哪几个班"）。</summary>
+    public bool IsHeadTeacher => UserRoles.IsHeadTeacher(Role);
 
     /// <summary>
     /// 这位老师在**某一间**教室里的喊话来源。
@@ -390,6 +404,51 @@ public sealed class UserStore
         }
     }
 
+    /// <summary>
+    /// 改一个账号的角色（教师 ↔ 班主任）。
+    ///
+    /// 与别处一样的规矩：写盘失败就把内存改回去，否则会出现"控制台说改好了、
+    /// 重启之后又变回教师"—— 那种现象只会被当成"权限怎么又没了"。
+    ///
+    /// 降回教师**不会**顺手删掉他的班主任授权：那属于"管哪几个班"，是控制台上
+    /// 另一处的东西，隐式连带删除会让人在别处发现"授权怎么没了"而找不到原因。
+    /// 服务端判定权限时是两者**同时**成立才算数（见 Program.cs 里的 HeadTeacherClassrooms）。
+    /// </summary>
+    public (bool Ok, string? Error) SetRole(string id, string? role)
+    {
+        if (!UserRoles.IsKnown(role))
+        {
+            return (false, $"角色只能是「教师」或「班主任」。");
+        }
+
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null)
+            {
+                return (false, "账号不存在。");
+            }
+
+            var next = UserRoles.Normalize(role);
+            if (user.Role == next)
+            {
+                return (true, null);
+            }
+
+            var previous = user.Role;
+            user.Role = next;
+
+            if (!SaveLocked())
+            {
+                user.Role = previous;
+                return (false, "服务器无法写入用户表，角色未修改。请检查磁盘空间与文件权限。");
+            }
+
+            _logger.LogInformation("账号 {Display}（{Id}）的角色改为 {Role}。", user.DisplayName, user.Id, next);
+            return (true, null);
+        }
+    }
+
     private static UserProfile ToProfile(UserRecord user)
         => new(
             user.Id,
@@ -405,7 +464,9 @@ public sealed class UserStore
             // 客户端也少一种"有键但没内容"的状态要判断。
             user.SubjectByClassroom.Count == 0
                 ? null
-                : new Dictionary<string, string>(user.SubjectByClassroom, StringComparer.OrdinalIgnoreCase));
+                : new Dictionary<string, string>(user.SubjectByClassroom, StringComparer.OrdinalIgnoreCase),
+
+            UserRoles.Normalize(user.Role));
 
     // ======================== 口令处理 ========================
 
