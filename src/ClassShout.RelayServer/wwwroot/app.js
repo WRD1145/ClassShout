@@ -142,6 +142,13 @@ async function enterConsole() {
 // 否则每次刷新都要重新勾一遍。
 let teacherSelection = {};
 
+// 老师能喊话的班级（/api/teacher/classrooms 的那份）。名单选择框与班主任那一块都要读它。
+let teacherClassrooms = [];
+
+// 名单是"按班"的一份数据，所以"现在在看哪个班"必须先定下来。
+// 空串表示还没选（一个班都没有的账号就是这种状态）。
+let rosterClassroomUuid = '';
+
 async function enterTeacherView() {
   document.getElementById('loginView').classList.add('hidden');
   document.getElementById('consoleView').classList.add('hidden');
@@ -156,9 +163,16 @@ async function enterTeacherView() {
   setBanner('teacherResult', '');
   setBanner('callError', '');
   setBanner('callResult', '');
+  setBanner('rosterError', '');
+  setBanner('rosterResult', '');
+  setBanner('headError', '');
+  setBanner('headResult', '');
 
+  // 班级列表要先拿到：名单那一块的班级选择框就是用它填的，
+  // 而名单与呼叫又都跟着"选中的那个班"走
   await loadTeacherClassrooms();
   await loadTeacherRoster();
+  await loadHeadTeacherSection();
 }
 
 /* ---------- 展示参数 ---------- */
@@ -194,6 +208,11 @@ function readDisplayParams() {
 async function loadTeacherClassrooms() {
   const host = document.getElementById('teacherClassrooms');
   const list = await apiJson('/api/teacher/classrooms');
+
+  // 这份列表不止这一块要用：名单那一块的班级选择框、以及「我的班级」那块
+  // （它要据此把"已经认识的老师"认出来）都读它，所以存一份下来，别各拉各的。
+  teacherClassrooms = list || [];
+  renderRosterClassroomPicker();
 
   if (!list || list.length === 0) {
     host.innerHTML = '<div class="empty">管理员还没有把班级授权给你。' +
@@ -292,13 +311,59 @@ async function submitTeacherShout() {
 let callSelection = {};
 let callRoster = null;
 
+/// 名单那一块的班级选择框。
+///
+/// 名单按班隔离之后，"我在看哪个班的名单"必须先定下来 —— 所以这里保留老师上次选的班，
+/// 而不是每次刷新都跳回第一个：他刚给二班录完名单，刷新一下跳到一班，很容易顺手把
+/// 三班的学生传进二班。
+function renderRosterClassroomPicker() {
+  const select = document.getElementById('rosterClassroom');
+  if (!select) return;
+
+  const list = teacherClassrooms || [];
+
+  if (list.length === 0) {
+    // 一个班都没有时也要把选择框清干净：留着上一位老师选的班，比空着更糟
+    rosterClassroomUuid = '';
+    select.innerHTML = '<option value="">（还没有班级）</option>';
+    return;
+  }
+
+  if (!list.some(c => c.uuid === rosterClassroomUuid)) {
+    rosterClassroomUuid = list[0].uuid;
+  }
+
+  // 强制名单的班直接标在名字后面：老师换班之前就该知道这个班能不能用自己那份名单
+  select.innerHTML = list.map(c =>
+    '<option value="' + escapeAttr(c.uuid) + '"' + (c.uuid === rosterClassroomUuid ? ' selected' : '') + '>' +
+    escapeHtml(c.name) + (c.rosterEnforced ? '（班主任强制名单）' : '') +
+    '</option>').join('');
+}
+
+/// 换班就要换名单。
+///
+/// 勾过的学生也要一起丢掉：学生 Id 是"这个班那份名单里的 Id"，
+/// 换班之后它们要么对不上，要么更糟 —— 正好撞上另一个班同 Id 的学生。
+function switchRosterClassroom(uuid) {
+  rosterClassroomUuid = uuid || '';
+  callSelection = {};
+  return loadTeacherRoster();
+}
+
 async function loadTeacherRoster() {
   const body = document.getElementById('callBody');
   const empty = document.getElementById('callEmpty');
   const list = document.getElementById('callStudents');
   const templateSelect = document.getElementById('callTemplate');
 
-  const snapshot = await apiJson('/api/teacher/roster');
+  // 名单按班隔离：带上当前选的班，服务器才知道该回哪一份，
+  // 也才知道该不该让我上传自己的（这件事由服务器算，见下面的 renderRosterSource）
+  const snapshot = await apiJson(rosterClassroomUuid
+    ? '/api/teacher/roster?classroomUuid=' + encodeURIComponent(rosterClassroomUuid)
+    : '/api/teacher/roster');
+
+  renderRosterSource(snapshot);
+
   const rosters = snapshot && snapshot.rosters ? snapshot.rosters : [];
 
   // 当前这份名单：服务器上标记为"当前"的那份，没有就用第一份
@@ -308,6 +373,18 @@ async function loadTeacherRoster() {
     callRoster = null;
     body.classList.add('hidden');
     empty.classList.remove('hidden');
+
+    // 空的原因不止一种。被班主任强制时，那句"去 App 同步一份"是错的建议 ——
+    // 这位老师同步上来的名单在这个班里本来就不会被采用，照着做只会白忙一场。
+    if (snapshot && snapshot.source === 'headTeacher') {
+      empty.textContent = '这个班用的是班主任统一上传的名单，你自己的名单在这个班里不会被采用，' +
+        '所以这里没有可呼叫的学生。';
+    } else if (!rosterClassroomUuid) {
+      empty.textContent = '服务器上还没有你的名单。去 App 的「名单」页导入，再点「同步名单到服务器」。';
+    } else {
+      empty.textContent = '这个班在服务器上还没有你的名单。先把名单粘贴到上面「名单」那一块并上传。';
+    }
+
     return;
   }
 
@@ -343,6 +420,76 @@ async function loadTeacherRoster() {
       callSelection[input.dataset.callStudent] = input.checked;
     });
   });
+}
+
+/// 把"这个班现在用谁的名单""我能不能上传"摆出来，并据此决定要不要给上传入口。
+///
+/// 判定放在服务器（Core 的 ClassroomRosterRules），这里只做展示。两边各判一次的话，
+/// 迟早会出现"界面让传、服务器默默丢掉"—— 而老师只会以为自己白录了一遍。
+function renderRosterSource(snapshot) {
+  const state = document.getElementById('rosterSource');
+  const box = document.getElementById('rosterUploadBox');
+  const locked = document.getElementById('rosterLocked');
+  if (!state || !box || !locked) return;
+
+  const source = (snapshot && snapshot.source) || '';
+  const canUpload = !snapshot || snapshot.canUpload !== false;
+
+  // 与服务器 ClassroomRosterRules.Label 同一组说法：界面上叫一个名字、
+  // 接口日志里叫另一个名字的话，排查时对不上号。
+  state.textContent = '这个班现在用的是：' + (source === 'headTeacher'
+    ? '班主任统一上传的名单'
+    : (source === 'own' ? '我自己导入的名单' : '还没有名单'));
+
+  box.classList.toggle('hidden', !canUpload);
+  locked.classList.toggle('hidden', canUpload);
+
+  if (!canUpload) {
+    // 这段话与服务器 ClassroomRosterRules.LockedHint 是同一句
+    //（服务器那句会把班级名放进括号里，这里班级就在上面选着，所以不重复）。
+    // 各说一套的话，老师会以为是两件事，然后反复试。
+    state.textContent += '（班主任设为强制，不能改）';
+    locked.textContent = '这个班的名单由班主任统一管理并设为了强制，你不能再上传自己的名单。' +
+      '要改用你自己那份，请联系班主任取消强制。';
+  }
+}
+
+/// 上传我自己这个班的名单。
+///
+/// 直接贴 CSV，用的就是 App 导入名单那套解析器（表头、空行、引号、从 Excel 粘贴都认），
+/// 所以网页上录一份名单与在 App 里录一份，结果是一样的。
+async function submitTeacherRoster() {
+  setBanner('rosterError', '');
+  setBanner('rosterResult', '');
+
+  if (!rosterClassroomUuid) {
+    setBanner('rosterError', '还没有可选班级：等管理员把班级授权给你之后再传名单。');
+    return;
+  }
+
+  const csv = fieldValue('rosterCsv').trim();
+
+  if (!csv) {
+    setBanner('rosterError', '请把名单粘贴进来。');
+    return;
+  }
+
+  const result = await apiJson('/api/teacher/roster', {
+    method: 'PUT',
+    body: JSON.stringify({ classroomUuid: rosterClassroomUuid, csvText: csv })
+  });
+
+  // 被班主任强制时服务器回的是 200 + {ok:false,error}：这里必须照样当失败处理，
+  // 否则界面上会显示"已上传"，而这个班的名单其实一点没变。
+  if (result && result.ok) {
+    const area = document.getElementById('rosterCsv');
+    if (area) area.value = '';
+    setBanner('rosterResult', '名单已保存到服务器，这个班现在有 ' + result.rosters + ' 份名单。');
+  } else {
+    setBanner('rosterError', (result && result.error) || '上传失败。');
+  }
+
+  await loadTeacherRoster();
 }
 
 function setCallSelection(value) {
@@ -416,6 +563,335 @@ async function submitTeacherCall(preview) {
   setBannerHtml('callResult',
     escapeHtml(preview ? '预览（还没有发出去）' : (result.message || '已发送')) +
     (lines ? '<div class="call-preview">' + lines + '</div>' : ''));
+}
+
+/* ---------- 我的班级（班主任） ----------
+ *
+ * 班主任是"教师"与"管理员"中间的那一级：他能管**自己当班主任的那几间班**的权限
+ * （给别的老师授权、收回）与这个班全班统一使用的名单，但管不到别人的班，也管不到账号本身。
+ *
+ * 服务器那三条边界（只看得见自己的班、只能增删普通任课老师、收回时不碰别人的班主任授权）
+ * 都写在接口里，这里只是把它们摆出来 —— 界面藏起来的入口不是授权规则。
+ */
+
+// 我当班主任的班级（/api/head-teacher/classrooms 的那份）。
+// 它同时是"授权给谁"的姓名解析表，见 resolveTeacherAccount。
+let headTeacherClassrooms = [];
+
+/// 班主任那一块：拿得到班就显示，一间都没有就整块藏起来。
+///
+/// 为什么不给普通老师显示一个空架子：他看到的会是一张只有标题的卡片，
+/// 只会以为界面坏了 —— 而"我不是任何班的班主任"本来就是一条正常状态。
+/// 内置管理员在服务器那边拿到的是全部教室，所以他永远看得见这一块。
+async function loadHeadTeacherSection() {
+  const section = document.getElementById('headTeacherSection');
+  if (!section) return;
+
+  const data = await apiJson('/api/head-teacher/classrooms');
+  headTeacherClassrooms = Array.isArray(data) ? data : [];
+
+  if (headTeacherClassrooms.length === 0) {
+    section.classList.add('hidden');
+    return;
+  }
+
+  section.classList.remove('hidden');
+  renderHeadTeacherClassrooms();
+
+  // 每间班的名单状态（传了几名学生、有没有强制）要单独问一次：
+  // 列表接口只回"有没有名单"，而"有几名学生"只有那份名单自己知道。
+  await Promise.all(headTeacherClassrooms.map(c => loadClassroomRosterState(c.uuid)));
+}
+
+function renderHeadTeacherClassrooms() {
+  const host = document.getElementById('headTeacherList');
+  if (!host) return;
+
+  host.innerHTML = headTeacherClassrooms.map(c => {
+    // 变量名不能以 on 开头：那会撞上"内联事件属性"的结构性检查（on* =），
+    // 而那个检查宁可误报也不能漏报 —— 见 scripts/smoke-webui.mjs
+    const statusChip = c.online
+      ? '<span class="chip ok">在线</span>'
+      : '<span class="chip">离线</span>';
+
+    // 名单状态那一行由 loadClassroomRosterState 填：先把位置留出来
+    const stateId = 'ht-roster-state-' + c.uuid;
+    const csvId = 'ht-csv-' + c.uuid;
+    const enforceId = 'ht-enforce-' + c.uuid;
+    const grantId = 'ht-grant-' + c.uuid;
+
+    const rows = (c.teachers || []).map(t => {
+      const badge = t.asHeadTeacher ? ' <span class="chip info">班主任</span>' : '';
+      // 科目与用户名都摆出来：同一所学校里重名的老师很常见，
+      // 班主任要收回权限时得先确认这一行是哪一位。
+      const detail = [t.username, t.subject].filter(Boolean).join('，');
+
+      return '<tr>' +
+        '<td>' + escapeHtml(t.displayName) + badge +
+          (detail ? ' <span class="muted-inline">' + escapeHtml(detail) + '</span>' : '') + '</td>' +
+        '<td>' + fmtTime(t.grantedAt) + '</td>' +
+        '<td class="cell-actions-plain">' +
+          // 班主任那一行没有「收回」：班主任的任免只在管理员手里。
+          // 否则一位班主任可以给自己拉一个"班主任同伴"，两人的权限互相兜底。
+          (t.asHeadTeacher ? '' :
+            '<button class="outlined small" data-action="head-teacher-revoke"' +
+            ' data-uuid="' + escapeAttr(c.uuid) + '"' +
+            ' data-user-id="' + escapeAttr(t.userId) + '"' +
+            ' data-user-name="' + escapeAttr(t.displayName) + '"' +
+            ' data-classroom-name="' + escapeAttr(c.name) + '">收回</button>') +
+        '</td>' +
+        '</tr>';
+    }).join('');
+
+    return '<div class="ht-card">' +
+      '<h3>' + escapeHtml(c.name) + ' ' + statusChip + '</h3>' +
+      '<p class="muted ht-state" id="' + escapeAttr(stateId) + '">名单状态读取中…</p>' +
+
+      // 名单输入框与 App 的「名单」页是同一套格式与同一份解析器（Core 的 RosterCsv），
+      // 所以这里的提示也照着它写：只有姓名必填，其余四项留空就行。
+      '<label for="' + escapeAttr(csvId) + '">上传这个班统一使用的名单' +
+        '（每行一位学生：姓名,学号,简写,小组,性别 —— 只有姓名是必填，后面四项留空就行；' +
+        '可以直接从 Excel 里复制粘贴，带表头也没关系）</label>' +
+      '<textarea id="' + escapeAttr(csvId) + '" rows="5" spellcheck="false"' +
+        ' placeholder="姓名,学号,简写,小组,性别&#10;张三,01,小张,第一组,男"></textarea>' +
+
+      '<div class="row-actions mt-20">' +
+        '<button class="tonal small" data-action="head-teacher-roster-save"' +
+          ' data-uuid="' + escapeAttr(c.uuid) + '">上传名单</button>' +
+      '</div>' +
+
+      '<label class="inline-check" for="' + escapeAttr(enforceId) + '">' +
+        '<input id="' + escapeAttr(enforceId) + '" type="checkbox"> 强制本班使用这份名单' +
+      '</label>' +
+      '<p class="muted">勾上之后这个班的任课老师只能用它，不能再上传自己的。' +
+        '不勾时它只是一份默认名单：谁没传自己那份就用它，传了自己的就用自己的。</p>' +
+
+      '<h4>已授权的老师</h4>' +
+      (rows
+        ? '<table><thead><tr><th>老师</th><th>授权时间</th><th></th></tr></thead><tbody>' +
+          rows + '</tbody></table>'
+        : '<p class="muted">这个班还没有授权给别的老师。在下面填他的账号 Id 或姓名即可。</p>') +
+
+      '<label for="' + escapeAttr(grantId) + '">授权给（账号 Id 或姓名）</label>' +
+      '<div class="inline-form">' +
+        '<input id="' + escapeAttr(grantId) + '" type="text" autocomplete="off"' +
+          ' placeholder="例如 zhangsan 或 张老师">' +
+        '<button class="tonal small" data-action="head-teacher-grant"' +
+          ' data-uuid="' + escapeAttr(c.uuid) + '"' +
+          ' data-name="' + escapeAttr(c.name) + '">授权</button>' +
+      '</div>' +
+      '</div>';
+  }).join('');
+
+  // 强制开关：勾上/取消都立刻生效（服务器那边就是这个开关本身）。
+  // 这里用 change 而不是 data-action：复选框的默认动作是"切换自己"，
+  // 走点击分发会被 preventDefault 吃掉，勾了又弹回去。
+  headTeacherClassrooms.forEach(c => {
+    const box = document.getElementById('ht-enforce-' + c.uuid);
+    if (box) box.addEventListener('change', () => setClassroomEnforced(c.uuid, box.checked));
+  });
+}
+
+/// 问一次这个班的统一名单：几名、什么时候改的、是不是强制。
+async function loadClassroomRosterState(uuid) {
+  const el = document.getElementById('ht-roster-state-' + uuid);
+  if (!el) return;
+
+  const snapshot = await apiJson('/api/teacher/classroom-roster?classroomUuid=' + encodeURIComponent(uuid));
+
+  // 不是自己当班主任的班会回 403 + {error}（接口自己去查，不靠界面藏入口）
+  if (!snapshot || snapshot.error) {
+    el.textContent = (snapshot && snapshot.error) || '名单状态读取失败。';
+    return;
+  }
+
+  // 顺便拿服务器那份校准开关：界面上的勾是上一次渲染时的状态，服务器才是真的
+  const box = document.getElementById('ht-enforce-' + uuid);
+  if (box) box.checked = !!snapshot.enforced;
+
+  el.textContent = describeClassroomRoster(snapshot);
+}
+
+/// 「已上传 42 名学生」这类状态行。上传成功后的提示也用它，两处说法保持一致。
+function describeClassroomRoster(snapshot) {
+  // 与服务器回的那个 students 一样是所有名单的总数：一个班可能留了好几份备用名单
+  const count = (snapshot.rosters || [])
+    .reduce((sum, r) => sum + ((r.students || []).length), 0);
+
+  if (count === 0) {
+    return '还没有上传名单：这个班的任课老师现在各用各的。';
+  }
+
+  return '已上传 ' + count + ' 名学生' +
+    (snapshot.updatedAt ? '（最后改于 ' + fmtTime(snapshot.updatedAt) + '）' : '') +
+    (snapshot.updatedByName ? '，由 ' + snapshot.updatedByName + ' 上传' : '') +
+    (snapshot.enforced ? ' · 已强制' : ' · 未强制：任课老师可以传自己的那一份');
+}
+
+/// 上传 / 更新这个班的统一名单。
+///
+/// 顺带把"强制"一起带上：先传名单、再锁住是最常见的用法，分两步的话，
+/// 中间那段时间里任课老师传上来的名单会盖过它，而他并不知道马上就不算数了。
+async function submitHeadTeacherRoster(uuid) {
+  setBanner('headError', '');
+  setBanner('headResult', '');
+
+  const area = document.getElementById('ht-csv-' + uuid);
+  const csv = area ? area.value.trim() : '';
+  const box = document.getElementById('ht-enforce-' + uuid);
+
+  if (!csv) {
+    setBanner('headError', '请先把名单粘贴进来。');
+    return;
+  }
+
+  const result = await apiJson('/api/teacher/classroom-roster', {
+    method: 'PUT',
+    body: JSON.stringify({
+      classroomUuid: uuid,
+      csvText: csv,
+      enforced: !!(box && box.checked)
+    })
+  });
+
+  if (result && result.ok) {
+    if (area) area.value = '';
+    setBanner('headResult', '已上传：这个班现在有 ' + result.students + ' 名学生' +
+      (result.enforced ? '，并且已设为强制。' : '。'));
+    await loadHeadTeacherSection();
+  } else {
+    setBanner('headError', (result && result.error) || '上传失败。');
+  }
+}
+
+/// 切换"强制"。
+///
+/// 为什么要有这个开关：一个班按哪份名单叫人，必须只有一个答案 ——
+/// 一边是班主任传的全班名单、一边是任课老师自己那份，两边都能用的话，
+/// 同一个班里两位老师叫出来的人不一样，而谁都以为自己是对的。
+async function setClassroomEnforced(uuid, enforced) {
+  setBanner('headError', '');
+  setBanner('headResult', '');
+
+  const result = await apiJson('/api/teacher/classroom-roster', {
+    method: 'PUT',
+    body: JSON.stringify({ classroomUuid: uuid, enforced: enforced })
+  });
+
+  if (result && result.ok) {
+    toast(enforced ? '已设为强制：这个班的任课老师只能用这份名单。' : '已取消强制。');
+    await loadHeadTeacherSection();
+    return;
+  }
+
+  // 还没有名单时不许强制（服务器会拒）。这时把勾退回去 ——
+  // 界面上留一个假的勾，下一次刷新又会弹回来，比直接说清更不能接受。
+  const box = document.getElementById('ht-enforce-' + uuid);
+  if (box) box.checked = !enforced;
+
+  setBanner('headError', (result && result.error) || '设置失败。');
+}
+
+/// 给这个班授权一位老师。
+///
+/// "授权给谁"刻意做成一个填「账号 Id 或姓名」的输入框，而不是下拉：
+/// 控制台那份账号列表只对管理员开放，班主任这边**没有**一个能列全校账号的接口 ——
+/// 拿不到名单就不该假装有一个下拉。能查的只有"我管的这几个班里已经授权过的老师"，
+/// 所以姓名只在这批人里认；认不出来的就明说去问管理员要账号 Id，而不是让人对着一个
+/// 填不动的框猜。这也符合边界：班主任能加的是普通任课老师。
+async function grantHeadTeacherTeacher(uuid, classroomName) {
+  setBanner('headError', '');
+  setBanner('headResult', '');
+
+  const input = document.getElementById('ht-grant-' + uuid);
+  const text = input ? input.value.trim() : '';
+
+  if (!text) {
+    setBanner('headError', '先填要授权的老师的账号 Id 或姓名。');
+    return;
+  }
+
+  const resolved = resolveTeacherAccount(text);
+
+  if (!resolved.ok) {
+    setBanner('headError', resolved.error);
+    return;
+  }
+
+  const result = await apiJson('/api/head-teacher/bindings', {
+    method: 'POST',
+    body: JSON.stringify({ classroomUuid: uuid, userId: resolved.userId })
+  });
+
+  if (result && result.ok) {
+    if (input) input.value = '';
+    toast(result.message || ('已把「' + classroomName + '」授权给该老师。'));
+    await loadHeadTeacherSection();
+  } else {
+    setBanner('headError', (result && result.error) || '授权失败。');
+  }
+}
+
+/// 把老师填的「账号 Id 或姓名」认成一个账号。
+///
+/// 顺序是：账号 Id → 用户名 → 姓名。前两个本来就是唯一的；姓名可能重名，
+/// 重名时宁可让他去问账号 Id，也不要随手挑一个 —— 授错人的后果是"另一位老师
+/// 忽然能对别人的班喊话"，而且不会有人发现。
+function resolveTeacherAccount(text) {
+  const wanted = (text || '').trim();
+
+  if (wanted.length === 0) {
+    return { ok: false, error: '先填要授权的老师的账号 Id 或姓名。' };
+  }
+
+  // 认识的人 = 我管的这几个班里已经出现过的老师（同一个账号只留一条）
+  const known = [];
+  (headTeacherClassrooms || []).forEach(c => (c.teachers || []).forEach(t => {
+    if (!known.some(k => k.userId === t.userId)) known.push(t);
+  }));
+
+  const lower = wanted.toLowerCase();
+
+  const byId = known.find(t => (t.userId || '').toLowerCase() === lower);
+  if (byId) return { ok: true, userId: byId.userId };
+
+  const byUsername = known.filter(t => (t.username || '').toLowerCase() === lower);
+  if (byUsername.length === 1) return { ok: true, userId: byUsername[0].userId };
+
+  const byName = known.filter(t => (t.displayName || '') === wanted);
+  if (byName.length === 1) return { ok: true, userId: byName[0].userId };
+
+  if (byName.length > 1) {
+    return {
+      ok: false,
+      error: '有 ' + byName.length + ' 位老师都叫「' + wanted + '」，认不出是哪一位：' +
+             '请填账号 Id（可以问管理员）。'
+    };
+  }
+
+  return {
+    ok: false,
+    error: '认不出「' + wanted + '」是哪位老师。这里只能按姓名认出「我的班级」里已经出现过的老师；' +
+           '别的人请让管理员在控制台的「用户」页把他的账号 Id 发给你，直接填那个 Id 也行。'
+  };
+}
+
+/// 收回某位普通任课老师在这个班的权限。
+async function revokeHeadTeacherBinding(uuid, userId, userName, classroomName) {
+  if (!confirm('收回「' + userName + '」在「' + classroomName + '」的权限吗？\n\n' +
+               '收回后这位老师不能再绑定这个班，也不能再对它喊话与呼叫。\n\n' +
+               '（班主任的任免只有管理员能做，这里只能收回普通任课老师。）')) return;
+
+  const result = await apiJson('/api/head-teacher/bindings?classroomUuid=' + encodeURIComponent(uuid) +
+                               '&userId=' + encodeURIComponent(userId), { method: 'DELETE' });
+
+  if (result && result.ok) {
+    toast('已收回。');
+    await loadHeadTeacherSection();
+  } else {
+    // 越界的请求（比如想收回另一位班主任）由服务器拒绝，把它那句话原样显示出来
+    setBanner('headError', (result && result.error) || '收回失败。');
+  }
 }
 
 /* ---------- 标签页 ---------- */
@@ -534,7 +1010,7 @@ async function loadUsers() {
 
   host.innerHTML =
     '<table><thead><tr>' +
-    '<th>姓名</th><th>任教科目</th><th>用户名</th><th>邮箱</th><th>状态</th><th>注册时间</th><th>最后登录</th><th></th>' +
+    '<th>姓名</th><th>任教科目</th><th>角色</th><th>用户名</th><th>邮箱</th><th>状态</th><th>注册时间</th><th>最后登录</th><th></th>' +
     '</tr></thead><tbody>' +
     list.map(u => {
       const status = u.disabled
@@ -571,16 +1047,36 @@ async function loadUsers() {
           ' data-id="' + escapeAttr(u.id) + '"' +
           ' data-name="' + escapeAttr(u.displayName) + '">改科目</button>';
 
+      // 角色只决定"有没有资格当班主任"，具体管哪几个班记在班级授权上
+      //（见「班级授权」页，或授权时勾的那个「设为该班的班主任」）。
+      // 所以这里升成班主任之后，这一页看不出他管哪个班 —— 那件事在班级那一行上。
+      const isHeadTeacher = u.role === 'headTeacher';
+
+      // 内置管理员一律显示"管理员"：它在服务器那边报上来的角色是"班主任"
+      //（管理员之上没有更高的角色了），照搬会让人以为它只是个班主任。
+      const roleText = u.isAdmin
+        ? '<span class="chip info">管理员</span>'
+        : (isHeadTeacher ? '<span class="chip">班主任</span>' : '教师');
+
+      // 一个按钮来回切，而不是下拉：取值只有两个，下拉要先展开再选，反而多一步
+      const roleAction = u.isAdmin ? '' :
+        '<button class="outlined small" data-action="user-role"' +
+          ' data-id="' + escapeAttr(u.id) + '"' +
+          ' data-name="' + escapeAttr(u.displayName) + '"' +
+          ' data-role="' + escapeAttr(isHeadTeacher ? 'teacher' : 'headTeacher') + '">' +
+          (isHeadTeacher ? '改为教师' : '设为班主任') + '</button>';
+
       return '<tr>' +
         '<td>' + escapeHtml(u.displayName) +
           (u.isAdmin ? ' <span class="chip info">内置管理员</span>' : '') + '</td>' +
         '<td>' + subjectText + '</td>' +
+        '<td>' + roleText + '</td>' +
         '<td class="mono">' + (u.username ? escapeHtml(u.username) : '—') + '</td>' +
         '<td class="mono">' + (u.email ? escapeHtml(u.email) : '—') + '</td>' +
         '<td>' + status + '</td>' +
         '<td>' + (u.isAdmin ? '—' : fmtTime(u.createdAt)) + '</td>' +
         '<td>' + fmtTime(u.lastLoginAt) + '</td>' +
-        '<td class="cell-actions">' + rowActions + subjectAction + '</td>' +
+        '<td class="cell-actions">' + rowActions + subjectAction + roleAction + '</td>' +
       '</tr>';
     }).join('') +
     '</tbody></table>';
@@ -594,6 +1090,28 @@ async function toggleDisabled(id, disabled) {
   toast(result && result.ok ? '已更新。' : '操作失败。');
   await loadUsers();
   await loadBindings();
+}
+
+/// 改一位老师的角色（教师 ↔ 班主任）。
+///
+/// 这里改的只是"有没有资格当班主任"这一层，**具体管哪几个班**是在班级授权上打标记的
+/// （见「班级授权」页，以及授权时那个「设为该班的班主任」）。两者同时成立才算数 ——
+/// 所以改完角色要刷新列表，让这一页显示的角色与班级那一页上的标记能对上。
+async function setUserRole(id, name, role) {
+  const result = await apiJson('/api/console/users/' + encodeURIComponent(id) + '/role', {
+    method: 'POST',
+    body: JSON.stringify({ role: role })
+  });
+
+  if (result && result.ok) {
+    // 服务器回的是 {ok, role, label}：用它的 label，别在这里自己拼一个中文名，
+    // 否则"教师/班主任"这套叫法就有了两个出处。
+    toast('已把「' + name + '」的角色改成「' + (result.label || '教师') + '」。');
+  } else {
+    toast((result && result.error) || '改角色失败。');
+  }
+
+  await loadUsers();
 }
 
 /* ---------- 班级授权 ---------- */
@@ -615,7 +1133,10 @@ async function loadBindings() {
     '</tr></thead><tbody>' +
     list.map(b =>
       '<tr>' +
-      '<td>' + escapeHtml(b.userDisplayName) + '</td>' +
+      // 班主任那一条带徽标：它会多给这位老师两项能力（管这个班的权限、
+      // 传这个班全班统一使用的名单），列表里看不出来的话就成了一条隐形的权限
+      '<td>' + escapeHtml(b.userDisplayName) +
+        (b.asHeadTeacher ? ' <span class="chip info">班主任</span>' : '') + '</td>' +
       '<td>' + escapeHtml(b.classroomName) + '</td>' +
       '<td>' + escapeHtml(b.grantedBy) + '</td>' +
       '<td>' + fmtTime(b.grantedAt) + '</td>' +
@@ -652,6 +1173,11 @@ function openGrant(uuid, name) {
     ).join('');
   }
 
+  // 「设为该班的班主任」每次打开都清掉：上一次给别人勾的那个勾留在这里，
+  // 下一位老师就会被顺手提成班主任 —— 而这是那种不会有人立刻发现的多余权限。
+  const asHeadTeacher = document.getElementById('grantAsHeadTeacher');
+  if (asHeadTeacher) asHeadTeacher.checked = false;
+
   document.getElementById('grantOverlay').classList.remove('hidden');
 }
 
@@ -667,15 +1193,23 @@ async function submitGrant() {
     return;
   }
 
+  // 勾了"班主任"就一起发上去：服务器那边会顺手把这位老师的账号角色也升成班主任，
+  // 免得出现"勾了班主任却什么也管不了"—— 勾是打着的，只有他知道自己还差一步。
+  const asHeadTeacher = document.getElementById('grantAsHeadTeacher');
+
   const result = await apiJson('/api/console/bindings', {
     method: 'POST',
-    body: JSON.stringify({ userId: userId, uuid: grantTarget.uuid })
+    body: JSON.stringify({
+      userId: userId,
+      uuid: grantTarget.uuid,
+      asHeadTeacher: !!(asHeadTeacher && asHeadTeacher.checked)
+    })
   });
 
   if (result && result.ok) {
     closeGrant();
     toast(result.message || '已授权。');
-    await Promise.all([loadBindings(), loadClassrooms()]);
+    await Promise.all([loadBindings(), loadClassrooms(), loadUsers()]);
   } else {
     setBanner('grantError', (result && result.error) || '授权失败。');
   }
@@ -1107,6 +1641,9 @@ const actions = {
   reset: (el) => openReset(el.dataset.id, el.dataset.name),
   'toggle-disabled': (el) => toggleDisabled(el.dataset.id, el.dataset.disabled === 'true'),
 
+  // 角色只决定"有没有资格当班主任"，管哪几个班记在班级授权上
+  'user-role': (el) => setUserRole(el.dataset.id, el.dataset.name, el.dataset.role),
+
   subject: (el) => openSubject(el.dataset.id, el.dataset.name),
   'close-subject': () => closeSubject(),
   'submit-subject': () => submitSubject(),
@@ -1150,6 +1687,17 @@ const actions = {
   'call-select-none': () => setCallSelection(false),
   'call-refresh': () => loadTeacherRoster(),
 
+  // 名单（按班隔离：每个班一份，班主任还能设一份全班的）
+  'roster-save': () => submitTeacherRoster(),
+  'roster-refresh': () => loadTeacherRoster(),
+
+  // 我的班级（班主任）：给这个班授权 / 收回，以及这个班统一的名单
+  'head-teacher-refresh': () => loadHeadTeacherSection(),
+  'head-teacher-grant': (el) => grantHeadTeacherTeacher(el.dataset.uuid, el.dataset.name),
+  'head-teacher-revoke': (el) => revokeHeadTeacherBinding(
+    el.dataset.uuid, el.dataset.userId, el.dataset.userName, el.dataset.classroomName),
+  'head-teacher-roster-save': (el) => submitHeadTeacherRoster(el.dataset.uuid),
+
   'close-grant': () => closeGrant(),
   'submit-grant': () => submitGrant(),
   'close-reset': () => closeReset(),
@@ -1172,6 +1720,11 @@ document.addEventListener('click', (event) => {
 (async function boot() {
   document.getElementById('password').addEventListener('keydown', e => {
     if (e.key === 'Enter') doLogin();
+  });
+
+  // 名单那一块的班级选择框：换班就换名单（连带把上个班勾过的学生清掉）
+  document.getElementById('rosterClassroom').addEventListener('change', e => {
+    switchRosterClassroom(e.target.value);
   });
 
   // 刷新页面后尽量保持登录状态；令牌无效会被 api() 统一打回登录页

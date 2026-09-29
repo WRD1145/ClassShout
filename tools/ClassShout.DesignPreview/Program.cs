@@ -1111,13 +1111,20 @@ internal static class Program
                 {
                     var vm = new TeacherShellViewModel();
 
-                    // 「这条发给谁」这张卡：只有一间教室时也要显示，并且要如实写出这一条发给谁
+                    // 「可发送班级」这张卡：只有一间教室时也要显示，并且要如实写出这一条发给谁。
+                    // 这里刻意种两个来源（一间局域网直连 + 一间经服务器且离线），
+                    // 好把"走哪条路""在不在线"那两行小字都渲染出来。
                     vm.Text.SyncTargets(
                         [
-                            new ClassShout.Core.Remote.BoundClassroom(
-                                "uuid-1", "三年二班", DateTimeOffset.Now, "https://relay.example.com"),
-                        ],
-                        "uuid-1");
+                            new ShoutTargetInfo(
+                                "lan-1", "三年二班", ShoutTargetSources.Lan,
+                                IsOnline: true, IsCurrent: true, Record: null),
+                            new ShoutTargetInfo(
+                                "uuid-2", "三年三班", ShoutTargetSources.Server,
+                                IsOnline: false, IsCurrent: false,
+                                Record: new ClassShout.Core.Remote.BoundClassroom(
+                                    "uuid-2", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                        ]);
 
                     var blocker = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1232,6 +1239,19 @@ internal static class Program
                         var vm = new TeacherShellViewModel();
                         vm.NavigateCallCommand.Execute(null);
 
+                        // 「发给哪个班」那一块：呼叫页只能选一个班，所以这里种两项
+                        // （局域网直连 + 经服务器），好看清单选控件与那句"会发到哪一间"。
+                        vm.Call.SyncTargets(
+                        [
+                            new ShoutTargetInfo(
+                                "lan-1", "三年二班", ShoutTargetSources.Lan,
+                                IsOnline: true, IsCurrent: true, Record: null),
+                            new ShoutTargetInfo(
+                                "uuid-2", "三年三班", ShoutTargetSources.Server,
+                                IsOnline: false, IsCurrent: false,
+                                Record: new ClassShout.Core.Remote.BoundClassroom(
+                                    "uuid-2", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                        ]);
 
                         // 勾上一位学生，让预览那一行有内容可看
                         var first = vm.Call.Students.FirstOrDefault();
@@ -1303,6 +1323,14 @@ internal static class Program
                         var vm = new TeacherShellViewModel();
                         vm.NavigateCallCommand.Execute(null);
 
+                        // 随机模式同样要先挑一个班（呼叫页只允许一个）
+                        vm.Call.SyncTargets(
+                        [
+                            new ShoutTargetInfo(
+                                "lan-1", "三年二班", ShoutTargetSources.Lan,
+                                IsOnline: true, IsCurrent: true, Record: null),
+                        ]);
+
                         return new TeacherView { DataContext = vm };
                     }
                     finally
@@ -1311,6 +1339,42 @@ internal static class Program
                         Restore(callsPath, hadCalls, backupCalls);
                     }
                 }, 430, 1700,
+                _ => null),
+
+            // 教师端「语音」页：麦克风 + 波形 + 「说给谁听」。
+            //
+            // 这一页在此之前没有渲染过，而它这一版多了一张卡：语音与文字共用同一份
+            // 「可发送班级」，勾了几间就同时说给几间。这一块平时藏在"正在录音"之下，
+            // 不导出就只能靠想象 —— 而"藏起来的排版走样"恰恰最容易漏。
+            new("teacher-voice",
+                () =>
+                {
+                    var vm = new TeacherShellViewModel();
+                    vm.NavigateVoiceCommand.Execute(null);
+
+                    vm.Voice.SyncTargets(
+                    [
+                        new ShoutTargetInfo(
+                            "lan-1", "三年二班", ShoutTargetSources.Lan,
+                            IsOnline: true, IsCurrent: true, Record: null),
+                        new ShoutTargetInfo(
+                            "uuid-2", "三年三班", ShoutTargetSources.Server,
+                            IsOnline: true, IsCurrent: false,
+                            Record: new ClassShout.Core.Remote.BoundClassroom(
+                                "uuid-2", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                        new ShoutTargetInfo(
+                            "uuid-3", "三年四班", ShoutTargetSources.Server,
+                            IsOnline: false, IsCurrent: false,
+                            Record: new ClassShout.Core.Remote.BoundClassroom(
+                                "uuid-3", "三年四班", DateTimeOffset.Now, "https://relay.example.com")),
+                    ]);
+
+                    // 录音中：这一张图要看的是"正录着的时候"界面是什么样
+                    vm.Voice.IsRecording = true;
+                    vm.Voice.Elapsed = 3;
+
+                    return new TeacherView { DataContext = vm };
+                }, 430, 1150,
                 _ => null),
 
             // 教师端文字页的「常用语」：平时（点一下填入）与编辑态各一张。

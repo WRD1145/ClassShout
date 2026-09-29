@@ -1,4 +1,5 @@
 using ClassShout.Core.Remote;
+using System.Collections.ObjectModel;
 using System.Threading.Channels;
 using Avalonia.Threading;
 using ClassShout.Core.Audio;
@@ -41,6 +42,52 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _cts;
     private DispatcherTimer? _timer;
     private double _elapsedSeconds;
+
+    /// <summary>这次录音额外要发的几间教室（当前那条链路发的那间不在里面）。</summary>
+    private List<RelayVoiceSession> _sessions = [];
+
+    /// <summary>
+    /// 当前那条链路（<see cref="_channel"/>）正在发往哪间教室。
+    ///
+    /// 由外壳设置：局域网连上时是那间的 UUID，绑着服务器时是绑定的那间。
+    /// 语音是实时流，"这一片该不该再单独发给某间"完全取决于它 ——
+    /// 少了这个值，被勾中的当前教室会被发两遍（叠音）。
+    /// </summary>
+    public string? ActiveTargetUuid { get; set; }
+
+    /// <summary>多班发送器。由外壳注入；为 null 时只发当前那一间。</summary>
+    public ClassroomBroadcaster? Broadcaster { get; set; }
+
+    /// <summary>把这片 PCM 同时写进每一路（当前链路 + 额外那几间）。</summary>
+    private void WriteToAllTargets(ReadOnlyMemory<byte> pcm)
+    {
+        foreach (var session in _sessions)
+        {
+            session.Send(pcm);
+        }
+    }
+
+    /// <summary>收尾时把额外的几路都补上 audioEnd —— 漏掉的话教室端会一直停在"语音喊话中"。</summary>
+    private async Task CloseSessionsAsync(CancellationToken cancellationToken)
+    {
+        var sessions = _sessions;
+        _sessions = [];
+
+        foreach (var session in sessions)
+        {
+            try
+            {
+                await session.CompleteAsync(cancellationToken).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+            {
+                Log?.Invoke($"向「{session.Name}」收尾时出错：{ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>记一句日志（绑定失败、某一路收尾出错）。由外壳接到界面上。</summary>
+    public event Action<string>? Log;
 
     public VoiceShoutViewModel(IShoutTransport channel)
     {
@@ -169,6 +216,17 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // 正在连着的那间一定会收到这次语音：声音是从某个教室的喇叭出来的，
+        // 而"当前链路"只有一条。老师把它取消勾选时不该静默地照发，
+        // 也不该静默地不发 —— 这里直接把它勾回来，界面上看得见。
+        EnsureActiveTargetSelected();
+
+        if (HasExtraTargets && Broadcaster is null)
+        {
+            ErrorMessage = "这台设备还不能一次喊给多个班：请先登录服务器账号。";
+            return;
+        }
+
         try
         {
             _recorder = TeacherPlatform.CreateAudioRecorder();
@@ -186,6 +244,11 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
             // 先开传输会话，再开麦克风：避免第一片音频早于 audioStart 到达教室端
             await _channel.BeginAudioAsync(_recorder.Format, _cts.Token).ConfigureAwait(true);
             _audioSessionOpen = true;
+
+            // 勾了多间时，另外几间各开一路（绑定 + audioStart）。
+            // 放在 _channel 之后、麦克风之前：这几路准备好之前不该开始采集，
+            // 否则开头那一两百毫秒只有当前这间听得到。
+            await OpenExtraSessionsAsync(_recorder.Format, _cts.Token).ConfigureAwait(true);
 
             FormatText = _recorder.Format.ToString();
             _pumpTask = PumpAsync(_audioQueue.Reader, _cts.Token);
@@ -234,6 +297,163 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
         _elapsedSeconds = 0;
         Elapsed = 0;
     }
+
+    // ======================== 发给哪几个班 ========================
+
+    /// <summary>
+    /// 可以喊到的班级 —— 与文字页是**同一份**「可发送班级」列表（局域网直连那间
+    /// 与服务器上绑定的班级合在一起）。语音这一页此前只能发给当前绑定的那一间，
+    /// 而"可发送班级"既然是一张表，勾了几间就该喊给几间。
+    /// </summary>
+    public ObservableCollection<ShoutTargetItem> Targets { get; } = [];
+
+    /// <summary>由外壳刷新（与文字页共用同一份来源）。</summary>
+    public void SyncTargets(IReadOnlyList<ShoutTargetInfo> infos)
+    {
+        var previous = Targets
+            .Where(t => t.IsSelected)
+            .Select(t => t.Uuid)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var isFirstFill = Targets.Count == 0;
+
+        Targets.Clear();
+
+        foreach (var info in infos)
+        {
+            var selected = isFirstFill
+                ? info.Source == ShoutTargetSources.Lan || info.IsCurrent
+                : previous.Contains(info.Uuid);
+
+            var item = new ShoutTargetItem(info, selected) { IsCurrent = info.IsCurrent };
+
+            item.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(ShoutTargetItem.IsSelected))
+                {
+                    OnPropertyChanged(nameof(TargetHint));
+                    OnPropertyChanged(nameof(HasMultipleTargets));
+                }
+            };
+
+            Targets.Add(item);
+        }
+
+        if (Targets.Count > 0 && Targets.All(t => !t.IsSelected))
+        {
+            var fallback = Targets.FirstOrDefault(t => t.IsLan)
+                           ?? Targets.FirstOrDefault(t => t.IsCurrent)
+                           ?? Targets[0];
+
+            fallback.IsSelected = true;
+        }
+
+        OnPropertyChanged(nameof(HasTargets));
+        OnPropertyChanged(nameof(HasMultipleTargets));
+        OnPropertyChanged(nameof(TargetHint));
+    }
+
+    public bool HasTargets => Targets.Count > 0;
+
+    public bool HasMultipleTargets => Targets.Count > 1;
+
+    /// <summary>额外要发的那几间（当前链路已经发的那间不算）。</summary>
+    private IReadOnlyList<ShoutTargetItem> ExtraTargets => Targets
+        .Where(t => t.IsSelected && !t.IsLan && t.Record is not null)
+        .Where(t => ActiveTargetUuid is null || !string.Equals(t.Uuid, ActiveTargetUuid, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+
+    private bool HasExtraTargets => ExtraTargets.Count > 0;
+
+    /// <summary>这句话会说给哪几间听。</summary>
+    public string TargetHint
+    {
+        get
+        {
+            var selected = Targets.Where(t => t.IsSelected).ToList();
+
+            if (Targets.Count == 0)
+            {
+                return "还没连上任何教室：去「设备」页连一间，或登录服务器账号拿到授权的班级。";
+            }
+
+            if (selected.Count <= 1)
+            {
+                return selected.Count == 0
+                    ? "还没勾任何班级 —— 勾一个才会发出去。"
+                    : $"这一句只说给「{selected[0].Name}」（{selected[0].SourceLabel}）。";
+            }
+
+            var offline = selected.Where(t => !t.IsOnline).ToList();
+
+            var text = $"这一句会同时说给 {selected.Count} 个班级："
+                       + string.Join("、", selected.Select(t => t.Name)) + "。";
+
+            return offline.Count == 0
+                ? text
+                : text + $"其中 {string.Join("、", offline.Select(t => t.Name))} 当前离线，多半收不到。";
+        }
+    }
+
+    /// <summary>把"当前链路发的那间"勾上（没勾的话）。</summary>
+    private void EnsureActiveTargetSelected()
+    {
+        if (ActiveTargetUuid is null)
+        {
+            return;
+        }
+
+        if (Targets.FirstOrDefault(t =>
+                string.Equals(t.Uuid, ActiveTargetUuid, StringComparison.OrdinalIgnoreCase)) is not { } active)
+        {
+            return;
+        }
+
+        if (!active.IsSelected)
+        {
+            active.IsSelected = true;
+
+            // 界面上的勾会被这一次改动带回来，但老师可能没看见，所以再留一句说明
+            Log?.Invoke($"「{active.Name}」是当前连着的教室，这次语音一定会从它这儿发出去 —— 已替你勾上。");
+        }
+    }
+
+    /// <summary>给额外的几间各开一路语音会话。</summary>
+    private async Task OpenExtraSessionsAsync(AudioFormat format, CancellationToken cancellationToken)
+    {
+        var extras = ExtraTargets;
+
+        if (extras.Count == 0 || Broadcaster is null)
+        {
+            return;
+        }
+
+        var failed = new List<string>();
+
+        _sessions = [.. await Broadcaster
+            .BeginVoiceAsync(
+                extras.Select(t => t.Record!).ToList(),
+                format,
+                target => NameForTarget(target.Uuid),
+                failed,
+                cancellationToken)
+            .ConfigureAwait(true)];
+
+        foreach (var reason in failed)
+        {
+            Log?.Invoke($"这一句没能同时说给 {reason}。");
+        }
+
+        if (_sessions.Count > 0)
+        {
+            Log?.Invoke($"这一句会说到 {_sessions.Count + 1} 个班级。");
+        }
+    }
+
+    /// <summary>某间教室该用哪个称呼（来源里的科目按班取）。</summary>
+    public Func<string?, string>? ShoutNameFor { get; set; }
+
+    private string NameForTarget(string? uuid) => ShoutNameFor?.Invoke(uuid) ?? string.Empty;
 
     /// <summary>
     /// 中断本次喊话。
@@ -290,6 +510,10 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
             await foreach (var chunk in reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 await _channel.SendAudioAsync(chunk, cancellationToken).ConfigureAwait(false);
+
+                // 同一片再写进额外那几路：语音是实时流，几间教室必须听到同一段声音，
+                // 而不是"这一段给 A、下一段给 B"。
+                WriteToAllTargets(chunk);
             }
         }
         catch (OperationCanceledException)
@@ -409,6 +633,10 @@ public partial class VoiceShoutViewModel : ObservableObject, IDisposable
                 // 连接已断时忽略
             }
         }
+
+        // 额外那几路同样要收尾：漏掉的话那几间教室会一直停在"语音喊话中"。
+        // 放在最后、且不受 closeChannel 影响 —— 取消时也要收，因为它们已经收到过 audioStart。
+        await CloseSessionsAsync(CancellationToken.None).ConfigureAwait(true);
     }
 
     /// <summary>连接断开时把界面恢复到可操作状态。</summary>

@@ -12,6 +12,7 @@ using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
 using ClassShout.RelayServer;
 using ClassShout.Teacher.Services;
+using ClassShout.Teacher.ViewModels;
 
 namespace ClassShout.EndToEnd;
 
@@ -1992,6 +1993,684 @@ internal static class Program
             relayStart.Text == "这是中继发来的图",
             relayStart.Text ?? "(没有说明)");
 
+        // ---------- 8f. 账号角色（教师 / 班主任） ----------
+        //
+        // 角色这一层只管"有没有资格当班主任"，具体管哪几间班是班级授权上另一条标记 ——
+        // 两者同时成立才算数。所以它必须能从三处读回来：注册响应、登录响应、GET /api/auth/me。
+        // 少任何一处，客户端就只能自己猜"该不该显示「我的班级」"，
+        // 而猜错的两头都是事故：把入口给了不该有的人，或者该有的人根本找不到入口。
+        if (string.IsNullOrEmpty(adminToken))
+        {
+            // 与上面几节一样：没有管理员口令就造不出班主任账号、也伪造不了绑定。
+            // 但要说一声 —— 否则"全部通过"会让人以为这些用例真的跑过了。
+            Check("角色与班主任这一节能跑起来", explicitAdminPassword is null,
+                explicitAdminPassword is null
+                    ? "跳过 —— 未提供管理员口令，这一节里的账号与绑定都造不出来"
+                    : "** 提供了管理员口令却登录失败，请核对是否与目标服务器一致");
+        }
+        else
+        {
+            using var consoleHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            consoleHttp.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, adminToken);
+
+            var headName = "head" + Guid.NewGuid().ToString("N")[..8];
+            const string headPassword = "head-pass-1234";
+
+            var headRegister = await consoleHttp.PostAsJsonAsync($"{root}{RelayPaths.AuthRegister}",
+                new RegisterRequest(headName, null, "李班主任", headPassword, "语文"), JsonOptions);
+            var headAuth = await headRegister.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions);
+
+            Check("注册响应里的 user 带着角色（新账号默认是普通教师）",
+                headAuth is { Ok: true } && headAuth.User?.Role == UserRoles.Teacher,
+                headAuth?.User is null
+                    ? headAuth?.Error ?? "(没有账号信息)"
+                    : $"role={headAuth.User.Role}，姓名={headAuth.User.DisplayName}");
+
+            var headToken = headAuth?.Token ?? string.Empty;
+            var headId = headAuth?.User?.Id ?? string.Empty;
+
+            using var headApi = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            headApi.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, headToken);
+
+            var headMeBefore = await headApi.GetFromJsonAsync<UserProfileDto>($"{root}{RelayPaths.AuthMe}", JsonOptions);
+
+            Check("GET /api/auth/me 明确报出角色（默认教师）",
+                headMeBefore?.Role == UserRoles.Teacher,
+                headMeBefore is null ? "(读不到账号信息)" : $"role={headMeBefore.Role}，账号={headMeBefore.Username}");
+
+            // 写坏的值必须被拒。"认不出来的值一律当教师"是服务端的收口，但它不该
+            // 悄悄替管理员做决定：存下一个谁也没打算设的角色，管理员只会以为改成功了。
+            var badRole = await consoleHttp.PostAsJsonAsync($"{root}/api/console/users/{headId}/role",
+                new ConsoleRoleRequest("principal"), JsonOptions);
+            var badRoleBody = await badRole.Content.ReadFromJsonAsync<ConsoleRoleResult>(JsonOptions);
+
+            Check("坏的角色值被拒（400，并说明只能是教师或班主任）",
+                (int)badRole.StatusCode == 400 && !string.IsNullOrWhiteSpace(badRoleBody?.Error),
+                $"HTTP {(int)badRole.StatusCode}：{Trim(badRoleBody?.Error ?? "(没有说明)")}");
+
+            // 内置管理员不是用户库里的一条记录，也就没有"角色"可言。能给它改角色的接口，
+            // 等于给了一条"给自己换个更大权限"的入口。
+            var adminRole = await consoleHttp.PostAsJsonAsync($"{root}/api/console/users/builtin-admin/role",
+                new ConsoleRoleRequest(UserRoles.HeadTeacher), JsonOptions);
+            var adminRoleBody = await adminRole.Content.ReadFromJsonAsync<ConsoleRoleResult>(JsonOptions);
+
+            Check("内置管理员没有角色可改（400）",
+                (int)adminRole.StatusCode == 400,
+                $"HTTP {(int)adminRole.StatusCode}：{Trim(adminRoleBody?.Error ?? "(没有说明)")}");
+
+            var setRole = await consoleHttp.PostAsJsonAsync($"{root}/api/console/users/{headId}/role",
+                new ConsoleRoleRequest(UserRoles.HeadTeacher), JsonOptions);
+            var setRoleBody = await setRole.Content.ReadFromJsonAsync<ConsoleRoleResult>(JsonOptions);
+
+            Check("管理员能把账号设为班主任（回的是规范化之后的角色与中文标签）",
+                setRole.IsSuccessStatusCode && setRoleBody is { Ok: true, Role: UserRoles.HeadTeacher, Label: "班主任" },
+                $"HTTP {(int)setRole.StatusCode}：role={setRoleBody?.Role ?? "(空)"}，label={setRoleBody?.Label ?? "(空)"}");
+
+            var headMeAfter = await headApi.GetFromJsonAsync<UserProfileDto>($"{root}{RelayPaths.AuthMe}", JsonOptions);
+
+            Check("改完角色之后 me 立刻改口（不必重新登录、也不必重启客户端）",
+                headMeAfter?.Role == UserRoles.HeadTeacher,
+                headMeAfter is null ? "(读不到账号信息)" : $"role={headMeAfter.Role}");
+
+            // 角色是账号上的字段，所以重新登录一次也应当在登录响应里原样回来 ——
+            // 否则会出现"重开一次 App 我又变回普通教师"。
+            var headLogin = await consoleHttp.PostAsJsonAsync($"{root}{RelayPaths.AuthLogin}",
+                new LoginRequest(headName, headPassword), JsonOptions);
+            var headLoginBody = await headLogin.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions);
+
+            Check("登录响应里的 user 也带着角色（重新登录仍是班主任）",
+                headLoginBody is { Ok: true } && headLoginBody.User?.Role == UserRoles.HeadTeacher,
+                headLoginBody?.User is null
+                    ? headLoginBody?.Error ?? "(没有账号信息)"
+                    : $"role={headLoginBody.User.Role}");
+
+            // ---------- 8g. 班主任绑定：一次动作，两件事 ----------
+            //
+            // 「他是不是班主任」这一层在账号上，「他管哪几间班」这一层在授权上。
+            // 所以管理员在控制台上勾一次"班主任"，必须把两件事一起做掉：
+            // 只加标记不改角色，界面上他还是"教师"，出了事没人认；
+            // 只改角色不加标记，他立刻顶着班主任的头衔却什么都管不了。
+            var headGrant = await consoleHttp.PostAsJsonAsync($"{root}{RelayPaths.ConsoleBindings}",
+                new GrantBindingRequest(headId, uuid, AsHeadTeacher: true), JsonOptions);
+            var headGrantBody = await headGrant.Content.ReadAsStringAsync();
+
+            Check("管理员把某个班授权给这位老师，并一次指定为班主任",
+                headGrant.IsSuccessStatusCode,
+                $"HTTP {(int)headGrant.StatusCode}：{Trim(headGrantBody)}");
+
+            var bindingsAfterHead = await consoleHttp.GetFromJsonAsync<List<ConsoleBinding>>(
+                $"{root}{RelayPaths.ConsoleBindings}", JsonOptions) ?? [];
+            var headBindingRow = bindingsAfterHead.FirstOrDefault(row => row.UserId == headId && row.Uuid == uuid);
+
+            Check("授权列表里能看出这条是「班主任」授权",
+                headBindingRow is { AsHeadTeacher: true },
+                headBindingRow is null
+                    ? $"没有找到 {headId} → {uuid[..8]}… 这条记录"
+                    : $"{headBindingRow.UserDisplayName} → {headBindingRow.ClassroomName}，asHeadTeacher={headBindingRow.AsHeadTeacher}");
+
+            // ---------- 8h. 按账号查班级（客户端问「我能喊哪几间」的那条路） ----------
+            //
+            // accountId 是客户端**自述**的身份：它让"这条请求是谁发的"在客户端那边也说得清，
+            // 但它绝不是授权依据 —— 拿别人的账号 Id 来问必须当场拒绝，
+            // 否则任何人换个参数就能看到别人的班级。
+            using var teacherApi = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            teacherApi.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, teacherSettings.AuthToken);
+
+            var ownList = await teacherApi.GetFromJsonAsync<List<TeacherClassroomDto>>(
+                $"{root}{RelayPaths.TeacherClassrooms}?accountId={Uri.EscapeDataString(teacherSettings.UserId!)}", JsonOptions) ?? [];
+            var ownEntry = ownList.FirstOrDefault(item => item.Uuid == uuid);
+
+            Check("带上自己的账号 Id 能拿到班级列表",
+                ownEntry is not null,
+                ownList.Count == 0
+                    ? "列表是空的（这位老师此刻没有被授权任何班级）"
+                    : string.Join("、", ownList.Select(item => $"{item.Name}[{item.Role}/{(item.Online ? "在线" : "离线")}]")));
+
+            Check("任课老师在这间班里的角色是普通教师，并且管不了权限",
+                ownEntry is { Role: UserRoles.Teacher, CanManage: false },
+                ownEntry is null ? "(列表里没有这一间)" : $"role={ownEntry.Role}，canManage={ownEntry.CanManage}");
+
+            Check("在线状态跟着教室记录走（这一间此刻正在长轮询）",
+                ownEntry?.Online == true,
+                ownEntry is null ? "(列表里没有这一间)" : $"online={ownEntry.Online}，lastSeen={ownEntry.LastSeenAt:HH:mm:ss}");
+
+            var strangerQuery = await teacherApi.GetAsync(
+                $"{root}{RelayPaths.TeacherClassrooms}?accountId={Uri.EscapeDataString(headId)}");
+            var strangerBody = await strangerQuery.Content.ReadAsStringAsync();
+
+            Check("拿别人的账号 Id 来查班级被拒（403，且回的是 ok:false）",
+                (int)strangerQuery.StatusCode == 403 && strangerBody.Contains("\"ok\":false"),
+                $"HTTP {(int)strangerQuery.StatusCode}：{Trim(strangerBody)}");
+
+            var narrowedResponse = await teacherApi.GetAsync(
+                $"{root}{RelayPaths.TeacherClassrooms}?accountId={Uri.EscapeDataString(teacherSettings.UserId!)}&uuid={Uri.EscapeDataString(uuid)}");
+            var narrowed = narrowedResponse.IsSuccessStatusCode
+                ? await narrowedResponse.Content.ReadFromJsonAsync<List<TeacherClassroomDto>>(JsonOptions) ?? []
+                : [];
+
+            Check("再带上 uuid 时只回这一间",
+                narrowed.Count == 1 && narrowed[0].Uuid == uuid,
+                $"HTTP {(int)narrowedResponse.StatusCode}，回了 {narrowed.Count} 间：{string.Join("、", narrowed.Select(item => item.Name))}");
+
+            var headOwnView = await headApi.GetFromJsonAsync<List<TeacherClassroomDto>>(
+                $"{root}{RelayPaths.TeacherClassrooms}?accountId={Uri.EscapeDataString(headId)}", JsonOptions) ?? [];
+            var headOwnEntry = headOwnView.FirstOrDefault(item => item.Uuid == uuid);
+
+            Check("被指定为班主任之后，这一间在他那里就是 headTeacher 且可管",
+                headOwnEntry is { Role: UserRoles.HeadTeacher, CanManage: true },
+                headOwnEntry is null
+                    ? $"列表里没有这一间（共 {headOwnView.Count} 间）"
+                    : $"role={headOwnEntry.Role}，canManage={headOwnEntry.CanManage}");
+
+            // ---------- 8i. 班主任只看得见、也只改得了自己的班 ----------
+            //
+            // 这是"班主任"这个角色唯一存在的意义，也是这一节里最该被压死的一条：
+            // 管权限的接口一旦只按"你是不是班主任"判断、而不按"你是不是**这一间**的班主任"，
+            // 任何一位班主任都能往别人的班里塞人。
+            var headClassrooms = await headApi.GetFromJsonAsync<List<HeadTeacherClassroomDto>>(
+                $"{root}{RelayPaths.HeadTeacherClassrooms}", JsonOptions) ?? [];
+
+            Check("班主任只看到自己当班主任的那几间（这里恰好只有一间）",
+                headClassrooms.Count == 1 && headClassrooms[0].Uuid == uuid,
+                headClassrooms.Count == 0
+                    ? "一间都没有"
+                    : string.Join("、", headClassrooms.Select(item => item.Name)));
+
+            var headRoom = headClassrooms.FirstOrDefault(item => item.Uuid == uuid);
+
+            Check("他管的这间班带着教室名与在线状态",
+                headRoom is { Online: true } && !string.IsNullOrWhiteSpace(headRoom.Name),
+                headRoom is null ? "(列表里没有这一间)" : $"name={headRoom.Name}，online={headRoom.Online}，lastSeen={headRoom.LastSeenAt:HH:mm:ss}");
+
+            var headSelfInRoom = headRoom?.Teachers.FirstOrDefault(teacher => teacher.UserId == headId);
+            var courseTeacherInRoom = headRoom?.Teachers.FirstOrDefault(teacher => teacher.UserId == teacherSettings.UserId);
+
+            Check("这间班已授权的老师都列了出来，并标明谁是班主任",
+                headSelfInRoom is { AsHeadTeacher: true, DisplayName: "李班主任" }
+                && courseTeacherInRoom is { AsHeadTeacher: false },
+                headRoom is null
+                    ? "(列表里没有这一间)"
+                    : string.Join("、", headRoom.Teachers.Select(teacher => $"{teacher.DisplayName}{(teacher.AsHeadTeacher ? "(班主任)" : string.Empty)}")));
+
+            Check("还没上传统一名单时，hasRoster 与 enforced 都是假",
+                headRoom is { HasRoster: false, Enforced: false },
+                headRoom is null ? "(列表里没有这一间)" : $"hasRoster={headRoom.HasRoster}，enforced={headRoom.Enforced}");
+
+            var teacherHeadView = await teacherApi.GetFromJsonAsync<List<HeadTeacherClassroomDto>>(
+                $"{root}{RelayPaths.HeadTeacherClassrooms}", JsonOptions) ?? [];
+
+            Check("不是班主任的老师看到的是空列表（而不是全部班级）",
+                teacherHeadView.Count == 0,
+                $"看到 {teacherHeadView.Count} 间");
+
+            var adminHeadView = await consoleHttp.GetFromJsonAsync<List<HeadTeacherClassroomDto>>(
+                $"{root}{RelayPaths.HeadTeacherClassrooms}", JsonOptions) ?? [];
+
+            Check("管理员不受这条限制，看到的是全部班级",
+                adminHeadView.Count >= 2
+                && adminHeadView.Any(item => item.Uuid == uuid)
+                && adminHeadView.Any(item => item.Uuid == otherSettings.Uuid),
+                $"看到 {adminHeadView.Count} 间：{string.Join("、", adminHeadView.Select(item => item.Name))}");
+
+            // 找一位"现成的普通账号"当被授权的任课老师：用前面 CSV 批量导入进来的那一位。
+            // 这一节要压的是权限，不必再凭空造一个账号。
+            var peerProfile = (await consoleHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [])
+                .FirstOrDefault(user => user.Username?.StartsWith("csvok", StringComparison.Ordinal) == true);
+
+            var peerId = peerProfile?.Id ?? string.Empty;
+
+            Check("找到一位普通教师账号用来试授权（CSV 导入进来的那一位）",
+                peerProfile is { Role: UserRoles.Teacher },
+                peerProfile is null
+                    ? "没找到 csvok 开头的账号"
+                    : $"id={peerProfile.Id}，姓名={peerProfile.DisplayName}，role={peerProfile.Role}");
+
+            // 班主任之外的人给自己的班拉人：必须 403。这里用的是那间班的任课老师 ——
+            // 他能朝这间教室喊话，但"改这个班的权限"是另一回事。
+            var notHeadGrant = await teacherApi.PostAsJsonAsync($"{root}{RelayPaths.HeadTeacherBindings}",
+                new HeadTeacherGrantRequest(uuid, peerId), JsonOptions);
+            var notHeadGrantBody = await notHeadGrant.Content.ReadAsStringAsync();
+
+            Check("任课老师不能给自己任课的班改权限（403）",
+                (int)notHeadGrant.StatusCode == 403 && notHeadGrantBody.Contains("\"error\""),
+                $"HTTP {(int)notHeadGrant.StatusCode}：{Trim(notHeadGrantBody)}");
+
+            // 班主任去动别人的班：同样是 403。这一条比上一条更要紧 ——
+            // 它挡的正是"一位班主任顺手管了全校"。
+            var crossGrant = await headApi.PostAsJsonAsync($"{root}{RelayPaths.HeadTeacherBindings}",
+                new HeadTeacherGrantRequest(otherSettings.Uuid, teacherSettings.UserId!), JsonOptions);
+            var crossGrantBody = await crossGrant.Content.ReadAsStringAsync();
+
+            Check("班主任不能给不是自己管的班授权（403）",
+                (int)crossGrant.StatusCode == 403 && crossGrantBody.Contains("\"error\""),
+                $"HTTP {(int)crossGrant.StatusCode}：{Trim(crossGrantBody)}");
+
+            var crossRevoke = await headApi.DeleteAsync(
+                $"{root}{RelayPaths.HeadTeacherBindings}?classroomUuid={Uri.EscapeDataString(otherSettings.Uuid)}&userId={Uri.EscapeDataString(teacherSettings.UserId!)}");
+            var crossRevokeBody = await crossRevoke.Content.ReadAsStringAsync();
+
+            Check("班主任也不能收回别人班里的老师（403）",
+                (int)crossRevoke.StatusCode == 403 && crossRevokeBody.Contains("\"error\""),
+                $"HTTP {(int)crossRevoke.StatusCode}：{Trim(crossRevokeBody)}");
+
+            var peerGrant = await headApi.PostAsJsonAsync($"{root}{RelayPaths.HeadTeacherBindings}",
+                new HeadTeacherGrantRequest(uuid, peerId), JsonOptions);
+            var peerGrantBody = await peerGrant.Content.ReadFromJsonAsync<HeadTeacherGrantResult>(JsonOptions);
+
+            Check("班主任能给自己管的班授权一位任课老师",
+                peerGrant.IsSuccessStatusCode && peerGrantBody is { Ok: true, Already: false },
+                $"HTTP {(int)peerGrant.StatusCode}：{Trim(peerGrantBody?.Message ?? peerGrantBody?.Error ?? "(没有说明)")}");
+
+            var peerAgain = await headApi.PostAsJsonAsync($"{root}{RelayPaths.HeadTeacherBindings}",
+                new HeadTeacherGrantRequest(uuid, peerId), JsonOptions);
+            var peerAgainBody = await peerAgain.Content.ReadFromJsonAsync<HeadTeacherGrantResult>(JsonOptions);
+
+            Check("重复授权不算错，但要如实说「本来就有」",
+                peerAgain.IsSuccessStatusCode && peerAgainBody is { Ok: true, Already: true },
+                $"HTTP {(int)peerAgain.StatusCode}：{Trim(peerAgainBody?.Message ?? "(没有说明)")}");
+
+            // 授权只加"这间班归他用"，不动账号角色。两件事混在一起的话，
+            // "班主任"这个头衔会随着某一次普通的班级授权被随手送出去。
+            var peerAfterGrant = (await consoleHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [])
+                .FirstOrDefault(user => user.Id == peerId);
+
+            Check("被授权任课不会顺带把账号变成班主任",
+                peerAfterGrant is { Role: UserRoles.Teacher },
+                peerAfterGrant is null ? "(账号不见了)" : $"role={peerAfterGrant.Role}");
+
+            var peerRevoke = await headApi.DeleteAsync(
+                $"{root}{RelayPaths.HeadTeacherBindings}?classroomUuid={Uri.EscapeDataString(uuid)}&userId={Uri.EscapeDataString(peerId)}");
+            var peerRevokeBody = await peerRevoke.Content.ReadAsStringAsync();
+
+            Check("班主任能收回自己班里任课老师的权限",
+                peerRevoke.IsSuccessStatusCode && peerRevokeBody.Contains("\"ok\":true"),
+                $"HTTP {(int)peerRevoke.StatusCode}：{Trim(peerRevokeBody)}");
+
+            var roomsAfterPeerRevoke = await headApi.GetFromJsonAsync<List<HeadTeacherClassroomDto>>(
+                $"{root}{RelayPaths.HeadTeacherClassrooms}", JsonOptions) ?? [];
+            var teachersAfterPeerRevoke = roomsAfterPeerRevoke.FirstOrDefault(item => item.Uuid == uuid)?.Teachers ?? [];
+
+            Check("收回之后那个人就从这间班的授权名单里消失了",
+                teachersAfterPeerRevoke.All(teacher => teacher.UserId != peerId),
+                teachersAfterPeerRevoke.Count == 0
+                    ? "(这间班现在一条授权都没有)"
+                    : string.Join("、", teachersAfterPeerRevoke.Select(teacher => teacher.DisplayName)));
+
+            // 管理员把同一个人指定为这个班的班主任：**一次动作**里既要加标记、
+            // 也要把账号角色升上去 —— 这正是"班主任绑定"这条接口存在的理由。
+            var peerHeadGrant = await consoleHttp.PostAsJsonAsync($"{root}{RelayPaths.ConsoleBindings}",
+                new GrantBindingRequest(peerId, uuid, AsHeadTeacher: true), JsonOptions);
+            var peerHeadGrantBody = await peerHeadGrant.Content.ReadAsStringAsync();
+
+            Check("管理员一次就能把一位任课老师指定为班主任",
+                peerHeadGrant.IsSuccessStatusCode,
+                $"HTTP {(int)peerHeadGrant.StatusCode}：{Trim(peerHeadGrantBody)}");
+
+            var peerAfterHeadGrant = (await consoleHttp.GetFromJsonAsync<List<UserProfileDto>>(
+                $"{root}/api/console/users", JsonOptions) ?? [])
+                .FirstOrDefault(user => user.Id == peerId);
+
+            Check("这一下顺带把他的账号角色也升成了班主任（一次动作两件事）",
+                peerAfterHeadGrant is { Role: UserRoles.HeadTeacher },
+                peerAfterHeadGrant is null ? "(账号不见了)" : $"role={peerAfterHeadGrant.Role}，姓名={peerAfterHeadGrant.DisplayName}");
+
+            var bindingsAfterPeerHead = await consoleHttp.GetFromJsonAsync<List<ConsoleBinding>>(
+                $"{root}{RelayPaths.ConsoleBindings}", JsonOptions) ?? [];
+            var peerHeadRow = bindingsAfterPeerHead.FirstOrDefault(row => row.UserId == peerId && row.Uuid == uuid);
+
+            Check("授权列表里这条也变成了班主任授权",
+                peerHeadRow is { AsHeadTeacher: true },
+                peerHeadRow is null
+                    ? "没有这条记录"
+                    : $"{peerHeadRow.UserDisplayName} → {peerHeadRow.ClassroomName}，asHeadTeacher={peerHeadRow.AsHeadTeacher}");
+
+            // 班主任的任免只在管理员手里。这条不挡的话，一位班主任可以给自己拉一个
+            // "班主任同伴"，然后两人的权限互相兜底 —— 谁都收不掉谁。
+            var revokePeerHead = await headApi.DeleteAsync(
+                $"{root}{RelayPaths.HeadTeacherBindings}?classroomUuid={Uri.EscapeDataString(uuid)}&userId={Uri.EscapeDataString(peerId)}");
+            var revokePeerHeadBody = await revokePeerHead.Content.ReadAsStringAsync();
+
+            Check("班主任收不掉另一位班主任的权限（非 2xx，并说明原因）",
+                !revokePeerHead.IsSuccessStatusCode && revokePeerHeadBody.Contains("\"error\""),
+                $"HTTP {(int)revokePeerHead.StatusCode}：{Trim(revokePeerHeadBody)}");
+
+            var revokeSelf = await headApi.DeleteAsync(
+                $"{root}{RelayPaths.HeadTeacherBindings}?classroomUuid={Uri.EscapeDataString(uuid)}&userId={Uri.EscapeDataString(headId)}");
+            var revokeSelfBody = await revokeSelf.Content.ReadAsStringAsync();
+
+            Check("班主任也收不掉自己的班主任权限（非 2xx）",
+                !revokeSelf.IsSuccessStatusCode && revokeSelfBody.Contains("\"error\""),
+                $"HTTP {(int)revokeSelf.StatusCode}：{Trim(revokeSelfBody)}");
+
+            // ---------- 8j. 名单按班隔离 ----------
+            //
+            // 一位老师教好几个班，每个班的名单完全不同。同步时不带班级的话，
+            // 他在二班传的名单会出现在三班 —— 老师那边看到的是"三班的名单里
+            // 全是二班的人"，而这在课堂上当场就会出丑。
+            var rosterForA = new StudentRoster
+            {
+                Name = "二班名单",
+                Students =
+                [
+                    new Student { Id = "a1", Name = "二班甲", StudentNo = "20260101" },
+                    new Student { Id = "a2", Name = "二班乙", StudentNo = "20260102" },
+                ],
+            };
+
+            var rosterForB = new StudentRoster
+            {
+                Name = "三班名单",
+                Students =
+                [
+                    new Student { Id = "b1", Name = "三班甲", StudentNo = "20260201" },
+                ],
+            };
+
+            var putRosterA = await teacherApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherRoster}",
+                new TeacherRosterUpload([rosterForA], rosterForA.Id, ClassroomUuid: uuid), JsonOptions);
+            var putRosterABody = await putRosterA.Content.ReadFromJsonAsync<TeacherRosterPutResult>(JsonOptions);
+
+            Check("同步名单时可以指明是给哪一间班的",
+                putRosterA.IsSuccessStatusCode && putRosterABody is { Ok: true, Rosters: 1 },
+                $"HTTP {(int)putRosterA.StatusCode}：{putRosterABody?.Error ?? $"服务器上这一班有 {putRosterABody?.Rosters} 份名单"}");
+
+            var readRosterA = await teacherApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(uuid)}", JsonOptions);
+
+            Check("按班级读回来的就是这一班那一份（来源是「我自己导入的」、可以继续上传）",
+                readRosterA is { Rosters.Count: 1, Source: ClassroomRosterRules.Own, CanUpload: true }
+                && readRosterA.Rosters[0].Name == "二班名单",
+                readRosterA is null
+                    ? "(没读到)"
+                    : $"classroomUuid={readRosterA.ClassroomUuid}，source={readRosterA.Source}，canUpload={readRosterA.CanUpload}，{readRosterA.Rosters.Count} 份：{string.Join("、", readRosterA.Rosters.Select(roster => roster.Name))}");
+
+            var readRosterB = await teacherApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(otherSettings.Uuid)}", JsonOptions);
+
+            // 这里不能断"另一间一定是空的"：这个账号在前面的用例里同步过一份
+            // **没带班级**的老记录（升级前客户端就是这么传的），而服务器对这种情况
+            // 有意做了兼容回落（见 RosterStore.Get：精确匹配不到就退回那一份），
+            // 为的是"老师升级后第一次同步之前，界面上仍然是原来那份名单"。
+            // 所以这一条断的是隔离本身：给这一班同步的那份，绝不能出现在另一班里。
+            Check("给这一间同步的那份不会出现在另一间里",
+                readRosterA is { Rosters.Count: 1 }
+                && readRosterB?.Rosters.Any(roster => roster.Name == readRosterA.Rosters[0].Name) != true,
+                readRosterB is null
+                    ? "(没读到)"
+                    : $"一班={string.Join("、", readRosterA?.Rosters.Select(roster => roster.Name) ?? [])}；"
+                    + $"另一班 source={readRosterB.Source}，{readRosterB.Rosters.Count} 份：{string.Join("、", readRosterB.Rosters.Select(roster => roster.Name))}");
+
+            // 上面那条被老记录挡住了，所以"从没同步过的班必须是空的 rosters: []"
+            // 得换一个名下一条记录都没有的账号来压 —— 管理员用的就是同一套接口。
+            using var cleanRosterApi = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            cleanRosterApi.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, adminToken);
+
+            var cleanRosterA = new StudentRoster
+            {
+                Name = "管理员同步的一班名单",
+                Students = [new Student { Id = "m1", Name = "管理员名单甲", StudentNo = "20260401" }],
+            };
+
+            var cleanPutA = await cleanRosterApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherRoster}",
+                new TeacherRosterUpload([cleanRosterA], cleanRosterA.Id, ClassroomUuid: uuid), JsonOptions);
+
+            var cleanReadA = await cleanRosterApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(uuid)}", JsonOptions);
+            var cleanReadB = await cleanRosterApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(otherSettings.Uuid)}", JsonOptions);
+
+            Check("从没同步过名单的那个班，读回来就是空的 rosters: []（不是别的班那份）",
+                cleanPutA.IsSuccessStatusCode
+                && cleanReadA is { Rosters.Count: 1 } && cleanReadA.Rosters[0].Name == "管理员同步的一班名单"
+                && cleanReadB is { Rosters.Count: 0, Source: ClassroomRosterRules.Empty, CanUpload: true },
+                $"一班={string.Join("、", cleanReadA?.Rosters.Select(roster => roster.Name) ?? [])}；"
+                + $"另一班 source={cleanReadB?.Source}，{cleanReadB?.Rosters.Count ?? -1} 份："
+                + $"{string.Join("、", cleanReadB?.Rosters.Select(roster => roster.Name) ?? [])}");
+
+            // 再给另一间同步一份：回到第一间去读，得到的必须还是第一间自己那一份。
+            var cleanRosterB = new StudentRoster
+            {
+                Name = "管理员同步的另一班名单",
+                Students = [new Student { Id = "m2", Name = "管理员名单乙", StudentNo = "20260402" }],
+            };
+
+            await cleanRosterApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherRoster}",
+                new TeacherRosterUpload([cleanRosterB], cleanRosterB.Id, ClassroomUuid: otherSettings.Uuid), JsonOptions);
+
+            var cleanReadAAgain = await cleanRosterApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(uuid)}", JsonOptions);
+
+            Check("反过来给另一间同步，也不会把这一间那份顶掉",
+                cleanReadAAgain is { Rosters.Count: 1 } && cleanReadAAgain.Rosters[0].Name == "管理员同步的一班名单",
+                cleanReadAAgain is null
+                    ? "(没读到)"
+                    : $"{cleanReadAAgain.Rosters.Count} 份：{string.Join("、", cleanReadAAgain.Rosters.Select(roster => roster.Name))}");
+
+            var putRosterB = await teacherApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherRoster}",
+                new TeacherRosterUpload([rosterForB], rosterForB.Id, ClassroomUuid: otherSettings.Uuid), JsonOptions);
+            var putRosterBBody = await putRosterB.Content.ReadFromJsonAsync<TeacherRosterPutResult>(JsonOptions);
+
+            Check("给另一间班也传一份名单（两边的名单各自独立）",
+                putRosterB.IsSuccessStatusCode && putRosterBBody is { Ok: true, Rosters: 1 },
+                $"HTTP {(int)putRosterB.StatusCode}：{putRosterBBody?.Error ?? $"服务器上这一班有 {putRosterBBody?.Rosters} 份名单"}");
+
+            var readRosterAAfterB = await teacherApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(uuid)}", JsonOptions);
+            var readRosterBAfterB = await teacherApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(otherSettings.Uuid)}", JsonOptions);
+
+            Check("在另一间班传名单之后，这一班那份原封不动",
+                readRosterAAfterB is { Rosters.Count: 1 } && readRosterAAfterB.Rosters[0].Name == "二班名单"
+                && readRosterBAfterB is { Rosters.Count: 1 } && readRosterBAfterB.Rosters[0].Name == "三班名单",
+                $"二班={string.Join("、", readRosterAAfterB?.Rosters.Select(roster => roster.Name) ?? [])}；"
+                + $"三班={string.Join("、", readRosterBAfterB?.Rosters.Select(roster => roster.Name) ?? [])}");
+
+            // 老客户端同步时不带 classroomUuid，那些数据存在"没有指定班级"的那一格里，
+            // 不能被新的按班规则顺手清掉或改写。
+            var legacyRoster = await teacherApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}", JsonOptions);
+
+            Check("不带班级的那一份仍然只属于它自己（老客户端的数据没被打乱）",
+                legacyRoster is { Rosters.Count: 1 } && legacyRoster.Rosters[0].Name == "三年二班",
+                legacyRoster is null
+                    ? "(没读到)"
+                    : $"{legacyRoster.Rosters.Count} 份：{string.Join("、", legacyRoster.Rosters.Select(roster => roster.Name))}");
+
+            // ---------- 8k. 班主任的班级统一名单与「强制」开关 ----------
+            //
+            // 一个班到底按哪份名单叫人，必须只有一个答案：班主任传了一份并设为强制之后，
+            // 任课老师自己那份就压不过它。这条规则的价值全在"强制"上，
+            // 所以下面每一条都对着"强制"之后的行为压。
+            using var headRosterApi = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            headRosterApi.DefaultRequestHeaders.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, headToken);
+
+            var deniedReadRoomRoster = await teacherApi.GetAsync(
+                $"{root}{RelayPaths.TeacherClassroomRoster}?classroomUuid={Uri.EscapeDataString(uuid)}");
+            var deniedReadRoomRosterBody = await deniedReadRoomRoster.Content.ReadAsStringAsync();
+
+            Check("任课老师看不到本班的统一名单（403）",
+                (int)deniedReadRoomRoster.StatusCode == 403 && deniedReadRoomRosterBody.Contains("\"error\""),
+                $"HTTP {(int)deniedReadRoomRoster.StatusCode}：{Trim(deniedReadRoomRosterBody)}");
+
+            var deniedWriteRoomRoster = await teacherApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherClassroomRoster}",
+                new ClassroomRosterUpload(ClassroomUuid: uuid, Rosters: [rosterForA], Enforced: true), JsonOptions);
+            var deniedWriteRoomRosterBody = await deniedWriteRoomRoster.Content.ReadAsStringAsync();
+
+            Check("任课老师也不能上传本班的统一名单、更不能自己设强制（403）",
+                (int)deniedWriteRoomRoster.StatusCode == 403 && deniedWriteRoomRosterBody.Contains("\"error\""),
+                $"HTTP {(int)deniedWriteRoomRoster.StatusCode}：{Trim(deniedWriteRoomRosterBody)}");
+
+            // 空名单 + 强制 = 这个班谁都叫不了。宁可当场拒绝，也别留下这种状态 ——
+            // 它在界面上看起来一切正常，直到有老师说"我一个学生都叫不出来"。
+            var emptyHeadRoster = await headRosterApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherClassroomRoster}",
+                new ClassroomRosterUpload(ClassroomUuid: uuid, Rosters: [], Enforced: true), JsonOptions);
+            var emptyHeadRosterBody = await emptyHeadRoster.Content.ReadFromJsonAsync<ClassroomRosterPutResult>(JsonOptions);
+
+            Check("空名单配「强制」被拒（400）",
+                (int)emptyHeadRoster.StatusCode == 400 && emptyHeadRosterBody?.Ok == false,
+                $"HTTP {(int)emptyHeadRoster.StatusCode}：{Trim(emptyHeadRosterBody?.Error ?? "(没有说明)")}");
+
+            // 先按 CSV 传一遍：控制台上传班级名单走的就是这条路，
+            // 与老师导入名单用的是同一个解析器（表头、空行、从 Excel 粘过来的都认）。
+            var headRosterCsv = string.Join('\n',
+                "姓名,学号",
+                "一班甲,20260301",
+                "一班乙,20260302",
+                "一班丙,20260303");
+
+            var headRosterCsvPut = await headRosterApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherClassroomRoster}",
+                new ClassroomRosterUpload(ClassroomUuid: uuid, CsvText: headRosterCsv, RosterName: "一班统一名单"), JsonOptions);
+            var headRosterCsvBody = await headRosterCsvPut.Content.ReadFromJsonAsync<ClassroomRosterPutResult>(JsonOptions);
+
+            Check("班主任能直接贴一份 CSV 作为本班统一名单（这时还没强制）",
+                headRosterCsvPut.IsSuccessStatusCode
+                && headRosterCsvBody is { Ok: true, Students: 3, Rosters: 1, Enforced: false },
+                $"HTTP {(int)headRosterCsvPut.StatusCode}：ok={headRosterCsvBody?.Ok}，{headRosterCsvBody?.Students} 名学生，"
+                + $"{headRosterCsvBody?.Rosters} 份，强制={headRosterCsvBody?.Enforced}");
+
+            var headRoster = new StudentRoster
+            {
+                Name = "一班统一名单",
+                Students =
+                [
+                    new Student { Id = "h1", Name = "一班甲", StudentNo = "20260301" },
+                    new Student { Id = "h2", Name = "一班乙", StudentNo = "20260302" },
+                    new Student { Id = "h3", Name = "一班丙", StudentNo = "20260303" },
+                ],
+            };
+
+            // 对象形式再传一遍：与客户端「同步名单」用的是同一个请求体，
+            // 两种形式都要能用，否则控制台与 App 只有一个能改班级名单。
+            var headRosterPut = await headRosterApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherClassroomRoster}",
+                new ClassroomRosterUpload(ClassroomUuid: uuid, Rosters: [headRoster], ActiveRosterId: headRoster.Id), JsonOptions);
+            var headRosterPutBody = await headRosterPut.Content.ReadFromJsonAsync<ClassroomRosterPutResult>(JsonOptions);
+
+            Check("名单也能用对象形式传（与客户端同一个请求体）",
+                headRosterPut.IsSuccessStatusCode
+                && headRosterPutBody is { Ok: true, Students: 3, Rosters: 1, Enforced: false },
+                $"HTTP {(int)headRosterPut.StatusCode}：ok={headRosterPutBody?.Ok}，{headRosterPutBody?.Students} 名学生，"
+                + $"{headRosterPutBody?.Rosters} 份，强制={headRosterPutBody?.Enforced}");
+
+            var headRosterView = await headRosterApi.GetFromJsonAsync<ClassroomRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherClassroomRoster}?classroomUuid={Uri.EscapeDataString(uuid)}", JsonOptions);
+
+            Check("班主任读回来的就是自己刚传的那份，并记下是谁改的",
+                headRosterView is { Rosters.Count: 1, Enforced: false } && headRosterView.UpdatedByName == "李班主任"
+                && headRosterView.Rosters[0].Name == "一班统一名单"
+                && headRosterView.Rosters[0].Students.Count == 3,
+                headRosterView is null
+                    ? "(没读到)"
+                    : $"{headRosterView.Rosters.Count} 份、{headRosterView.Rosters.Sum(roster => roster.Students.Count)} 名学生，"
+                    + $"修改人={headRosterView.UpdatedByName ?? "(空)"}");
+
+            // 还没设强制：任课老师自己那份仍然优先。这就把"强制"这个开关的作用范围钉死了 ——
+            // 它管的不是"有没有这份名单"，而是"这份名单算不算数"。
+            var beforeEnforce = await teacherApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(uuid)}", JsonOptions);
+
+            Check("还没强制时，任课老师用的仍是自己那份",
+                beforeEnforce is { Source: ClassroomRosterRules.Own, CanUpload: true }
+                && beforeEnforce.Rosters.Count == 1 && beforeEnforce.Rosters[0].Name == "二班名单",
+                beforeEnforce is null
+                    ? "(没读到)"
+                    : $"source={beforeEnforce.Source}，canUpload={beforeEnforce.CanUpload}，{beforeEnforce.Rosters.Count} 份：{string.Join("、", beforeEnforce.Rosters.Select(roster => roster.Name))}");
+
+            var enforceRoster = await headRosterApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherClassroomRoster}",
+                new ClassroomRosterUpload(ClassroomUuid: uuid, Enforced: true), JsonOptions);
+            var enforceRosterBody = await enforceRoster.Content.ReadFromJsonAsync<ClassroomRosterPutResult>(JsonOptions);
+
+            Check("只改「强制」这一个开关时，名单本身不动",
+                enforceRoster.IsSuccessStatusCode
+                && enforceRosterBody is { Ok: true, Students: 3, Rosters: 1, Enforced: true },
+                $"HTTP {(int)enforceRoster.StatusCode}：ok={enforceRosterBody?.Ok}，{enforceRosterBody?.Students} 名学生，强制={enforceRosterBody?.Enforced}");
+
+            // ---------- 8l. 强制之后，任课老师看到与能用到的都必须是班主任那份 ----------
+            //
+            // 这里压的是一个**真实存在过的 bug**：开关生效了、canUpload 也变成 false 了，
+            // 但回给老师的名单却是空列表 —— 界面上就成了"这个班一个学生都没有"，
+            // 而老师没有任何线索能解释学生去哪儿了。所以这里断的不是"不能上传"，
+            // 而是"看到的必须是班主任那份、而且里面真的有人"。
+            var forcedRead = await teacherApi.GetFromJsonAsync<TeacherRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherRoster}?classroomUuid={Uri.EscapeDataString(uuid)}", JsonOptions);
+
+            Check("强制之后任课老师读到的是班主任那份名单（不是空列表）",
+                forcedRead is { Source: ClassroomRosterRules.HeadTeacher, CanUpload: false }
+                && forcedRead.Rosters.Count == 1
+                && forcedRead.Rosters[0].Students.Count == 3
+                && forcedRead.Rosters[0].Students.Any(student => student.Name == "一班甲"),
+                forcedRead is null
+                    ? "(没读到)"
+                    : $"source={forcedRead.Source}，canUpload={forcedRead.CanUpload}，{forcedRead.Rosters.Count} 份、"
+                    + $"{forcedRead.Rosters.Sum(roster => roster.Students.Count)} 名学生：{string.Join("、", forcedRead.Rosters.SelectMany(roster => roster.Students).Select(student => student.Name))}");
+
+            var blockedRoster = new StudentRoster
+            {
+                Name = "想顶掉班主任的那份",
+                Students = [new Student { Id = "x1", Name = "不该出现的甲" }],
+            };
+
+            var blockedPut = await teacherApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherRoster}",
+                new TeacherRosterUpload([blockedRoster], blockedRoster.Id, ClassroomUuid: uuid), JsonOptions);
+            var blockedPutBody = await blockedPut.Content.ReadFromJsonAsync<TeacherRosterPutResult>(JsonOptions);
+
+            // 这里刻意断 HTTP 200 + ok:false：这是这个端点既有的约定（界面按 ok 判断，
+            // 不按状态码），换成 403 反倒会让老客户端把它当成一次网络故障。
+            Check("强制之后任课老师上传自己被拒（HTTP 200 + ok:false，并说明是班主任管的）",
+                (int)blockedPut.StatusCode == 200 && blockedPutBody is { Ok: false }
+                && blockedPutBody.Error?.Contains("班主任") == true,
+                $"HTTP {(int)blockedPut.StatusCode}：ok={blockedPutBody?.Ok}，error={Trim(blockedPutBody?.Error ?? "(没有说明)")}");
+
+            var afterBlockedPut = await headRosterApi.GetFromJsonAsync<ClassroomRosterSnapshot>(
+                $"{root}{RelayPaths.TeacherClassroomRoster}?classroomUuid={Uri.EscapeDataString(uuid)}", JsonOptions);
+
+            Check("被拒的那次上传没有改动任何名单",
+                afterBlockedPut is { Rosters.Count: 1, Enforced: true }
+                && afterBlockedPut.Rosters[0].Name == "一班统一名单"
+                && afterBlockedPut.Rosters[0].Students.Count == 3,
+                afterBlockedPut is null
+                    ? "(没读到)"
+                    : $"{afterBlockedPut.Rosters.Count} 份、{afterBlockedPut.Rosters.Sum(roster => roster.Students.Count)} 名学生，"
+                    + $"强制={afterBlockedPut.Enforced}，名单名={string.Join("、", afterBlockedPut.Rosters.Select(roster => roster.Name))}");
+
+            var forcedClassroomList = await teacherApi.GetFromJsonAsync<List<TeacherClassroomDto>>(
+                $"{root}{RelayPaths.TeacherClassrooms}?accountId={Uri.EscapeDataString(teacherSettings.UserId!)}", JsonOptions) ?? [];
+            var forcedClassroom = forcedClassroomList.FirstOrDefault(item => item.Uuid == uuid);
+
+            Check("班级列表里也标出了「这个班用班主任那份、而且是强制的」",
+                forcedClassroom is { RosterSource: ClassroomRosterRules.HeadTeacher, RosterEnforced: true },
+                forcedClassroom is null
+                    ? "(列表里没有这一间)"
+                    : $"rosterSource={forcedClassroom.RosterSource}，rosterEnforced={forcedClassroom.RosterEnforced}");
+
+            // 强制只作用于这一间：另一间班没有班主任名单，他照样能传自己的。
+            var rosterBSecond = new StudentRoster
+            {
+                Name = "三班名单（第二版）",
+                Students = [new Student { Id = "b2", Name = "三班乙", StudentNo = "20260202" }],
+            };
+
+            var putBAfterEnforce = await teacherApi.PutAsJsonAsync($"{root}{RelayPaths.TeacherRoster}",
+                new TeacherRosterUpload([rosterBSecond], rosterBSecond.Id, ClassroomUuid: otherSettings.Uuid), JsonOptions);
+            var putBAfterEnforceBody = await putBAfterEnforce.Content.ReadFromJsonAsync<TeacherRosterPutResult>(JsonOptions);
+
+            Check("强制只作用于那一间班：别的班他照样能传自己的名单",
+                putBAfterEnforce.IsSuccessStatusCode && putBAfterEnforceBody is { Ok: true },
+                $"HTTP {(int)putBAfterEnforce.StatusCode}：{putBAfterEnforceBody?.Error ?? $"这一班现在有 {putBAfterEnforceBody?.Rosters} 份名单"}");
+
+            var roomsAfterEnforce = await headApi.GetFromJsonAsync<List<HeadTeacherClassroomDto>>(
+                $"{root}{RelayPaths.HeadTeacherClassrooms}", JsonOptions) ?? [];
+            var roomAfterEnforce = roomsAfterEnforce.FirstOrDefault(item => item.Uuid == uuid);
+
+            Check("班主任的班级列表里也标出了「有统一名单 / 已强制 / 什么时候改的」",
+                roomAfterEnforce is { HasRoster: true, Enforced: true, RosterUpdatedAt: not null },
+                roomAfterEnforce is null
+                    ? $"列表里没有这一间（共 {roomsAfterEnforce.Count} 间）"
+                    : $"hasRoster={roomAfterEnforce.HasRoster}，enforced={roomAfterEnforce.Enforced}，"
+                    + $"updatedAt={roomAfterEnforce.RosterUpdatedAt:yyyy-MM-dd HH:mm:ss}");
+        }
+
         // ---------- 9. 服务端安全加固 ----------
         //
         // 这一节的检查刻意放在最后：限速那一条会把当前 IP 的令牌桶用光，
@@ -3779,58 +4458,111 @@ internal static class Program
             var text = new ClassShout.Teacher.ViewModels.TextShoutViewModel(
                 new ClassShout.Teacher.Services.ShoutTransportRouter());
 
-            Check("发给谁：一间都没连、也没保存教室时，这张卡不显示",
+            Check("可发送班级：一间都没连、也没保存教室时，这张卡不显示",
                 !text.HasTargets,
                 $"HasTargets={text.HasTargets}");
 
             // 只连局域网（用桌面端当教师端就是这么用的）
-            text.SyncLanTarget("三年二班");
+            text.SyncTargets(
+                [new ShoutTargetInfo("lan-1", "三年二班", ShoutTargetSources.Lan, IsOnline: true, IsCurrent: true, Record: null)]);
 
-            Check("发给谁：只连局域网时卡片也显示",
+            Check("可发送班级：只连局域网时卡片也显示",
                 text.HasTargets,
                 $"HasTargets={text.HasTargets}");
 
-            Check("发给谁：局域网直连时写明「直接发给它、不经过服务器」",
-                text.TargetHintText.Contains("三年二班") && text.TargetHintText.Contains("局域网"),
-                text.TargetHintText);
+            Check("可发送班级：局域网那项写着「局域网直连」",
+                text.TargetHintText.Contains("三年二班") && text.Targets[0].SourceLabel == "局域网直连",
+                $"{text.TargetHintText} / {text.Targets[0].SourceLabel}");
 
-            Check("发给谁：局域网直连时右上角那行也写着是哪一间",
+            Check("可发送班级：局域网直连时右上角那行也写着是哪一间",
                 text.TargetSummaryText.Contains("三年二班"),
                 text.TargetSummaryText);
 
-            // 只有一间已保存的教室：以前整张卡都不显示
-            text.SyncLanTarget(null);
+            // 只有一间服务器教室：以前整张卡都不显示
             text.SyncTargets(
-                [new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com")],
-                "uuid-1");
+                [
+                    new ShoutTargetInfo(
+                        "uuid-1", "三年三班", ShoutTargetSources.Server, IsOnline: true, IsCurrent: true,
+                        Record: new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                ]);
 
-            Check("发给谁：只有一间已保存的教室时也显示，并写明发到哪一间",
+            Check("可发送班级：只有一间服务器教室时也显示，并写明发到哪一间",
                 text.HasTargets && text.TargetHintText.Contains("三年三班"),
                 text.TargetHintText);
 
-            Check("发给谁：只有一间时不再出现多班那套说明",
-                !text.TargetHintText.Contains("勾选多个班级"),
+            Check("可发送班级：只有一间时不再出现多班那套说明",
+                !text.TargetHintText.Contains("同时发到每一间"),
                 text.TargetHintText);
 
-            Check("发给谁：只有一间时它默认是勾上的（不然发送会变成「什么都不发」）",
+            Check("可发送班级：只有一间时它默认是勾上的（不然发送会变成「什么都不发」）",
                 text.Targets.Count == 1 && text.Targets[0].IsSelected,
                 $"共 {text.Targets.Count} 项，勾选 {text.Targets.Count(t => t.IsSelected)} 项");
 
             // 两间：回到多班说明
             text.SyncTargets(
                 [
-                    new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com"),
-                    new BoundClassroom("uuid-2", "三年四班", DateTimeOffset.Now, "https://relay.example.com"),
-                ],
-                "uuid-2");
+                    new ShoutTargetInfo(
+                        "uuid-1", "三年三班", ShoutTargetSources.Server, IsOnline: true, IsCurrent: false,
+                        Record: new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                    new ShoutTargetInfo(
+                        "uuid-2", "三年四班", ShoutTargetSources.Server, IsOnline: true, IsCurrent: true,
+                        Record: new BoundClassroom("uuid-2", "三年四班", DateTimeOffset.Now, "https://relay.example.com")),
+                ]);
 
-            Check("发给谁：两间时给出多班说明（并说明语音仍只发当前那间）",
-                text.TargetHintText.Contains("勾选多个班级") && text.TargetHintText.Contains("语音"),
-                text.TargetHintText);
-
-            Check("发给谁：再同步会保留老师的手工勾选（去设备页转一圈回来不该被清空）",
+            Check("可发送班级：再同步会保留老师的手工勾选（去设备页转一圈回来不该被清空）",
                 text.Targets.Count == 2 && text.Targets[0].IsSelected && !text.Targets[1].IsSelected,
                 string.Join("、", text.Targets.Select(t => $"{t.Name}{(t.IsSelected ? "(已勾)" : string.Empty)}")));
+
+            // 两间都勾上：这时那句话要写清会同时发到每一间
+            text.Targets[0].IsSelected = true;
+            text.Targets[1].IsSelected = true;
+
+            Check("可发送班级：两间时说明会同时发到每一间（并列出是哪几间）",
+                text.TargetHintText.Contains("同时发到每一间") && text.TargetHintText.Contains("三年三班"),
+                text.TargetHintText);
+
+            // 离线的那些要单独说一句：不然老师会以为"发出去了 = 教室里响了"
+            text.SyncTargets(
+                [
+                    new ShoutTargetInfo(
+                        "uuid-1", "三年三班", ShoutTargetSources.Server, IsOnline: true, IsCurrent: false,
+                        Record: new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                    new ShoutTargetInfo(
+                        "uuid-2", "三年四班", ShoutTargetSources.Server, IsOnline: false, IsCurrent: false,
+                        Record: new BoundClassroom("uuid-2", "三年四班", DateTimeOffset.Now, "https://relay.example.com")),
+                ]);
+
+            text.Targets[0].IsSelected = true;
+            text.Targets[1].IsSelected = true;
+
+            Check("可发送班级：勾中的班里有离线时会把这件事说出来",
+                text.TargetHintText.Contains("离线"),
+                text.TargetHintText);
+
+            Check("可发送班级：在线状态写在每个条目自己身上",
+                text.Targets[0].OnlineText == "在线" && text.Targets[1].OnlineText == "当前离线",
+                $"{text.Targets[0].OnlineText} / {text.Targets[1].OnlineText}");
+
+            // 局域网那间 + 服务器两间：局域网直连的那项排在最前，且它必然是"已连接"
+            text.SyncTargets(
+                [
+                    new ShoutTargetInfo("lan-1", "三年二班", ShoutTargetSources.Lan, IsOnline: true, IsCurrent: true, Record: null),
+                    new ShoutTargetInfo(
+                        "uuid-1", "三年三班", ShoutTargetSources.Server, IsOnline: false, IsCurrent: false,
+                        Record: new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                ]);
+
+            Check("可发送班级：局域网与服务器两条路合在同一张表里",
+                text.Targets.Count == 2 && text.Targets[0].IsLan && !text.Targets[1].IsLan,
+                string.Join("、", text.Targets.Select(t => $"{t.Name}({t.SourceLabel})")));
+
+            Check("可发送班级：局域网那项显示「已连接」（不通就发不出去）",
+                text.Targets[0].OnlineText == "已连接",
+                text.Targets[0].OnlineText);
+
+            Check("可发送班级：局域网那项没有绑定记录（它本来就连着，不需要凭据）",
+                text.Targets[0].Record is null && text.Targets[1].Record is not null,
+                $"局域网 Record={(text.Targets[0].Record is null ? "null" : "有")}，服务器 Record={(text.Targets[1].Record is null ? "null" : "有")}");
 
             // 首次填充（本机还没记住任何教室）时默认勾当前绑定的那间
             var fresh = new ClassShout.Teacher.ViewModels.TextShoutViewModel(
@@ -3838,16 +4570,35 @@ internal static class Program
 
             fresh.SyncTargets(
                 [
-                    new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com"),
-                    new BoundClassroom("uuid-2", "三年四班", DateTimeOffset.Now, "https://relay.example.com"),
-                ],
-                "uuid-2");
+                    new ShoutTargetInfo(
+                        "uuid-1", "三年三班", ShoutTargetSources.Server, IsOnline: true, IsCurrent: false,
+                        Record: new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                    new ShoutTargetInfo(
+                        "uuid-2", "三年四班", ShoutTargetSources.Server, IsOnline: true, IsCurrent: true,
+                        Record: new BoundClassroom("uuid-2", "三年四班", DateTimeOffset.Now, "https://relay.example.com")),
+                ]);
 
-            Check("发给谁：首次填充时默认勾当前绑定的那一间",
+            Check("可发送班级：首次填充时默认勾当前绑定的那一间",
                 fresh.Targets.Count == 2
                 && fresh.Targets.Count(t => t.IsSelected) == 1
                 && fresh.Targets[1].IsSelected,
                 string.Join("、", fresh.Targets.Select(t => $"{t.Name}{(t.IsSelected ? "(已勾)" : string.Empty)}")));
+
+            // 局域网那间在最前时，首次填充默认勾的就是它（最直接的那条路）
+            var freshLan = new ClassShout.Teacher.ViewModels.TextShoutViewModel(
+                new ClassShout.Teacher.Services.ShoutTransportRouter());
+
+            freshLan.SyncTargets(
+                [
+                    new ShoutTargetInfo("lan-1", "三年二班", ShoutTargetSources.Lan, IsOnline: true, IsCurrent: true, Record: null),
+                    new ShoutTargetInfo(
+                        "uuid-1", "三年三班", ShoutTargetSources.Server, IsOnline: true, IsCurrent: false,
+                        Record: new BoundClassroom("uuid-1", "三年三班", DateTimeOffset.Now, "https://relay.example.com")),
+                ]);
+
+            Check("可发送班级：首次填充时优先勾局域网直连那间",
+                freshLan.Targets.Count(t => t.IsSelected) == 1 && freshLan.Targets[0].IsSelected,
+                string.Join("、", freshLan.Targets.Select(t => $"{t.Name}{(t.IsSelected ? "(已勾)" : string.Empty)}")));
 
             // —— 呼叫页的学生行：构造顺序曾经把安卓端直接崩掉 ——
             //
@@ -5310,3 +6061,36 @@ internal static class Program
         }
     }
 }
+
+// ======================== 只回一句结果的几个接口 ========================
+//
+// 这几个接口返回的是匿名对象（"成没成 + 一句话"），Core 里没有对应的契约类型 ——
+// 它们不会被两端共享，本来也不该为了测试在 Core 里加一个只有测试用的类型。
+// 在这里按字段读回来，好处是断言里拿到的就是**具体值**：失败时能直接打出来，
+// 而不是只能贴一段 JSON 让人自己去猜是哪个字段不对。
+
+/// <summary>控制台改账号角色的返回：成功是 <c>{ok, role, label}</c>，被拒是 <c>{error}</c>。</summary>
+internal sealed record ConsoleRoleResult(bool Ok, string? Role = null, string? Label = null, string? Error = null);
+
+/// <summary>
+/// 老师同步自己那份名单的返回：成功是 <c>{ok, rosters, templates}</c>；
+/// 被班主任设为强制时是 <c>{ok:false, error, source, enforced}</c>（HTTP 仍是 200）。
+/// </summary>
+internal sealed record TeacherRosterPutResult(
+    bool Ok,
+    int Rosters = 0,
+    int Templates = 0,
+    string? Error = null,
+    string? Source = null,
+    bool Enforced = false);
+
+/// <summary>班主任上传班级统一名单的返回：<c>{ok, students, rosters, enforced}</c>，被拒时是 <c>{ok:false, error}</c>。</summary>
+internal sealed record ClassroomRosterPutResult(
+    bool Ok,
+    int Students = 0,
+    int Rosters = 0,
+    bool Enforced = false,
+    string? Error = null);
+
+/// <summary>班主任给自己管的班授权某位老师的返回：<c>{ok, already, message}</c>。</summary>
+internal sealed record HeadTeacherGrantResult(bool Ok, bool Already, string? Message, string? Error = null);

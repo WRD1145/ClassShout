@@ -170,6 +170,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         string? activeRosterId,
         IReadOnlyList<CallTemplate> templates,
         string? activeTemplateId,
+        string? classroomUuid = null,
         CancellationToken cancellationToken = default)
     {
         if (!_settings.IsSignedIn || string.IsNullOrWhiteSpace(ServerUrl))
@@ -182,7 +183,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
             using var request = new HttpRequestMessage(HttpMethod.Put, Url(RelayPaths.TeacherRoster))
             {
                 Content = JsonContent.Create(
-                    new TeacherRosterUpload(rosters, activeRosterId, templates, activeTemplateId),
+                    new TeacherRosterUpload(rosters, activeRosterId, templates, activeTemplateId, ClassroomUuid: classroomUuid),
                     options: JsonOptions),
             };
 
@@ -209,7 +210,13 @@ public sealed class TeacherRelayClient : IAsyncDisposable
     }
 
     /// <summary>服务器上存着的那份名单与模板（网页呼叫用的就是它）。</summary>
-    public async Task<TeacherRosterSnapshot?> GetRosterAsync(CancellationToken cancellationToken = default)
+    /// <param name="classroomUuid">
+    /// 哪个班的那一份。名单按班隔离，所以这个参数决定了读回来的是谁的数据；
+    /// 留空表示"还没指定班级"的那一份（升级中的兼容路径）。
+    /// </param>
+    public async Task<TeacherRosterSnapshot?> GetRosterAsync(
+        string? classroomUuid = null,
+        CancellationToken cancellationToken = default)
     {
         if (!_settings.IsSignedIn || string.IsNullOrWhiteSpace(ServerUrl))
         {
@@ -218,7 +225,14 @@ public sealed class TeacherRelayClient : IAsyncDisposable
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, Url(RelayPaths.TeacherRoster));
+            var url = Url(RelayPaths.TeacherRoster);
+
+            if (!string.IsNullOrWhiteSpace(classroomUuid))
+            {
+                url = $"{url}?classroomUuid={Uri.EscapeDataString(classroomUuid)}";
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, _settings.AuthToken);
 
             using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
@@ -270,6 +284,70 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
             Log?.Invoke($"获取已授权教室失败：{ex.Message}");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// 这个账号绑定（被授权）的班级，以及它们**此刻的在线状态**。
+    ///
+    /// 与 <see cref="GetAuthorizedClassroomsAsync"/> 的区别：那个是"绑定时用的清单"
+    /// （只需要 UUID 与名字），这个是"喊话时用的清单" —— 多了在线状态、我在这个班里
+    /// 的角色、以及这个班该用哪份名单。App 里那份「可发送班级」就是它。
+    ///
+    /// 请求会带上自己的账号 Id：服务器只把它当**自述**（要与令牌里的账号一致才收），
+    /// 但带上它有两个实在的好处 —— 抓包时一眼看得出这条请求是谁发的，
+    /// 以及令牌过期那种"看起来还登着"的状态会直接以 403 暴露出来。
+    /// </summary>
+    public async Task<IReadOnlyList<TeacherClassroomDto>> GetClassroomsAsync(
+        string? classroomUuid = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_settings.IsSignedIn || string.IsNullOrWhiteSpace(ServerUrl))
+        {
+            return [];
+        }
+
+        try
+        {
+            var url = Url(RelayPaths.TeacherClassrooms);
+
+            var query = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(_settings.UserId))
+            {
+                query.Add($"accountId={Uri.EscapeDataString(_settings.UserId!)}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(classroomUuid))
+            {
+                query.Add($"uuid={Uri.EscapeDataString(classroomUuid)}");
+            }
+
+            if (query.Count > 0)
+            {
+                url = $"{url}?{string.Join('&', query)}";
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, _settings.AuthToken);
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                Log?.Invoke($"获取可发送班级失败（HTTP {(int)response.StatusCode}）。");
+                return [];
+            }
+
+            var list = await response.Content
+                .ReadFromJsonAsync<List<TeacherClassroomDto>>(JsonOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            return list ?? [];
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            Log?.Invoke($"获取可发送班级失败：{ex.Message}");
             return [];
         }
     }

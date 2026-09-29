@@ -798,19 +798,25 @@ app.MapGet(RelayPaths.TeacherRoster, (
     }
 
     var uuid = classroomUuid?.Trim() ?? string.Empty;
-    var (_, _, source) = ResolveRoster(profile, uuid);
+    var (head, own, source) = ResolveRoster(profile, uuid);
 
     // 名单按班隔离：带 classroomUuid 时回的就是这个班那一份。
     // 顺带把"该用谁的名单""能不能上传"一起回给客户端 —— 让客户端自己按
     // 有没有班主任名单去推，等于把规则复制一份到客户端，两边迟早不一致。
-    var record = rosters.Get(profile.Id, uuid);
+    //
+    // 来源是"班主任那份"时回的是**班主任那份**而不是老师自己那份：
+    // 网页上的「呼叫」要按同一份名单列学生，回的若是老师那份，
+    // 界面上就会出现"这份名单学生不少、却一个都叫不了"（见下面 Call 端点里
+    // 逐班按 EffectiveRoster 挑学生那一段）。老师自己那份仍然留在磁盘上，
+    // 班主任取消强制之后立刻又生效。
+    var useHead = source == ClassroomRosterRules.HeadTeacher;
 
     return Results.Ok(new TeacherRosterSnapshot(
-        record?.Rosters ?? [],
-        record?.ActiveRosterId,
-        record?.Templates ?? [],
-        record?.ActiveTemplateId,
-        record?.UpdatedAt,
+        useHead ? head?.Rosters ?? [] : own?.Rosters ?? [],
+        useHead ? head?.ActiveRosterId : own?.ActiveRosterId,
+        own?.Templates ?? [],
+        own?.ActiveTemplateId,
+        useHead ? head?.UpdatedAt : own?.UpdatedAt,
         uuid,
         source,
         ClassroomRosterRules.CanUploadOwn(source)));
@@ -1256,6 +1262,19 @@ app.MapPost(RelayPaths.TeacherCall, (
     if (request.TargetUuids.Count == 0)
     {
         return Results.BadRequest(new TeacherCallResponse(false, 0, [], [], "请至少选择一个班级。"));
+    }
+
+    // "还没有同步过名单"必须先于"一个学生都没选"说出来。
+    //
+    // 顺序在这里是有意义的：没同步过名单时，前端本来就列不出学生 —— 页面上学生列表是空的，
+    // 老师当然一个也没勾。这时先报"一个学生都没选"，等于让他去一个空列表里找学生，
+    // 而真正该做的是回 App 导一份名单再同步。改成"按班隔离"时这条提示曾经被挤到
+    // 逐班结果里，于是变成了同一句误导（回归自检里那条断言当场抓到了）。
+    if (DefaultRoster(profile) is null)
+    {
+        return Results.BadRequest(new TeacherCallResponse(
+            false, 0, [], [],
+            "服务器上还没有你的名单：先在教师端「名单」页导入，再点「同步到服务器」。"));
     }
 
     if (request.StudentIds.Count == 0)

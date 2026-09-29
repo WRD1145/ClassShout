@@ -38,24 +38,77 @@ public sealed partial class TextPreset : ObservableObject
 }
 
 /// <summary>
-/// 「这一条发给谁」里的一个班级。
+/// 一条喊话要发到哪儿。两种来源合成同一张列表，就是「可发送班级」。
 ///
-/// 做成可观察对象而不是直接用 BoundClassroom：选中状态是界面状态，
+///   · <see cref="Lan"/> —— 屏幕上正连着的这间（局域网直连，不经过服务器）；
+///   · <see cref="Server"/> —— 服务器上授权给我的班级（经中继服务器）。
+///
+/// 为什么把两条路并成一张表：老师关心的是"这条会发到哪个班"，而不是
+/// "它走的是哪条网络"。以前这两类各占一块地方（一张勾选列表 + 一行"当前走局域网"的
+/// 说明文字），于是同时连着局域网又绑着服务器时，屏幕上出现两处"发给谁"，
+/// 谁也说不清点发送到底会发给哪一个。
+/// </summary>
+public static class ShoutTargetSources
+{
+    public const string Lan = "lan";
+
+    public const string Server = "server";
+
+    public static bool IsLan(string? source) => string.Equals(source, Lan, StringComparison.Ordinal);
+
+    public static string Label(string? source) => IsLan(source) ? "局域网直连" : "经服务器";
+}
+
+/// <summary>「可发送班级」里的一项：外壳算好的、各页共用的一份描述。</summary>
+/// <param name="Uuid">教室 UUID。</param>
+/// <param name="Name">教室名。</param>
+/// <param name="Source">走哪条路，取值见 <see cref="ShoutTargetSources"/>。</param>
+/// <param name="IsOnline">这间教室现在是否在线。</param>
+/// <param name="IsCurrent">是不是当前正连（绑）着的那一间。</param>
+/// <param name="Record">
+/// 服务器那条路要用它（含口令与服务器地址）；局域网直连那条没有绑定记录，
+/// 为 null —— 因为"我们本来就连着它"这件事本身就是凭据。
+/// </param>
+public sealed record ShoutTargetInfo(
+    string Uuid,
+    string Name,
+    string Source,
+    bool IsOnline,
+    bool IsCurrent,
+    BoundClassroom? Record);
+
+/// <summary>
+/// 「可发送班级」列表里的一项。
+///
+/// 做成可观察对象而不是直接用 <see cref="ShoutTargetInfo"/>：选中状态是界面状态，
 /// 列表每次重建都会重来，所以它得挂在条目自己身上。
 /// </summary>
 public sealed partial class ShoutTargetItem : ObservableObject
 {
-    public ShoutTargetItem(BoundClassroom record, bool isSelected)
+    public ShoutTargetItem(ShoutTargetInfo info, bool isSelected)
     {
-        Record = record;
+        Info = info;
         _isSelected = isSelected;
     }
 
-    public BoundClassroom Record { get; }
+    public ShoutTargetInfo Info { get; }
 
-    public string Uuid => Record.Uuid;
+    public string Uuid => Info.Uuid;
 
-    public string Name => Record.Name;
+    public string Name => Info.Name;
+
+    /// <summary>走哪条路（"局域网直连" / "经服务器"）。</summary>
+    public string SourceLabel => ShoutTargetSources.Label(Info.Source);
+
+    public bool IsLan => ShoutTargetSources.IsLan(Info.Source);
+
+    /// <summary>服务器上绑定来的那一项才带绑定记录；局域网直连的那项没有。</summary>
+    public BoundClassroom? Record => Info.Record;
+
+    public bool IsOnline => Info.IsOnline;
+
+    /// <summary>在线状态那一小行字。局域网直连必然是通的 —— 不通就发不出去。</summary>
+    public string OnlineText => IsLan ? "已连接" : IsOnline ? "在线" : "当前离线";
 
     /// <summary>
     /// 是不是当前正绑着的那一间。标出来，免得老师不知道自己正在对谁说话。
@@ -124,46 +177,11 @@ public partial class TextShoutViewModel : ObservableObject
     /// <summary>列表里超过一间教室时才需要"选择发给谁"——只有一间的话，选它没有意义。</summary>
     public bool HasMultipleTargets => Targets.Count > 1;
 
-    private string _lanTargetText = string.Empty;
-
-    /// <summary>
-    /// 局域网直连时连上的那间教室（名字），没有就走服务器/无连接。
-    ///
-    /// 为什么要单独记一份：文字页"发给谁"那份列表来自**已保存的服务器教室**，
-    /// 而局域网直连根本不经过服务器 —— 只连局域网时那份列表是空的，
-    /// 于是"这条发给谁"整张卡都看不见，而它恰恰是老师最想确认的一句话。
-    /// </summary>
-    public string LanTargetText
-    {
-        get => _lanTargetText;
-        private set
-        {
-            if (_lanTargetText == value)
-            {
-                return;
-            }
-
-            _lanTargetText = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(HasLanTarget));
-            OnPropertyChanged(nameof(HasTargets));
-            OnPropertyChanged(nameof(TargetSummaryText));
-            OnPropertyChanged(nameof(TargetHintText));
-        }
-    }
-
-    public bool HasLanTarget => LanTargetText.Length > 0;
-
-    /// <summary>由外壳在连接状态变化时调用：局域网直连连上了哪一间（没连就传 null）。</summary>
-    public void SyncLanTarget(string? classroomName)
-        => LanTargetText = string.IsNullOrWhiteSpace(classroomName) ? string.Empty : classroomName.Trim();
-
     /// <summary>
     /// 这张卡要不要显示。**有一间就显示** ——
-    /// 只有一间时"选谁"确实没得选，但"这条会发到哪"仍然值得看一眼
-    /// （尤其是局域网直连时，屏幕上连的是哪一间本来只在设备页里写着）。
+    /// 只有一间时"选谁"确实没得选，但"这条会发到哪"仍然值得看一眼。
     /// </summary>
-    public bool HasTargets => Targets.Count > 0 || HasLanTarget;
+    public bool HasTargets => Targets.Count > 0;
 
     /// <summary>卡片里那句说明：这一条到底会发到哪。</summary>
     public string TargetHintText
@@ -172,9 +190,7 @@ public partial class TextShoutViewModel : ObservableObject
         {
             if (Targets.Count == 0)
             {
-                return HasLanTarget
-                    ? $"当前走局域网直连：「{LanTargetText}」—— 这一条直接发给它，不经过服务器。"
-                    : string.Empty;
+                return string.Empty;
             }
 
             var selected = Targets.Where(t => t.IsSelected).ToList();
@@ -182,16 +198,28 @@ public partial class TextShoutViewModel : ObservableObject
             if (Targets.Count == 1)
             {
                 var only = Targets[0];
-                var where = only.IsCurrent ? "（当前绑定）" : string.Empty;
+                var where = only.IsCurrent ? "（当前连接）" : string.Empty;
 
-                return selected.Count == 0
-                    ? $"这一条会发到「{only.Name}」{where}。"
-                    : $"这一条会发到「{only.Name}」{where}。";
+                return $"这一条会发到「{only.Name}」{where}，走{only.SourceLabel}。";
             }
 
-            return "勾选多个班级时，这一条会同时发到每一间（经中继服务器）。"
-                   + "语音喊话不受影响，仍然只发当前绑定的那间 —— 声音是从某一个教室的喇叭出来的，"
-                   + "同时往几个班播没有意义。";
+            if (selected.Count == 0)
+            {
+                return "还没勾任何班级 —— 勾一个才会发出去。";
+            }
+
+            var offline = selected.Where(t => !t.IsOnline).ToList();
+
+            var baseText = selected.Count == 1
+                ? $"这一条会发到「{selected[0].Name}」（{selected[0].SourceLabel}）。"
+                : "勾选多个班级时，这一条会同时发到每一间："
+                  + string.Join("、", selected.Select(t => $"{t.Name}（{t.SourceLabel}）")) + "。";
+
+            // 离线的那些要单独说一句：不说的话，老师会以为"发出去了 = 教室里响了"，
+            // 而实际上那间教室的电脑可能根本没开。
+            return offline.Count == 0
+                ? baseText
+                : baseText + $"其中 {string.Join("、", offline.Select(t => t.Name))} 当前离线，多半收不到。";
         }
     }
 
@@ -204,13 +232,12 @@ public partial class TextShoutViewModel : ObservableObject
 
             if (Targets.Count == 0)
             {
-                // 只连了局域网时没有"已保存的教室"，这时该显示的就是屏幕上正连着的那间
-                return HasLanTarget ? $"{LanTargetText}（局域网直连）" : "未连接教室";
+                return "未连接教室";
             }
 
             return selected.Count switch
             {
-                0 => "当前绑定的教室",
+                0 => "还没勾选班级",
                 1 => selected[0].Name,
                 _ => $"{selected.Count} 个班级：{string.Join("、", selected.Select(t => t.Name))}",
             };
@@ -218,12 +245,13 @@ public partial class TextShoutViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 用最新的"已保存的教室"刷新勾选列表。
+    /// 用最新的「可发送班级」刷新勾选列表（局域网连着的那间与服务器绑定的班级在这里合成一张表）。
     ///
     /// 保留原来的勾选：老师勾了两个班、又去设备页切了个教室回来，
-    /// 不该发现自己的勾选被清空了。第一次填充时默认只勾当前绑定的那一间。
+    /// 不该发现自己的勾选被清空了。第一次填充时默认勾**局域网直连**的那间（最直接），
+    /// 没有就勾当前绑定的那间。
     /// </summary>
-    public void SyncTargets(IEnumerable<BoundClassroom> records, string? currentUuid)
+    public void SyncTargets(IReadOnlyList<ShoutTargetInfo> infos)
     {
         var previous = Targets
             .Where(t => t.IsSelected)
@@ -234,19 +262,20 @@ public partial class TextShoutViewModel : ObservableObject
 
         Targets.Clear();
 
-        foreach (var record in records)
+        foreach (var info in infos)
         {
-            var isCurrent = currentUuid is not null &&
-                            string.Equals(record.Uuid, currentUuid, StringComparison.OrdinalIgnoreCase);
+            var selected = isFirstFill
+                ? info.Source == ShoutTargetSources.Lan || info.IsCurrent
+                : previous.Contains(info.Uuid);
 
-            var selected = isFirstFill ? isCurrent : previous.Contains(record.Uuid);
+            var item = new ShoutTargetItem(info, selected) { IsCurrent = info.IsCurrent };
 
-            var item = new ShoutTargetItem(record, selected) { IsCurrent = isCurrent };
             item.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(ShoutTargetItem.IsSelected))
                 {
                     OnPropertyChanged(nameof(TargetSummaryText));
+                    OnPropertyChanged(nameof(TargetHintText));
                 }
             };
 
@@ -256,7 +285,10 @@ public partial class TextShoutViewModel : ObservableObject
         // 一个都没勾上时兜个底：发送按钮不该因为"没勾任何班"而变成什么都不做。
         if (Targets.Count > 0 && Targets.All(t => !t.IsSelected))
         {
-            var fallback = Targets.FirstOrDefault(t => t.IsCurrent) ?? Targets[0];
+            var fallback = Targets.FirstOrDefault(t => t.IsLan)
+                           ?? Targets.FirstOrDefault(t => t.IsCurrent)
+                           ?? Targets[0];
+
             fallback.IsSelected = true;
         }
 
@@ -777,32 +809,60 @@ public partial class TextShoutViewModel : ObservableObject
             return ok;
         }
 
-        var selected = Targets.Where(t => t.IsSelected).Select(t => t.Record).ToList();
+        var selected = Targets.Where(t => t.IsSelected).ToList();
 
-        // 单目标（或没有多班发送器）时保持原样：这条路上有局域网直连优先的逻辑，
-        // 而多班喊话必然跨网络 —— 老师不可能同时待在两个班的局域网里。
-        if (selected.Count <= 1 || Broadcaster is null)
+        // 勾中的里面可能有"局域网直连的那间"（屏幕上正连着的那间）：它走的是手边这条
+        // 直连链路，而其余几间要经服务器。两条路必须分开走 —— 局域网那间在服务器上
+        // 未必有绑定记录，硬拿它去中继发送只会得到一句"无法绑定教室"。
+        var overLan = selected.Where(t => t.IsLan).ToList();
+        var overServer = selected.Where(t => !t.IsLan && t.Record is not null).ToList();
+
+        // 只有一件要发、而且就是局域网那间（或没有多班发送器）时，保持原来的单条链路：
+        // 这条路上有局域网直连优先的逻辑。
+        if (Broadcaster is null || (selected.Count <= 1 && overServer.Count == 0))
         {
             return await _channel.SendTextAsync(message, cancellationToken).ConfigureAwait(true);
         }
 
         try
         {
-            var results = await Broadcaster
-                .SendTextAsync(selected, message, target => NameFor(target.Uuid), cancellationToken)
-                .ConfigureAwait(true);
+            var sent = 0;
+            var failed = new List<string>();
 
-            var sentCount = results.Count(r => r.Ok);
-            var failed = results.Where(r => !r.Ok).ToList();
+            if (overLan.Count > 0)
+            {
+                if (await _channel.SendTextAsync(message, cancellationToken).ConfigureAwait(true))
+                {
+                    sent++;
+                }
+                else
+                {
+                    failed.Add(overLan[0].Name);
+                }
+            }
+
+            if (overServer.Count > 0)
+            {
+                var results = await Broadcaster
+                    .SendTextAsync(
+                        overServer.Select(t => t.Record!).ToList(),
+                        message,
+                        target => NameFor(target.Uuid),
+                        cancellationToken)
+                    .ConfigureAwait(true);
+
+                sent += results.Count(r => r.Ok);
+                failed.AddRange(results.Where(r => !r.Ok).Select(r => r.Classroom.Name));
+            }
 
             var summary = failed.Count == 0
-                ? $"已发给 {sentCount} 个班级。"
-                : $"已发给 {sentCount} 个班级，{failed.Count} 个没送到：{string.Join("、", failed.Select(r => r.Classroom.Name))}。";
+                ? $"已发给 {sent} 个班级。"
+                : $"已发给 {sent} 个班级，{failed.Count} 个没送到：{string.Join("、", failed)}。";
 
             BroadcastFinished?.Invoke(summary);
 
             // 全都失败了才算这条没发出去（历史记录只记真的送到的）
-            return sentCount > 0;
+            return sent > 0;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
         {

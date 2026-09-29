@@ -106,8 +106,13 @@
       </div>
     </section>
 
+    <!--
+      这一块原来叫「我的班级」，现在改了名：下面还有一块班主任管理也叫「我的班级」，
+      两块同名会让人以为说的是同一件事 —— 那块管的是权限与班级统一名单，
+      这块只决定"这句话发给哪几个班"。
+    -->
     <section class="card">
-      <h2>我的班级</h2>
+      <h2>可喊话的班级</h2>
       <p>这里列出的是管理员授权给你的班级。教室离线时消息会排队，等它上线就送到。</p>
       <div id="teacherClassrooms"></div>
       <div class="row-actions mt-20">
@@ -115,6 +120,61 @@
         <button class="outlined small" data-action="teacher-select-none">全不选</button>
         <button class="text small" data-action="teacher-refresh">刷新</button>
       </div>
+    </section>
+
+    <!--
+      班主任管理。一间我当班主任的班都没有时，整块藏起来（见 loadHeadTeacherSection）——
+      给普通老师看一个只有标题的空架子，他只会以为界面坏了。
+      这里的边界是死的：只限我当班主任的那几间班，而且只能增删普通任课老师 ——
+      班主任的任免仍然只在管理员手里，否则一位班主任可以给自己拉一个"班主任同伴"，
+      两个人的权限互相兜底，谁也不必再经过管理员。
+    -->
+    <section class="card hidden" id="headTeacherSection">
+      <h2>我的班级</h2>
+      <p>这里是我当班主任的班级。班主任能管这个班的权限（给别的老师授权、收回），
+        也能传一份全班统一使用的名单 —— 勾上「强制」之后，这个班的任课老师只能用它。</p>
+      <p class="muted">只能改自己当班主任的班，而且只能收回普通任课老师：班主任的任免在管理员那边。</p>
+
+      <div id="headError" class="banner error hidden"></div>
+      <div id="headResult" class="banner ok hidden"></div>
+
+      <div id="headTeacherList"></div>
+
+      <div class="row-actions mt-20">
+        <button class="text small" data-action="head-teacher-refresh">刷新</button>
+      </div>
+    </section>
+
+    <!--
+      名单。按班隔离 —— 一位老师教三个班，三个班的学生是三份不同的数据。
+      所以这里先说清"现在在看哪个班"，下面「呼叫」用的就是同一份。
+    -->
+    <section class="card">
+      <h2>名单</h2>
+      <p>名单按班级分开，每个班一份：这里传上去的名单，就是「呼叫」和喊话时用的那一份。</p>
+
+      <div id="rosterError" class="banner error hidden"></div>
+      <div id="rosterResult" class="banner ok hidden"></div>
+
+      <label for="rosterClassroom">班级</label>
+      <select id="rosterClassroom"></select>
+
+      <!-- 现在用的是谁的名单：这句话由服务器给的 source 决定，见 renderRosterSource -->
+      <p class="muted" id="rosterSource">正在读取…</p>
+
+      <div id="rosterUploadBox">
+        <label for="rosterCsv">粘贴名单（每行一位学生：姓名,学号,简写,小组,性别 ——
+          只有姓名是必填，后面四项留空就行。可以直接从 Excel 里复制粘贴，带表头也没关系）</label>
+        <textarea id="rosterCsv" rows="7" spellcheck="false"
+                  placeholder="姓名,学号,简写,小组,性别&#10;张三,01,小张,第一组,男&#10;李四,02,,第二组,女"></textarea>
+        <div class="row-actions mt-20">
+          <button class="primary" data-action="roster-save">上传名单</button>
+          <button class="text small" data-action="roster-refresh">刷新名单</button>
+        </div>
+      </div>
+
+      <!-- 被班主任强制时，这里替掉上面的粘贴框：说清为什么不能传，以及该找谁 -->
+      <div id="rosterLocked" class="banner warn hidden"></div>
     </section>
 
     <section class="card">
@@ -211,6 +271,11 @@
         <p>列表第一行是服务器内置的管理员账号，它不在用户库里，口令以明文存在服务器本地的
           <span class="mono">relay-config.json</span> 里，可以在这里改。它默认就可以使用所有班级，
           不需要逐条授权。</p>
+        <p><b>「角色」只决定这位老师有没有资格当班主任</b>，具体管哪几个班记在班级授权上
+          （见「班级授权」页，或勾选授权时那个「设为该班的班主任」）：
+          角色改成班主任、却没有在任何一个班被标成班主任的老师，实际还是只管得了自己的名单。
+          反过来也一样 —— 给某位老师勾上班主任时，他的角色会被自动升上去，
+          免得出现"勾了班主任却什么也管不了"。</p>
 
         <!-- 老师也可以自己在教师端 APP 上注册；这里适合开学时一次把全组老师录进来 -->
         <div class="row-actions">
@@ -229,6 +294,9 @@
         <p>把班级直接指派给某位老师。被授权的老师在自己手机上一点即可绑定，不必抄 UUID、也不必传口令 ——
           口令一旦转发就会扩散，授权则始终收在服务器上，取消也只在服务器上按一下。</p>
         <p>内置管理员不在此列：它默认对所有班级可用，无需授权。</p>
+        <p>授权时勾上「设为该班的班主任」，这位老师就能管这个班的权限（给别的老师授权、收回）
+          与这个班全班统一使用的名单 —— 带 <span class="chip info">班主任</span> 徽标的那几条
+          就是这么来的。一个班可以有不止一位班主任（年级组共同管理是常见做法）。</p>
         <div id="bindingList"></div>
       </div>
     </section>
@@ -262,6 +330,12 @@
     <div id="grantError" class="hidden"></div>
     <label for="grantUser">选择老师</label>
     <select id="grantUser"></select>
+    <label class="inline-check" for="grantAsHeadTeacher">
+      <input id="grantAsHeadTeacher" type="checkbox"> 设为该班的班主任
+    </label>
+    <p class="muted">勾上之后，这位老师可以管这个班的权限（给别的老师授权、收回），
+      还能上传这个班统一使用的名单并设为强制。同一个班可以有不止一位班主任。
+      他的账号角色也会一起升成班主任 —— 角色只决定"有没有资格当"，具体管哪几个班看这里。</p>
     <div class="actions">
       <button class="outlined" data-action="close-grant">取消</button>
       <button class="primary" data-action="submit-grant">确认授权</button>

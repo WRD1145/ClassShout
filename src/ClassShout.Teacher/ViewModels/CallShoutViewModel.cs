@@ -128,7 +128,7 @@ public partial class CallShoutViewModel : ObservableObject
     private readonly TeacherCallSettings _settings;
     private readonly TeacherRosterSettings _rosterSettings;
     private readonly Func<string> _teacherNameProvider;
-    private readonly Func<IReadOnlyList<string>, Task<int>> _sender;
+    private readonly Func<IReadOnlyList<string>, string?, Task<int>> _sender;
 
     /// <summary>正在编辑的模板（可能是还没保存进列表的新模板）。</summary>
     private CallTemplate _draft;
@@ -137,7 +137,7 @@ public partial class CallShoutViewModel : ObservableObject
         TeacherCallSettings settings,
         TeacherRosterSettings rosterSettings,
         Func<string> teacherNameProvider,
-        Func<IReadOnlyList<string>, Task<int>> sender)
+        Func<IReadOnlyList<string>, string?, Task<int>> sender)
     {
         _settings = settings;
         _rosterSettings = rosterSettings;
@@ -771,6 +771,84 @@ public partial class CallShoutViewModel : ObservableObject
     private IReadOnlyList<string> ComposeCurrent()
         => CallComposer.Compose(_draft, PickedStudents, Roster, _teacherNameProvider());
 
+    // ======================== 发给哪一个班（只能一个） ========================
+    //
+    // 与「文字」「语音」两页不同，这里刻意**只允许选一个班**：
+    //   · 呼叫是"点名"—— 一句话里出现的姓名、小组、随机抽到的人，都来自**某一份名单**，
+    //     而名单是按班隔离的。同时叫三个班，抽到的人只有一个是"对的那个班"的；
+    //   · 随机叫人还要记录"谁刚被叫过"（时间因子），那是记在那份名单上的 ——
+    //     一次发给三个班，另外两个班的时间因子就白记了。
+    // 所以这里不是"还没做多选"，而是有意只做一个：多选会让界面上出现一个
+    // 看似可选、实际会给出错误结果的控件。
+
+    /// <summary>可以呼叫的班级（同一个「可发送班级」列表，这里只让选一个）。</summary>
+    public ObservableCollection<ShoutTargetItem> Targets { get; } = [];
+
+    private ShoutTargetItem? _selectedTarget;
+
+    /// <summary>
+    /// 这一条呼叫发给哪个班。
+    ///
+    /// 取值以列表里被勾上的那一项为准（界面上是一排单选按钮，勾选由 RadioButton
+    /// 自己改 <see cref="ShoutTargetItem.IsSelected"/>），只有"一个都没勾上"时
+    /// 才退回上一次记住的那一间 —— 这个列表里"一个都不选"是没有意义的。
+    /// </summary>
+    public ShoutTargetItem? SelectedTarget => Targets.FirstOrDefault(t => t.IsSelected) ?? _selectedTarget;
+
+    /// <summary>刷新可选班级；保留原来选中的那一间，选中的没了就退回第一间。</summary>
+    public void SyncTargets(IReadOnlyList<ShoutTargetInfo> infos)
+    {
+        var previous = _selectedTarget?.Uuid;
+
+        Targets.Clear();
+
+        foreach (var info in infos)
+        {
+            var item = new ShoutTargetItem(info, isSelected: false);
+
+            // 勾上某一项时把其余的取消勾选：界面上是单选按钮，但从代码进来
+            // （自检、渲染预览、将来别的入口）时也得守住"只有一个"这条不变量。
+            item.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(ShoutTargetItem.IsSelected) && item.IsSelected)
+                {
+                    foreach (var other in Targets.Where(t => !ReferenceEquals(t, item)))
+                    {
+                        other.IsSelected = false;
+                    }
+
+                    _selectedTarget = item;
+                    OnPropertyChanged(nameof(SelectedTarget));
+                    OnPropertyChanged(nameof(TargetHint));
+                }
+            };
+
+            Targets.Add(item);
+        }
+
+        _selectedTarget = Targets.FirstOrDefault(t => string.Equals(t.Uuid, previous, StringComparison.OrdinalIgnoreCase))
+                          ?? Targets.FirstOrDefault(t => t.IsLan)
+                          ?? Targets.FirstOrDefault(t => t.IsCurrent)
+                          ?? Targets.FirstOrDefault();
+
+        if (_selectedTarget is not null)
+        {
+            _selectedTarget.IsSelected = true;
+        }
+
+        OnPropertyChanged(nameof(SelectedTarget));
+        OnPropertyChanged(nameof(HasTargets));
+        OnPropertyChanged(nameof(TargetHint));
+        SendCallCommand.NotifyCanExecuteChanged();
+    }
+
+    public bool HasTargets => Targets.Count > 0;
+
+    /// <summary>这一条会叫到哪个班 —— 发送按钮旁边那句话。</summary>
+    public string TargetHint => SelectedTarget is not { } target
+        ? "还没有可发送的班级：先在「设备」页连一间教室，或登录服务器账号拿到授权的班级。"
+        : $"这一条会发到「{target.Name}」（{target.SourceLabel}）{(target.IsOnline ? string.Empty : " —— 它当前离线，多半收不到")}。";
+
     /// <summary>把拼出来的句子依次发出去。</summary>
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendCallAsync()
@@ -793,7 +871,7 @@ public partial class CallShoutViewModel : ObservableObject
 
         try
         {
-            var sent = await _sender(messages).ConfigureAwait(true);
+            var sent = await _sender(messages, SelectedTarget?.Uuid).ConfigureAwait(true);
 
             StatusHint = sent == messages.Count
                 ? $"已发出 {sent} 条。"
@@ -840,7 +918,7 @@ public partial class CallShoutViewModel : ObservableObject
             LocalSettings.SaveRosters(_rosterSettings);
 
             var names = string.Join("、", picked.Select(student => student.Name));
-            var sent = await _sender([text]).ConfigureAwait(true);
+            var sent = await _sender([text], SelectedTarget?.Uuid).ConfigureAwait(true);
 
             StatusHint = sent > 0
                 ? $"抽到：{names} —— {text}"

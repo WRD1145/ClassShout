@@ -171,6 +171,17 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!-- 这个班用的是谁的名单：名单按班隔离，被班主任设为强制时连导入入口都不给 ——
+                 不说清楚的话，老师会以为自己传的名单"丢了"。 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding HasRosterSourceHint}">
+              <StackPanel Spacing="6">
+                <TextBlock Classes="cardTitle" Text="这个班用谁的名单" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding RosterSourceHint}" />
+              </StackPanel>
+            </md3:Md3Card>
+
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="10">
                 <TextBlock Classes="cardTitle" Text="导入名单" />
@@ -180,7 +191,8 @@
                            Text="每行一位学生：姓名,学号,简写,小组,性别 —— 只有姓名是必填，后面四项留空就行。可以直接从 Excel 里复制粘贴，带表头也没关系。" />
 
                 <!-- 从文件导入：老师手里的名单多半就是个表格，让他"先另存为 CSV"是多一道无用功 -->
-                <Button Classes="tonal block" Click="OnPickRosterFileClick">
+                <Button Classes="tonal block" Click="OnPickRosterFileClick"
+                        IsVisible="{Binding CanUploadRoster}">
                   <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
                     <md3:Md3Icon Kind="FileImport" Size="18" />
                     <TextBlock Text="从文件导入（.csv / .xlsx）" VerticalAlignment="Center" />
@@ -188,10 +200,12 @@
                 </Button>
 
                 <TextBox Classes="outlined dense"
+                         IsVisible="{Binding CanUploadRoster}"
                          Watermark="这份名单叫什么（例如 三年二班）"
                          Text="{Binding RosterImportName}" />
 
                 <TextBox Classes="outlined"
+                         IsVisible="{Binding CanUploadRoster}"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          MinHeight="140"
@@ -200,6 +214,7 @@
                          Text="{Binding RosterImportText}" />
 
                 <Button Classes="tonal block" Content="导入"
+                        IsVisible="{Binding CanUploadRoster}"
                         Command="{Binding ImportRosterCommand}" />
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
@@ -395,6 +410,33 @@
                              Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                              Text="{Binding Call.PickedSummary}" />
                 </Grid>
+
+                <!-- 发给哪一个班：这里刻意只让选一个（姓名、小组、抽到的人都来自某一份名单，
+                     而名单是按班隔离的 —— 同时叫几个班会抽到"别的班的人"）。 -->
+                <StackPanel Spacing="6" IsVisible="{Binding Call.HasTargets}">
+                  <TextBlock Classes="bodyMedium" Text="发给哪个班（只能选一个）" />
+
+                  <ItemsControl ItemsSource="{Binding Call.Targets}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:ShoutTargetItem">
+                        <RadioButton GroupName="CallTarget"
+                                     IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                     Margin="0,0,0,2">
+                          <StackPanel Spacing="1">
+                            <TextBlock Classes="bodyMedium" Text="{Binding Name}" />
+                            <TextBlock Classes="bodySmall"
+                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                       Text="{Binding SourceLabel}" />
+                          </StackPanel>
+                        </RadioButton>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding Call.TargetHint}" />
+                </StackPanel>
 
                 <!-- 下面这一整块是"手动勾学生"才用得上的：随机模式下勾选不参与发送
                      （发送时按范围抽），留着它们会出现两个小组控件、各说各的。 -->
@@ -613,16 +655,28 @@
                 <ItemsControl ItemsSource="{Binding Text.Targets}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:ShoutTargetItem">
-                      <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,4">
+                      <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,0,0,4">
                         <CheckBox IsChecked="{Binding IsSelected}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="1" Classes="bodyMedium" Margin="6,0,0,0"
-                                   VerticalAlignment="Center" Text="{Binding Name}" />
+                        <StackPanel Grid.Column="1" Margin="6,0,0,0" Spacing="1" VerticalAlignment="Center">
+                          <TextBlock Classes="bodyMedium" Text="{Binding Name}" />
+                          <!-- 走哪条路 + 在不在线：两者都会影响"这条到底能不能到" -->
+                          <TextBlock Classes="bodySmall"
+                                     Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                     Text="{Binding SourceLabel}" />
+                        </StackPanel>
                         <Border Grid.Column="2" IsVisible="{Binding IsCurrent}"
                                 CornerRadius="9999" Padding="7,1" VerticalAlignment="Center"
+                                Margin="0,0,6,0"
                                 Background="{DynamicResource Md3.PrimaryContainer}">
                           <TextBlock Classes="labelSmall"
                                      Foreground="{DynamicResource Md3.OnPrimaryContainer}"
-                                     Text="当前绑定" />
+                                     Text="当前连接" />
+                        </Border>
+                        <Border Grid.Column="3" CornerRadius="9999" Padding="7,1" VerticalAlignment="Center"
+                                Background="{DynamicResource Md3.SurfaceContainerHighest}">
+                          <TextBlock Classes="labelSmall"
+                                     Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                     Text="{Binding OnlineText}" />
                         </Border>
                       </Grid>
                     </DataTemplate>
@@ -957,7 +1011,7 @@
         </ScrollViewer>
 
         <!-- ······ 语音喊话 ······ -->
-        <Grid IsVisible="{Binding IsVoicePage}" RowDefinitions="Auto,*,Auto" Margin="20,18">
+        <Grid IsVisible="{Binding IsVoicePage}" RowDefinitions="Auto,*,Auto,Auto" Margin="20,18">
 
           <StackPanel Grid.Row="0" Spacing="6" HorizontalAlignment="Center">
             <TextBlock Classes="titleMedium" HorizontalAlignment="Center"
@@ -994,8 +1048,43 @@
                               Level="{Binding Voice.Level}" />
           </Border>
 
+          <!-- 这一句说给哪几个班。与文字页共用同一份「可发送班级」：
+               勾了几间就同时说给几间（同一条录音实时流向每一间）。 -->
+          <md3:Md3Card Grid.Row="2" Classes="outlined" CardPadding="12" MaxWidth="380"
+                       IsVisible="{Binding Voice.HasTargets}">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="cardTitle" Text="说给谁听" Margin="0" />
+
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="{Binding Voice.TargetHint}" />
+
+              <ItemsControl ItemsSource="{Binding Voice.Targets}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ShoutTargetItem">
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,4">
+                      <CheckBox IsChecked="{Binding IsSelected}" VerticalAlignment="Center" />
+                      <StackPanel Grid.Column="1" Margin="6,0,0,0" Spacing="1" VerticalAlignment="Center">
+                        <TextBlock Classes="bodyMedium" Text="{Binding Name}" />
+                        <TextBlock Classes="bodySmall"
+                                   Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                   Text="{Binding SourceLabel}" />
+                      </StackPanel>
+                      <Border Grid.Column="2" CornerRadius="9999" Padding="7,1" VerticalAlignment="Center"
+                              Background="{DynamicResource Md3.SurfaceContainerHighest}">
+                        <TextBlock Classes="labelSmall"
+                                   Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                   Text="{Binding OnlineText}" />
+                      </Border>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </md3:Md3Card>
+
           <!-- 录音按钮 -->
-          <StackPanel Grid.Row="2" Spacing="16" HorizontalAlignment="Center">
+          <StackPanel Grid.Row="3" Spacing="16" HorizontalAlignment="Center">
             <TextBlock Classes="headlineSmall" HorizontalAlignment="Center"
                        Text="{Binding Voice.ElapsedText}" />
 

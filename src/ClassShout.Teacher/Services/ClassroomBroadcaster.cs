@@ -1,3 +1,4 @@
+using ClassShout.Core.Audio;
 using ClassShout.Core.Protocol;
 using ClassShout.Core.Remote;
 
@@ -8,6 +9,36 @@ namespace ClassShout.Teacher.Services;
 /// <param name="Ok">是否送到。</param>
 /// <param name="Error">失败原因，可直接展示给老师。</param>
 public readonly record struct BroadcastResult(BoundClassroom Classroom, bool Ok, string? Error);
+
+/// <summary>
+/// 已经开好的一路语音会话：绑定好了、也发过 audioStart，只管往里送 PCM。
+///
+/// 为什么要这样一个对象：语音是**边录边流**的，几间教室必须同时收到同一段声音 ——
+/// 每片 PCM 都得写进每一路。让调用方各自持有绑定、各自记会话状态的话，
+/// "哪几路开着、收尾时要不要补 audioEnd"就会散在界面代码里，
+/// 而漏掉 audioEnd 的后果是教室端一直停在"语音喊话中"、播放设备也不释放。
+/// </summary>
+public sealed class RelayVoiceSession
+{
+    private readonly TeacherRelayClient _client;
+
+    internal RelayVoiceSession(BoundClassroom classroom, TeacherRelayClient client)
+    {
+        Classroom = classroom;
+        _client = client;
+    }
+
+    public BoundClassroom Classroom { get; }
+
+    public string Name => Classroom.Name;
+
+    /// <summary>把一片 PCM 交给这一路（内部按 100 毫秒批量上传）。</summary>
+    public void Send(ReadOnlyMemory<byte> pcm) => _client.AccumulateAudio(pcm.Span);
+
+    /// <summary>收尾：把剩下的发完并补一个 audioEnd。</summary>
+    public Task CompleteAsync(CancellationToken cancellationToken = default)
+        => _client.SendAudioEndAsync(cancellationToken);
+}
 
 /// <summary>
 /// 把一条文字喊话同时发给多个班级。
@@ -74,6 +105,44 @@ public sealed class ClassroomBroadcaster
         }
 
         _clients.Clear();
+    }
+
+    /// <summary>
+    /// 为几间教室各开一路语音会话（逐个绑定 + audioStart）。
+    ///
+    /// 与 <see cref="SendTextAsync"/> 一样是**串行**的：一次通常只多发一两间，
+    /// 串行多花的几百毫秒远小于"录音已经开始、某一间却还没准备好"带来的别扭；
+    /// 而并发的代价是错误归属变得含糊（哪一间没开起来？）。
+    /// </summary>
+    /// <param name="targets">要额外发送的教室（**不含**当前那条链路已经在发的那一间）。</param>
+    /// <param name="format">PCM 格式，必须与录音一致。</param>
+    /// <param name="nameOf">这位老师在这间教室里的称呼（来源按班取科目）。</param>
+    /// <param name="failed">开不起来的那些：教室名 + 原因，调用方拿去提示与记日志。</param>
+    /// <param name="cancellationToken">取消。</param>
+    public async Task<IReadOnlyList<RelayVoiceSession>> BeginVoiceAsync(
+        IReadOnlyList<BoundClassroom> targets,
+        AudioFormat format,
+        Func<BoundClassroom, string> nameOf,
+        List<string> failed,
+        CancellationToken cancellationToken = default)
+    {
+        var sessions = new List<RelayVoiceSession>(targets.Count);
+
+        foreach (var target in targets)
+        {
+            var client = await EnsureBoundAsync(target, nameOf(target), cancellationToken).ConfigureAwait(false);
+
+            if (client is null)
+            {
+                failed.Add($"{target.Name}（绑定失败）");
+                continue;
+            }
+
+            await client.SendAudioStartAsync(format, cancellationToken).ConfigureAwait(false);
+            sessions.Add(new RelayVoiceSession(target, client));
+        }
+
+        return sessions;
     }
 
     private async Task<BroadcastResult> SendToOneAsync(

@@ -117,6 +117,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         _broadcaster = new ClassroomBroadcaster(_http, _relaySettings);
         _broadcaster.Log += message => Post(() => AddLog(message));
         Text.Broadcaster = _broadcaster;
+        Voice.Broadcaster = _broadcaster;
+        Voice.ShoutNameFor = NameFor;
+        Voice.Log += message => Post(() =>
+        {
+            AddLog(message);
+        });
 
         // 文字页那条局域网直连的链路也按目标班级取来源
         Text.ShoutNameFor = NameFor;
@@ -366,14 +372,229 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     /// 只连局域网时那份列表是空的，"发给谁"整张卡会跟着消失。
     /// 所以这里把屏幕上正连着的教室也告诉它一份（只有非服务器绑定、确实连上时才算）。
     /// </summary>
-    private void SyncTextTargets()
+    private void SyncTextTargets() => SyncSendTargets();
+
+    /// <summary>
+    /// 把"能发到哪几间"合成一张表交给各页（就是界面上的「可发送班级」）。
+    ///
+    /// 两个来源：
+    ///   · **局域网直连** —— 屏幕上正连着的这间。它不经服务器，所以服务器那份
+    ///     绑定列表里未必有它；只连局域网时那份列表更是空的，而"发给谁"这张卡
+    ///     恰恰是老师最想确认的一句话；
+    ///   · **服务器绑定的班级** —— 登录后问一次服务器：它会带着账号 Id 回来一份
+    ///     JSON（绑定的班级 + **在线状态** + 我在这个班的角色）。在线状态只有服务器知道，
+    ///     客户端自己猜不出来。
+    ///
+    /// 同一间教室两条路都通时**只留一项**（走局域网那条）：同一间班在列表里出现两次，
+    /// 勾了哪一项、会走哪条路，老师无从判断。
+    /// </summary>
+    private void SyncSendTargets()
     {
-        var lanName = IsConnected && !IsServerBound && ClassroomName is { Length: > 0 } name
-                      && name != "未连接"
-            ? name
+        var lanUuid = IsConnected && ClassroomName is { Length: > 0 } and not "未连接"
+            ? LanClassroomUuid
             : null;
 
-        Text.SyncLanTarget(lanName);
+        var lanName = IsConnected && ClassroomName is { Length: > 0 } and not "未连接"
+            ? ClassroomName
+            : null;
+
+        var list = new List<ShoutTargetInfo>();
+
+        if (lanName is not null)
+        {
+            list.Add(new ShoutTargetInfo(
+                lanUuid ?? BoundLanPlaceholderUuid,
+                lanName,
+                ShoutTargetSources.Lan,
+                IsOnline: true,
+                IsCurrent: true,
+                Record: null));
+        }
+
+        // 服务器那份："登录过、并且拿到了绑定列表"时用它（在线状态是服务器算的）；
+        // 拿不到就退回本机保存过的教室 —— 那些没有在线状态，一律按"离线"保守显示。
+        var serverList = _boundClassrooms.Count > 0
+            ? _boundClassrooms
+            : _relaySettings.RecentClassrooms
+                .Select(record => new TeacherClassroomDto(
+                    record.Uuid,
+                    record.Name,
+                    Online: false,
+                    LastSeenAt: record.LastBoundAt))
+                .ToList();
+
+        foreach (var classroom in serverList)
+        {
+            // 局域网那间已经在上面了：同一间班不重复出现。
+            // 先按 UUID 比；拿不到 UUID 时（局域网握手里没带）按名字比 ——
+            // 否则同一间班会在列表里出现两次，一次"局域网直连"一次"经服务器"。
+            var sameAsLan = (lanUuid is not null && string.Equals(classroom.Uuid, lanUuid, StringComparison.OrdinalIgnoreCase))
+                            || (lanName is not null && string.Equals(classroom.Name, lanName, StringComparison.OrdinalIgnoreCase));
+
+            if (sameAsLan)
+            {
+                continue;
+            }
+
+            var record = _relaySettings.RecentClassrooms.FirstOrDefault(r =>
+                string.Equals(r.Uuid, classroom.Uuid, StringComparison.OrdinalIgnoreCase));
+
+            // 没有本机绑定记录（比如刚在控制台上授权、这台设备还没绑定过）时现场造一份：
+            // 服务器已经说了"这个班授权给你"，绑定那一步用它自己的账号就能完成、不需要口令 ——
+            // 而列表里缺这一项会让人以为授权没生效。
+            record ??= new BoundClassroom(
+                classroom.Uuid,
+                classroom.Name,
+                DateTimeOffset.Now,
+                _relaySettings.ServerUrl,
+                Secret: null);
+
+            list.Add(new ShoutTargetInfo(                classroom.Uuid,
+                classroom.Name,
+                ShoutTargetSources.Server,
+                classroom.Online,
+                IsCurrent: IsServerBound && string.Equals(classroom.Uuid, BindUuid, StringComparison.OrdinalIgnoreCase),
+                Record: record));
+        }
+
+        Text.SyncTargets(list);
+        Text.TeacherName = TeacherName;
+
+        // 构造过程中也会走到这里（"已保存的教室"一读进来就要刷新列表），
+        // 而那时语音页与呼叫页还没建出来 —— 所以这两处必须容忍 null。
+        Voice?.SyncTargets(list);
+        Call?.SyncTargets(list);
+
+        // 语音那条"实时链路"同时只能发往一间（手边这条连接对着一间教室）。
+        // 告诉页面是哪一间：多班发送时要把它从"额外那几路"里排除，否则同一段声音
+        // 会从那一间出两遍 —— 听起来像回声。
+        Voice.ActiveTargetUuid = lanUuid ?? (IsServerBound ? BindUuid : null);
+
+        // 名单页那一行"这个班用的是谁的名单"跟着一起刷新（名单按班隔离，
+        // 换个班就可能换成班主任那份，上传入口也要跟着开或关）。
+        RefreshRosterSource();
+    }
+
+    /// <summary>局域网直连但还报不出 UUID 时用的占位 Id（只用于列表去重，不会发给服务器）。</summary>
+    private const string BoundLanPlaceholderUuid = "lan-direct";
+
+    /// <summary>局域网直连的那间教室的 UUID（握手时会带过来；还没连上时为 null）。</summary>
+    private string? LanClassroomUuid => _channel.ConnectedClassroom?.Id;
+
+    /// <summary>登录后从服务器取回的"我绑定的班级 + 在线状态"，就是「可发送班级」里服务器那一半。</summary>
+    private List<TeacherClassroomDto> _boundClassrooms = [];
+
+    /// <summary>登录后从服务器取一次"我绑定的班级 + 在线状态"，然后刷新「可发送班级」。</summary>
+    private async Task RefreshBoundClassroomsAsync()
+    {
+        if (_relay is null || !_relaySettings.IsSignedIn)
+        {
+            _boundClassrooms = [];
+            SyncSendTargets();
+            return;
+        }
+
+        var list = await _relay.GetClassroomsAsync().ConfigureAwait(true);
+
+        _boundClassrooms = list.ToList();
+        SyncSendTargets();
+
+        if (list.Count > 0)
+        {
+            AddLog(AppLogLevel.Debug, $"服务器上有 {list.Count} 个班级授权给你："
+                + string.Join("、", list.Select(c => $"{c.Name}{(c.Online ? "(在线)" : "(离线)")}")));
+        }
+
+        // 少数几个班由班主任统一了名单：把那份取回本机，老师这边就"只能用"它了
+        await PullHeadTeacherRostersAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// 把"班主任统一上传的名单"取回本机。
+    ///
+    /// 为什么必须取回本机：名单页、呼叫页、随机叫人用的都是**本机那份** ——
+    /// 不在服务器上现查，是因为局域网直连那条路根本不经过服务器，而"叫谁"这件事
+    /// 两条路必须一致。所以被强制的班就把服务器那份拉下来覆盖本机对应的那一份。
+    ///
+    /// 每份名单的名子是"<班名>（班主任统一）"：老师一眼看得出它从哪来、
+    /// 也一眼看得出"这份不是我录的"。同一个班的旧副本按名字替换掉，
+    /// 而不是每同步一次就多出一份同名名单。
+    /// </summary>
+    private async Task PullHeadTeacherRostersAsync()
+    {
+        if (_relay is null)
+        {
+            return;
+        }
+
+        var enforced = _boundClassrooms
+            .Where(c => ClassroomRosterRules.Normalize(c.RosterSource) == ClassroomRosterRules.HeadTeacher)
+            .ToList();
+
+        if (enforced.Count == 0)
+        {
+            return;
+        }
+
+        var changed = false;
+
+        foreach (var classroom in enforced)
+        {
+            var snapshot = await _relay.GetRosterAsync(classroom.Uuid).ConfigureAwait(true);
+
+            if (snapshot is not { Rosters.Count: > 0 })
+            {
+                continue;
+            }
+
+            var source = snapshot.Rosters.FirstOrDefault(r => r.Id == snapshot.ActiveRosterId) ?? snapshot.Rosters[0];
+            var name = $"{classroom.Name}（班主任统一）";
+
+            // 同一批学生的时间因子要留下来：那是"刚叫过谁"的记录，
+            // 换一份名单就把它清零，等于每次登录都把冷却重置一遍。
+            var previous = _rosterSettings.Rosters
+                .FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
+
+            var factors = (previous?.Students ?? [])
+                .ToDictionary(s => s.Id, s => (s.TimeFactor, s.FactorSetAt), StringComparer.Ordinal);
+
+            var imported = new StudentRoster
+            {
+                Name = name,
+                Students = source.Students.Select(student => new Student
+                {
+                    Id = student.Id,
+                    Name = student.Name,
+                    StudentNo = student.StudentNo,
+                    ShortName = student.ShortName,
+                    Group = student.Group,
+                    Gender = student.Gender,
+                    TimeFactor = factors.TryGetValue(student.Id, out var known) ? known.TimeFactor : 0,
+                    FactorSetAt = factors.TryGetValue(student.Id, out var known2) ? known2.FactorSetAt : null,
+                }).ToList(),
+            };
+
+            _rosterSettings.Rosters.RemoveAll(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
+            _rosterSettings.Rosters.Add(imported);
+
+            // 当前那一份如果指向被替换掉的旧副本，就跟着指到新的这份上
+            if (_rosterSettings.ActiveRosterId == previous?.Id || _rosterSettings.ActiveRosterId is null)
+            {
+                _rosterSettings.ActiveRosterId = imported.Id;
+            }
+
+            changed = true;
+            AddLog($"「{classroom.Name}」的名单由班主任统一管理，已取回本机（{imported.Students.Count} 位学生）。");
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        LocalSettings.SaveRosters(_rosterSettings);
+        RefreshRosterStudents();
+        RefreshRosterSource();
     }
 
     /// <summary>弹出一条自动消失的提示。</summary>
@@ -493,6 +714,103 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private string _rosterSyncHint = "同步之后，网页版（登录服务器后打开服务器地址）也能用这份名单呼叫。";
 
+    private string _rosterSourceHint = string.Empty;
+
+    /// <summary>
+    /// 这个班现在用的是谁的名单。
+    ///
+    /// 名单按班隔离，而且班主任可以上传一份"全班统一用"的名单并设为强制 ——
+    /// 那种情况下任课老师连上传入口都不该有。这一行就是把这件事说清楚的地方：
+    /// 不说的话，老师会发现"我传了名单但服务器上还是别人那份"，而完全不知道为什么。
+    /// </summary>
+    public string RosterSourceHint
+    {
+        get => _rosterSourceHint;
+        private set
+        {
+            if (SetProperty(ref _rosterSourceHint, value))
+            {
+                OnPropertyChanged(nameof(HasRosterSourceHint));
+            }
+        }
+    }
+
+    public bool HasRosterSourceHint => RosterSourceHint.Length > 0;
+
+    private bool _isRosterUploadBlocked;
+
+    /// <summary>班主任把名单设成强制时为 true：导入入口整个关掉，并说明原因。</summary>
+    public bool IsRosterUploadBlocked
+    {
+        get => _isRosterUploadBlocked;
+        private set
+        {
+            if (SetProperty(ref _isRosterUploadBlocked, value))
+            {
+                OnPropertyChanged(nameof(CanUploadRoster));
+            }
+        }
+    }
+
+    public bool CanUploadRoster => !IsRosterUploadBlocked;
+
+    /// <summary>
+    /// 名单现在会同步给哪一个班。
+    ///
+    /// 优先跟着呼叫页上选的那个班（老师在那里决定"这节课叫哪个班"），
+    /// 它选的是局域网直连那间时退回当前服务器绑定的那间。
+    /// </summary>
+    private TeacherClassroomDto? CurrentServerClassroom()
+    {
+        // Call 在构造过程中可能还没建出来（见 SyncSendTargets 里那段说明）
+        var selected = Call?.SelectedTarget;
+
+        if (selected is { IsLan: false })
+        {
+            var match = _boundClassrooms.FirstOrDefault(c =>
+                string.Equals(c.Uuid, selected.Uuid, StringComparison.OrdinalIgnoreCase));
+
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return _boundClassrooms.FirstOrDefault(c =>
+                   IsServerBound && string.Equals(c.Uuid, BindUuid, StringComparison.OrdinalIgnoreCase))
+               ?? _boundClassrooms.FirstOrDefault();
+    }
+
+    /// <summary>刷新"这个班用的是谁的名单"那一行，以及上传入口该不该关掉。</summary>
+    private void RefreshRosterSource()
+    {
+        var classroom = CurrentServerClassroom();
+
+        if (classroom is null)
+        {
+            RosterSourceHint = "还没有绑定服务器上的班级：这份名单只在本机用（局域网直连也用它）。";
+            IsRosterUploadBlocked = false;
+            return;
+        }
+
+        var source = ClassroomRosterRules.Normalize(classroom.RosterSource);
+
+        IsRosterUploadBlocked = !ClassroomRosterRules.CanUploadOwn(source);
+
+        RosterSourceHint = source switch
+        {
+            ClassroomRosterRules.HeadTeacher =>
+                $"「{classroom.Name}」用的是{ClassroomRosterRules.Label(source)}"
+                + (classroom.RosterEnforced ? "，并且班主任设为了强制" : string.Empty)
+                + "。"
+                + (classroom.RosterEnforced ? ClassroomRosterRules.LockedHint(classroom.Name) : string.Empty),
+            ClassroomRosterRules.Own =>
+                $"「{classroom.Name}」用的是{ClassroomRosterRules.Label(source)}。改完记得点下面的「同步名单到服务器」。",
+            _ =>
+                $"「{classroom.Name}」在服务器上还没有名单：导入之后点下面的「同步名单到服务器」。",
+        };
+    }
+
     [RelayCommand]
     private async Task SyncRosterAsync()
     {
@@ -516,21 +834,42 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        // 同步给**哪一个班**：呼叫页上正选着的那间（名单按班隔离，所以这一项是必填的）。
+        var classroom = Call.SelectedTarget;
+
+        if (classroom is { IsLan: true })
+        {
+            // 局域网直连那间没有服务器绑定，同步过去也没有意义
+            classroom = Text.Targets.FirstOrDefault(t => !t.IsLan && t.IsCurrent)
+                        ?? Text.Targets.FirstOrDefault(t => !t.IsLan);
+        }
+
+        if (classroom?.Record is null)
+        {
+            RosterSyncHint = "还没有可同步的班级：先在「设备」页绑定一间服务器上的教室（或用分享链接绑定）。";
+            return;
+        }
+
         IsSyncingRoster = true;
         RosterSyncHint = "正在同步…";
 
         try
         {
             var (ok, error) = await _relay
-                .SyncRosterAsync(roster.Rosters, roster.ActiveRosterId, calls.Templates, calls.ActiveTemplateId)
+                .SyncRosterAsync(
+                    roster.Rosters,
+                    roster.ActiveRosterId,
+                    calls.Templates,
+                    calls.ActiveTemplateId,
+                    classroom.Uuid)
                 .ConfigureAwait(true);
 
             if (ok)
             {
                 var students = roster.Active?.Students.Count ?? 0;
-                RosterSyncHint = $"已同步：{roster.Rosters.Count} 份名单（当前这份 {students} 位学生）、"
+                RosterSyncHint = $"已同步给「{classroom.Name}」：{roster.Rosters.Count} 份名单（当前这份 {students} 位学生）、"
                                  + $"{calls.Templates.Count} 个呼叫模板。网页版现在可以用它呼叫了。";
-                AddLog($"已把名单同步到服务器（{roster.Rosters.Count} 份、{calls.Templates.Count} 个模板）。");
+                AddLog($"已把名单同步给「{classroom.Name}」（{roster.Rosters.Count} 份、{calls.Templates.Count} 个模板）。");
             }
             else
             {
@@ -1336,6 +1675,15 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand(CanExecute = nameof(HasRosterImportText))]
     private void ImportRoster()
     {
+        // 班主任把名单设为强制时，任课老师这边连导入入口都关掉。
+        // 界面上按钮本来就是隐藏的，但"界面上没显示"从来不是一条规则 ——
+        // 快捷键、将来的别的入口、以及手改设置文件都能走到这里。
+        if (IsRosterUploadBlocked)
+        {
+            RosterHint = ClassroomRosterRules.LockedHint(CurrentServerClassroom()?.Name);
+            return;
+        }
+
         var name = string.IsNullOrWhiteSpace(RosterImportName)
             ? $"名单 {DateTime.Now:MM-dd HH:mm}"
             : RosterImportName.Trim();
@@ -1377,6 +1725,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private async Task ImportRosterFromFileAsync()
     {
+        if (IsRosterUploadBlocked)
+        {
+            RosterHint = ClassroomRosterRules.LockedHint(CurrentServerClassroom()?.Name);
+            return;
+        }
+
         if (!TeacherPlatform.HasRosterFilePicker)
         {
             RosterHint = "这个平台还没接上文件选择器：请把名单内容直接粘贴到上面的输入框。";
@@ -1497,8 +1851,17 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     /// 用的展示参数与「文字」页当前那一套相同 —— 呼叫页不另设一套，
     /// 否则老师会看到"同一个应用里两条路发出去的字号不一样"。
     /// </summary>
-    private async Task<int> SendCallMessagesAsync(IReadOnlyList<string> messages)
+    private async Task<int> SendCallMessagesAsync(IReadOnlyList<string> messages, string? targetUuid)
     {
+        // 呼叫页只让选一个班（见 CallShoutViewModel 里那段说明）：目标就是那一间。
+        // 选的是局域网那间（或还没选）时走手边这条链路；选的是服务器上的班时经中继发。
+        var broadcast = _broadcaster is not null
+                        && targetUuid is not null
+                        && !string.Equals(targetUuid, LanClassroomUuid, StringComparison.OrdinalIgnoreCase)
+            ? Text.Targets.FirstOrDefault(t =>
+                string.Equals(t.Uuid, targetUuid, StringComparison.OrdinalIgnoreCase) && !t.IsLan)?.Record
+            : null;
+
         var sent = 0;
 
         foreach (var text in messages)
@@ -1515,7 +1878,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             };
 
             // 一条失败不打断其余：一次叫三位学生，不该因为第一位没发出去就全都不发
-            if (await _channel.SendTextAsync(message).ConfigureAwait(true))
+            var ok = broadcast is null
+                ? await _channel.SendTextAsync(message).ConfigureAwait(true)
+                : (await _broadcaster!.SendTextAsync([broadcast], message, _ => NameFor(broadcast.Uuid))
+                    .ConfigureAwait(true)).Any(r => r.Ok);
+
+            if (ok)
             {
                 sent++;
                 AddLog($"呼叫：{text}");
@@ -1888,6 +2256,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             LoginPassword = string.Empty;
             OnAccountChanged();
             ShowSnackbar($"欢迎，{SignedInName}");
+
+            // 登录之后立刻问一次服务器：我的账号绑了哪几个班、哪几间在线。
+            // 放在这里而不是等老师去绑定某一间之后才问 —— 一次绑好几个班时，
+            // "可发送班级"要在他还没绑定任何一间时就已经列出来了。
+            await RefreshBoundClassroomsAsync().ConfigureAwait(true);
         }
         finally
         {
@@ -2000,6 +2373,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         if (!restored && _account.IsSignedIn == false)
         {
             Post(() => AddLog("登录状态已失效，请重新登录。"));
+        }
+        else
+        {
+            // 会话还在：开机后不必再点一次登录，也该看到"我有哪几个班可以喊"
+            await RefreshBoundClassroomsAsync().ConfigureAwait(true);
         }
     }
 
@@ -2633,6 +3011,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         RefreshSavedClassrooms();
 
         _relay.StartPolling();
+
+        // 绑定成功后顺手问一次"我到底有哪些班、现在哪几间在线" ——
+        // 「可发送班级」那份列表就是它回来的 JSON，多绑几个班时才有得可选。
+        await RefreshBoundClassroomsAsync().ConfigureAwait(true);
+
         return (true, null);
     }
 
@@ -2736,9 +3119,8 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             SavedClassrooms.Add(new SavedClassroomItem(record, isCurrent, SwitchClassroomAsync, RemoveSavedClassroom));
         }
 
-        // 文字页的"发给谁"用的就是这批数据，跟着一起刷新
-        Text.SyncTargets(_relaySettings.RecentClassrooms, IsServerBound ? BindUuid : null);
-        Text.TeacherName = TeacherName;
+        // 「可发送班级」那份列表跟着一起刷新
+        SyncSendTargets();
 
         OnPropertyChanged(nameof(HasSavedClassrooms));
         OnPropertyChanged(nameof(SavedClassroomsHint));
