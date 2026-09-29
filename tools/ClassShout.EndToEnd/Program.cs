@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.Http.Json;
@@ -282,6 +283,12 @@ internal static class Program
 
         // ---------- 3l. 组件式呼叫的拼装 ----------
         AssertCallComposer();
+
+        // ---------- 3m. 表格（Excel）导入 ----------
+        AssertRosterExcelImport();
+
+        // ---------- 3m2. 随机叫人与时间因子 ----------
+        AssertRandomCall();
 
         // ---------- 3n. 常用语的自定义 ----------
         AssertPhraseSettings();
@@ -2470,13 +2477,13 @@ internal static class Program
     private static void AssertRosterParsing()
     {
         const string input = """
-            姓名,学号,简写,小组
-            张三,20250101,小张,A组
-            李四,20250102,,B组
+            姓名,学号,简写,小组,性别
+            张三,20250101,小张,A组,男
+            李四,20250102,,B组,女
             王五
             ,20250104,,
             # 这是注释
-            赵六,20250105,六六,
+            赵六,20250105,六六,,男生
             """;
 
         var result = RosterCsv.Parse(input, "三年二班");
@@ -2545,6 +2552,578 @@ internal static class Program
             RosterCsv.Parse("\"王五,20250105", "没配对的引号").Roster?.Students is { Count: 1 } half
                 && half[0].Name == "王五,20250105",
             RosterCsv.Parse("\"王五,20250105", "没配对的引号").Roster?.Students.FirstOrDefault()?.Name ?? "(整行被丢掉了)");
+
+        // ---------- 第五列：性别（随机叫人按性别筛的时候要用） ----------
+
+        Check("第五列读成性别",
+            students.FirstOrDefault(s => s.Name == "张三")?.Gender == "男"
+                && students.FirstOrDefault(s => s.Name == "李四")?.Gender == "女",
+            $"张三={students.FirstOrDefault(s => s.Name == "张三")?.Gender ?? "(空)"}，"
+                + $"李四={students.FirstOrDefault(s => s.Name == "李四")?.Gender ?? "(空)"}");
+
+        Check("性别的写法被归一化（男生 → 男）",
+            students.FirstOrDefault(s => s.Name == "赵六")?.Gender == "男",
+            students.FirstOrDefault(s => s.Name == "赵六")?.Gender ?? "(空)");
+
+        Check("没填性别的行不会被猜一个",
+            students.FirstOrDefault(s => s.Name == "王五")?.Gender is null,
+            students.FirstOrDefault(s => s.Name == "王五")?.Gender ?? "(空)");
+
+        Check("性别不混进显示用的标识里",
+            students.FirstOrDefault(s => s.Name == "张三")?.Label == "张三（20250101，小张，A组）",
+            students.FirstOrDefault(s => s.Name == "张三")?.Label ?? "(缺)");
+
+        // 各种写法都要认，认不出来的留空（而不是硬塞成"男"）
+        Check("性别的常见写法都认",
+            RosterCsv.NormalizeGender("M") == "男"
+                && RosterCsv.NormalizeGender("male") == "男"
+                && RosterCsv.NormalizeGender("1") == "男"
+                && RosterCsv.NormalizeGender("F") == "女"
+                && RosterCsv.NormalizeGender("female") == "女"
+                && RosterCsv.NormalizeGender("0") == "女",
+            $"M={RosterCsv.NormalizeGender("M") ?? "(空)"}，female={RosterCsv.NormalizeGender("female") ?? "(空)"}，1={RosterCsv.NormalizeGender("1") ?? "(空)"}");
+
+        Check("认不出的性别留空，不瞎猜",
+            RosterCsv.NormalizeGender("保密") is null && RosterCsv.NormalizeGender("") is null,
+            $"保密 → {RosterCsv.NormalizeGender("保密") ?? "(空)"}");
+
+        Check("导入时每人都有一个隐形的时间因子，初值为 0",
+            students.All(s => s.TimeFactor == 0 && s.FactorSetAt is null),
+            students.Count == 0 ? "(没有学生)" : $"最大 {students.Max(s => s.TimeFactor)}");
+
+        // 表头可有可无：老师从教务系统里复制出来的常常没有表头
+        var headerless = RosterCsv.Parse("张三,20250101,小张,A组,男", "没有表头").Roster?.Students;
+
+        Check("没有表头也能导入（第一行不会被当成表头吃掉）",
+            headerless is { Count: 1 } && headerless[0].Name == "张三",
+            headerless is { Count: 1 } ? headerless[0].Label : $"解析出 {headerless?.Count ?? 0} 人");
+    }
+
+    /// <summary>
+    /// 直接导入 Excel（.xlsx）。
+    ///
+    /// 老师手里的名单九成是表格，而"先另存为 CSV"这道工序恰恰最容易出错
+    /// （选错编码、Excel 把学号前面的 0 吃掉）。所以这条路要能走通，
+    /// 而且读出来的结果必须和 CSV **完全一致** —— 两种入口给出两个答案是最坏的。
+    ///
+    /// 这里自己拼一个最小但结构完整的 xlsx（Excel 写出来的东西的样子：
+    /// 文本走 sharedStrings、纯数字存成数字），不依赖任何写表格的库。
+    /// </summary>
+    private static void AssertRosterExcelImport()
+    {
+        Check("按扩展名认出表格（而不是当成文本）",
+            RosterExcel.LooksLikeExcel("名单.xlsx")
+                && RosterExcel.LooksLikeExcel("名单.XLS")
+                && !RosterExcel.LooksLikeExcel("名单.csv")
+                && !RosterExcel.LooksLikeExcel(null),
+            "xlsx/xls 认表格，csv 与空名不认");
+
+        Check("导入支持的扩展名覆盖 csv 与表格",
+            RosterFile.Extensions.Contains(".csv") && RosterFile.Extensions.Contains(".xlsx"),
+            string.Join("、", RosterFile.Extensions));
+
+        // 学号是**数字**单元格：Excel 里敲 20250101 默认就是这个样子。
+        // 直接 ToString 会得到 "20250101.0"，教室里就会听见"二零二五零一零一点零"。
+        var rows = new List<object?[]>
+        {
+            // 这里刻意写全 new object?[]：对象初始化器里的 [ ] 会被解析成"索引器赋值"，
+            // 嵌套的集合表达式在这个位置是有歧义的
+            new object?[] { "姓名", "学号", "简写", "小组", "性别" },
+            new object?[] { "张三", 20250101d, "小张", "A组", "男" },
+            new object?[] { "李四", 20250102d, null, "B组", "女" },
+            new object?[] { null, null, null, null, null },
+            new object?[] { "王五", 20250105d, "小五", "A组", "男" },
+        };
+
+        using var xlsx = BuildXlsx("三年二班名单", rows);
+
+        var result = RosterExcel.Read(xlsx, "名单", "名单.xlsx");
+        var students = result.Roster?.Students ?? [];
+
+        Check("表格能读出一份名单", result.Ok && students.Count == 3,
+            result.Ok ? $"共 {students.Count} 人" : string.Join(" / ", result.SkippedLines));
+
+        Check("名单名用工作表名（比文件名更贴近内容）",
+            result.Roster?.Name == "三年二班名单",
+            result.Roster?.Name ?? "(缺)");
+
+        Check("数字单元格里的学号不会带小数点",
+            students.FirstOrDefault(s => s.Name == "张三")?.StudentNo == "20250101",
+            students.FirstOrDefault(s => s.Name == "张三")?.StudentNo ?? "(空)");
+
+        Check("表格里的性别与小组照读",
+            students.FirstOrDefault(s => s.Name == "李四") is { Gender: "女", Group: "B组" },
+            students.FirstOrDefault(s => s.Name == "李四") is { } lisi ? $"性别={lisi.Gender ?? "(空)"}，小组={lisi.Group ?? "(空)"}" : "(缺)");
+
+        Check("表格里的空行被跳过",
+            students.All(s => !string.IsNullOrWhiteSpace(s.Name)),
+            string.Join("、", students.Select(s => s.Name)));
+
+        Check("表格导入的学生也带隐形时间因子（初值 0）",
+            students.All(s => s.TimeFactor == 0),
+            students.Count == 0 ? "(没有学生)" : $"最大 {students.Max(s => s.TimeFactor)}");
+
+        // 同一个文件按扩展名分派：.csv 走文本、.xlsx 走表格 —— 读法只有一处决定
+        using var csv = new MemoryStream(Encoding.UTF8.GetBytes("张三,20250101,小张,A组,男"));
+        var viaCsv = RosterFile.Read("名单.csv", csv, "名单");
+
+        Check("按扩展名分派：csv 走文本读法",
+            viaCsv.Ok && viaCsv.Roster?.Students.FirstOrDefault()?.Label == "张三（20250101，小张，A组）",
+            viaCsv.Ok ? viaCsv.Roster!.Students[0].Label : string.Join(" / ", viaCsv.SkippedLines));
+
+        using var xlsx2 = BuildXlsx("Sheet1", [["姓名"], ["张三"]]);
+        var viaXlsx = RosterFile.Read("名单.xlsx", xlsx2, "名单");
+
+        Check("按扩展名分派：xlsx 走表格读法",
+            viaXlsx.Ok && viaXlsx.Roster?.Students.Count == 1,
+            viaXlsx.Ok ? $"{viaXlsx.Roster!.Students.Count} 人" : string.Join(" / ", viaXlsx.SkippedLines));
+
+        // 老师点错文件（或者下载到一半的 .xlsx）不该崩，只该得到一句人话
+        using var garbage = new MemoryStream(Encoding.UTF8.GetBytes("这不是表格，只是一段文字"));
+
+        var broken = RosterExcel.Read(garbage, "坏文件", "坏文件.xlsx");
+
+        Check("改名的文本当成表格读时给一句提示，而不是崩掉",
+            !broken.Ok && broken.SkippedLines.Count > 0,
+            broken.SkippedLines.Count == 0 ? "(没有任何说明)" : broken.SkippedLines[0]);
+
+        using var empty = new MemoryStream([]);
+        Check("空文件也给提示而不是崩掉",
+            !RosterExcel.Read(empty, "空", "空.xlsx").Ok,
+            "返回了失败");
+    }
+
+    /// <summary>
+    /// 拼一个最小但结构完整的 .xlsx（Excel 自己写出来的样子）。
+    ///
+    /// 文本走 sharedStrings、数字存成数字单元格 —— 这两点正是真实文件里最容易
+    /// 让导入读错的地方（学号变成 "20250101.0" 就是后者）。
+    /// </summary>
+    private static MemoryStream BuildXlsx(string sheetName, IReadOnlyList<object?[]> rows)
+    {
+        const string main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        const string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        const string pkg = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+        var strings = new List<string>();
+        var sheetRows = new System.Xml.Linq.XElement(System.Xml.Linq.XName.Get("sheetData", main));
+
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var cells = new System.Xml.Linq.XElement(System.Xml.Linq.XName.Get("row", main));
+            cells.SetAttributeValue("r", r + 1);
+
+            for (var c = 0; c < rows[r].Length; c++)
+            {
+                var value = rows[r][c];
+                var cell = new System.Xml.Linq.XElement(System.Xml.Linq.XName.Get("c", main));
+                cell.SetAttributeValue("r", $"{(char)('A' + c)}{r + 1}");
+
+                switch (value)
+                {
+                    case null:
+                    case "":
+                        continue; // 空格子：Excel 也是干脆不写
+
+                    case double number:
+                        cell.SetAttributeValue("t", "n");
+                        cell.Add(new System.Xml.Linq.XElement(System.Xml.Linq.XName.Get("v", main), number.ToString("R")));
+                        break;
+
+                    default:
+                        var text = value.ToString()!;
+                        var index = strings.IndexOf(text);
+
+                        if (index < 0)
+                        {
+                            strings.Add(text);
+                            index = strings.Count - 1;
+                        }
+
+                        cell.SetAttributeValue("t", "s");
+                        cell.Add(new System.Xml.Linq.XElement(System.Xml.Linq.XName.Get("v", main), index));
+                        break;
+                }
+
+                cells.Add(cell);
+            }
+
+            sheetRows.Add(cells);
+        }
+
+        var sst = new System.Xml.Linq.XElement(
+            System.Xml.Linq.XName.Get("sst", main),
+            new System.Xml.Linq.XAttribute("count", strings.Count),
+            new System.Xml.Linq.XAttribute("uniqueCount", strings.Count));
+
+        foreach (var text in strings)
+        {
+            var item = new System.Xml.Linq.XElement(System.Xml.Linq.XName.Get("si", main));
+            var t = new System.Xml.Linq.XElement(System.Xml.Linq.XName.Get("t", main), text);
+            t.SetAttributeValue(System.Xml.Linq.XName.Get("space", "http://www.w3.org/XML/1998/namespace"), "preserve");
+            item.Add(t);
+            sst.Add(item);
+        }
+
+        var worksheet = new System.Xml.Linq.XElement(System.Xml.Linq.XName.Get("worksheet", main), sheetRows);
+
+        var workbook = new System.Xml.Linq.XElement(
+            System.Xml.Linq.XName.Get("workbook", main),
+            new System.Xml.Linq.XElement(
+                System.Xml.Linq.XName.Get("sheets", main),
+                new System.Xml.Linq.XElement(
+                    System.Xml.Linq.XName.Get("sheet", main),
+                    new System.Xml.Linq.XAttribute("name", sheetName),
+                    new System.Xml.Linq.XAttribute("sheetId", 1),
+                    new System.Xml.Linq.XAttribute(System.Xml.Linq.XName.Get("id", rel), "rId1"))));
+
+        var contentTypes = new System.Xml.Linq.XElement(
+            System.Xml.Linq.XName.Get("Types", "http://schemas.openxmlformats.org/package/2006/content-types"),
+            new System.Xml.Linq.XElement(
+                System.Xml.Linq.XName.Get("Default"),
+                new System.Xml.Linq.XAttribute("Extension", "rels"),
+                new System.Xml.Linq.XAttribute("ContentType", "application/vnd.openxmlformats-package.relationships+xml")),
+            new System.Xml.Linq.XElement(
+                System.Xml.Linq.XName.Get("Default"),
+                new System.Xml.Linq.XAttribute("Extension", "xml"),
+                new System.Xml.Linq.XAttribute("ContentType", "application/xml")),
+            Override("/xl/workbook.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"),
+            Override("/xl/worksheets/sheet1.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"),
+            Override("/xl/sharedStrings.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"));
+
+        var rootRels = new System.Xml.Linq.XElement(
+            System.Xml.Linq.XName.Get("Relationships", pkg),
+            new System.Xml.Linq.XElement(
+                System.Xml.Linq.XName.Get("Relationship"),
+                new System.Xml.Linq.XAttribute("Id", "rId1"),
+                new System.Xml.Linq.XAttribute("Type", $"{rel}/officeDocument"),
+                new System.Xml.Linq.XAttribute("Target", "xl/workbook.xml")));
+
+        var workbookRels = new System.Xml.Linq.XElement(
+            System.Xml.Linq.XName.Get("Relationships", pkg),
+            new System.Xml.Linq.XElement(
+                System.Xml.Linq.XName.Get("Relationship"),
+                new System.Xml.Linq.XAttribute("Id", "rId1"),
+                new System.Xml.Linq.XAttribute("Type", $"{rel}/worksheet"),
+                new System.Xml.Linq.XAttribute("Target", "worksheets/sheet1.xml")),
+            new System.Xml.Linq.XElement(
+                System.Xml.Linq.XName.Get("Relationship"),
+                new System.Xml.Linq.XAttribute("Id", "rId2"),
+                new System.Xml.Linq.XAttribute("Type", $"{rel}/sharedStrings"),
+                new System.Xml.Linq.XAttribute("Target", "sharedStrings.xml")));
+
+        var buffer = new MemoryStream();
+
+        using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            Add(zip, "[Content_Types].xml", contentTypes);
+            Add(zip, "_rels/.rels", rootRels);
+            Add(zip, "xl/workbook.xml", workbook);
+            Add(zip, "xl/_rels/workbook.xml.rels", workbookRels);
+            Add(zip, "xl/worksheets/sheet1.xml", worksheet);
+            Add(zip, "xl/sharedStrings.xml", sst);
+        }
+
+        buffer.Position = 0;
+        return buffer;
+
+        static System.Xml.Linq.XElement Override(string part, string contentType)
+            => new(
+                System.Xml.Linq.XName.Get("Override"),
+                new System.Xml.Linq.XAttribute("PartName", part),
+                new System.Xml.Linq.XAttribute("ContentType", contentType));
+
+        static void Add(ZipArchive zip, string path, System.Xml.Linq.XElement content)
+        {
+            var entry = zip.CreateEntry(path, CompressionLevel.Fastest);
+
+            using var stream = entry.Open();
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+
+            writer.Write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+            writer.Write(content.ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
+        }
+    }
+
+    /// <summary>
+    /// 随机叫人与"隐形的时间因子"。
+    ///
+    /// 这套规则没法靠看界面验证（因子是刻意不显示的，而且抽出来是随机的），
+    /// 所以每一条都必须在这里用可复现的随机源钉住：因子怎么衰减、抽中之后重置到哪、
+    /// 范围怎么筛、抽位数越界怎么办。错了的表现都是"看着正常、其实不公平"——
+    /// 比如刚叫过的学生下一位还是他，或者衰减窗口不生效。
+    /// </summary>
+    private static void AssertRandomCall()
+    {
+        var roster = RosterCsv.Parse(
+            "张三,20250101,小张,A组,男\n李四,20250102,,A组,女\n王五,,小五,B组,男\n赵六,,,B组,女",
+            "三年二班").Roster;
+
+        if (roster is null)
+        {
+            Check("随机叫人：名单能解析出来", false, "名单没解析出来，后面的断言无法进行");
+            return;
+        }
+
+        var now = new DateTimeOffset(2026, 3, 2, 9, 0, 0, TimeSpan.FromHours(8));
+        var window = RandomCall.DefaultDecayWindow;
+
+        Check("默认衰减窗口是一节课（40 分钟）",
+            window == TimeSpan.FromMinutes(40) && RandomCall.DecayChoices.Contains(window),
+            $"默认 {window.TotalMinutes} 分钟，可选 {string.Join("、", RandomCall.DecayChoices.Select(d => d.TotalMinutes))} 分钟");
+
+        // 刚导入的人：因子 0 → 权重拉满
+        Check("没被叫过的人因子是 0、权重是 1",
+            roster.Students.All(s => RandomCall.EffectiveFactor(s, now, window) == 0
+                                     && RandomCall.Weight(s, now, window) == 1),
+            $"最大因子 {roster.Students.Max(s => RandomCall.EffectiveFactor(s, now, window))}");
+
+        // 线性衰减：走完半个窗口就掉一半
+        var zhang = roster.Students[0];
+        zhang.TimeFactor = 1.0;
+        zhang.FactorSetAt = now - TimeSpan.FromMinutes(20);
+
+        Check("因子按时间线性衰减（40 分钟走一半 → 0.5）",
+            Math.Abs(RandomCall.EffectiveFactor(zhang, now, window) - 0.5) < 1e-9,
+            RandomCall.EffectiveFactor(zhang, now, window).ToString("0.###"));
+
+        Check("衰减窗口走完就回到 0（不会变成负数）",
+            RandomCall.EffectiveFactor(zhang, now + TimeSpan.FromMinutes(120), window) == 0,
+            RandomCall.EffectiveFactor(zhang, now + TimeSpan.FromMinutes(120), window).ToString("0.###"));
+
+        Check("衰减窗口可调（20 分钟窗时同样的因子掉得更快）",
+            RandomCall.EffectiveFactor(zhang, now, TimeSpan.FromMinutes(20)) == 0,
+            RandomCall.EffectiveFactor(zhang, now, TimeSpan.FromMinutes(20)).ToString("0.###"));
+
+        // 时间被往回调过（校时、改系统时间）不能让"刚叫过"的人凭空变回最容易被抽中
+        zhang.FactorSetAt = now + TimeSpan.FromMinutes(30);
+
+        Check("系统时间被回拨时因子不会越过上限",
+            RandomCall.EffectiveFactor(zhang, now, window) <= RandomCall.MaxFactor,
+            RandomCall.EffectiveFactor(zhang, now, window).ToString("0.###"));
+
+        Check("权重有下限：刚叫过的人也不是完全没机会",
+            RandomCall.Weight(zhang, now, window) >= RandomCall.MinWeight,
+            RandomCall.Weight(zhang, now, window).ToString("0.###"));
+
+        // ---------- 抽签 ----------
+
+        var random = new Random(20260302);
+        var picked = RandomCall.Pick(roster.Students, 2, now, window, random);
+
+        Check("抽几位就抽几位",
+            picked.Count == 2,
+            $"抽了 {picked.Count} 位：{string.Join("、", picked.Select(s => s.Name))}");
+
+        Check("一次抽多位不会抽到同一个学生",
+            picked.Select(s => s.Id).Distinct().Count() == picked.Count,
+            string.Join("、", picked.Select(s => s.Name)));
+
+        Check("抽中之后因子重置到 0.95～1.00",
+            picked.All(s => s.TimeFactor >= RandomCall.ResetFloor && s.TimeFactor <= RandomCall.MaxFactor),
+            string.Join("、", picked.Select(s => $"{s.Name}={s.TimeFactor:0.###}")));
+
+        Check("抽中之后记下了重置时刻（衰减才有起点）",
+            picked.All(s => s.FactorSetAt == now),
+            picked.Count == 0 ? "(没抽到)" : $"{picked[0].Name} @ {picked[0].FactorSetAt:HH:mm}");
+
+        Check("抽中的人当时权重被压到最低",
+            picked.All(s => RandomCall.Weight(s, now, window) <= RandomCall.MinWeight + 1e-9),
+            string.Join("、", picked.Select(s => RandomCall.Weight(s, now, window).ToString("0.###"))));
+
+        // 恢复成"都没被叫过"再验证越界行为
+        foreach (var student in roster.Students)
+        {
+            student.TimeFactor = 0;
+            student.FactorSetAt = null;
+        }
+
+        Check("要抽的人数超过名单时有多少抽多少",
+            RandomCall.Pick(roster.Students, 99, now, window, random).Count == roster.Students.Count,
+            RandomCall.Pick(roster.Students, 99, now, window, random).Count.ToString());
+
+        Check("抽 0 位或名单为空时不抽",
+            RandomCall.Pick(roster.Students, 0, now, window, random).Count == 0
+                && RandomCall.Pick([], 1, now, window, random).Count == 0,
+            "两次都返回空");
+
+        // ---------- "刚叫过的人先缓一缓"到底成不成立 ----------
+
+        foreach (var student in roster.Students)
+        {
+            student.TimeFactor = 0;
+            student.FactorSetAt = null;
+        }
+
+        var hot = roster.Students[0];
+        var repeat = 0;
+        var draws = 400;
+        var stats = new Random(20250101);
+
+        for (var i = 0; i < draws; i++)
+        {
+            // 每次都把场面恢复成"只有 hot 刚被叫过"
+            foreach (var student in roster.Students)
+            {
+                student.TimeFactor = 0;
+                student.FactorSetAt = null;
+            }
+
+            hot.TimeFactor = RandomCall.MaxFactor;
+            hot.FactorSetAt = now;
+
+            if (ReferenceEquals(RandomCall.Pick(roster.Students, 1, now, window, stats)[0], hot))
+            {
+                repeat++;
+            }
+        }
+
+        // 纯随机的话是 1/4（100 次左右）；按权重算期望只有 ~1.6%（6 次左右）
+        Check("刚叫过的学生接下来明显更难被抽到",
+            repeat < 40,
+            $"{draws} 次里被抽中 {repeat} 次（纯随机约 {draws / roster.Students.Count} 次）");
+
+        // 上一段循环里每次抽签都会改对象上的因子，所以这里先把场面摆正再比权重
+        foreach (var student in roster.Students)
+        {
+            student.TimeFactor = 0;
+            student.FactorSetAt = null;
+        }
+
+        hot.TimeFactor = RandomCall.MaxFactor;
+        hot.FactorSetAt = now;
+
+        Check("越久没叫过的人越容易被抽到（衰减真的在影响抽取）",
+            RandomCall.Weight(hot, now, window) < RandomCall.Weight(roster.Students[1], now, window),
+            $"刚叫过 {RandomCall.Weight(hot, now, window):0.###} < 没叫过 {RandomCall.Weight(roster.Students[1], now, window):0.###}");
+
+        // ---------- 范围筛选 ----------
+
+        Check("不限范围时全体都在候选里",
+            RandomCall.Candidates(roster.Students, null, null, new Random(1)).Count == roster.Students.Count,
+            RandomCall.Candidates(roster.Students, null, null, new Random(1)).Count.ToString());
+
+        var groupA = RandomCall.Candidates(roster.Students, "A组", null, new Random(1));
+        Check("按小组筛只留下这一组",
+            groupA.Count == 2 && groupA.All(s => s.Group == "A组"),
+            string.Join("、", groupA.Select(s => $"{s.Name}({s.Group})")));
+
+        var boys = RandomCall.Candidates(roster.Students, null, "男", new Random(1));
+        Check("按性别筛只留下男生（女生的写法也归一化了）",
+            boys.Count == 2 && boys.All(s => s.Gender == "男"),
+            string.Join("、", boys.Select(s => $"{s.Name}({s.Gender})")));
+
+        var both = RandomCall.Candidates(roster.Students, "A组", "男", new Random(1));
+        Check("小组与性别同时筛时取交集",
+            both.Count == 1 && both[0].Name == "张三",
+            string.Join("、", both.Select(s => s.Name)));
+
+        Check("筛选词前后的空格不影响匹配",
+            RandomCall.Candidates(roster.Students, " A组 ", " 男 ", new Random(1)).Count == 1,
+            RandomCall.Candidates(roster.Students, " A组 ", " 男 ", new Random(1)).Count.ToString());
+
+        Check("筛不出人时给空候选（界面才不会抽到一个不相干的人）",
+            RandomCall.Candidates(roster.Students, "C组", null, new Random(1)).Count == 0,
+            RandomCall.Candidates(roster.Students, "C组", null, new Random(1)).Count.ToString());
+
+        // 名单里同组的人常常连在一起；不打乱的话，"权重相等"时会偏向排在前面的
+        var many = RosterCsv.Parse(
+            string.Join("\n", Enumerable.Range(1, 12).Select(i => $"学生{i},2025010{i},,A组,男")),
+            "十二人班").Roster!.Students;
+
+        var shuffled = RandomCall.Candidates(many, null, null, new Random(7));
+        Check("候选会先打乱（避免总偏向名单开头的人）",
+            !shuffled.Select(s => s.Name).SequenceEqual(many.Select(s => s.Name)),
+            string.Join("、", shuffled.Take(4).Select(s => s.Name)) + " …");
+
+        // ---------- 拼成一句话 ----------
+
+        var template = TeacherCallSettings.RandomTemplate();
+        var twoPicked = RandomCall.Pick(roster.Students, 2, now, window, new Random(5));
+
+        var sentence = CallComposer.ComposeRandom(template, twoPicked, roster, "数学张老师");
+
+        Check("随机叫人拼成一句（顿号分隔，不是一人一条）",
+            sentence is not null && sentence.StartsWith("请 ", StringComparison.Ordinal)
+                && sentence.EndsWith(" 来回答这个问题", StringComparison.Ordinal)
+                && sentence.Contains('、'),
+            sentence ?? "(没有输出)");
+
+        var named = new CallTemplate
+        {
+            Components =
+            [
+                MessageComponent.Of(MessageComponentKinds.Text, "请 "),
+                MessageComponent.Of(MessageComponentKinds.StudentName),
+                MessageComponent.Of(MessageComponentKinds.Text, " 回答"),
+                MessageComponent.Of(MessageComponentKinds.Text, "（"),
+                MessageComponent.Of(MessageComponentKinds.Group),
+                MessageComponent.Of(MessageComponentKinds.Text, "）"),
+            ],
+        };
+
+        var byName = CallComposer.ComposeRandom(named, twoPicked, roster, "数学张老师");
+        var groups = twoPicked.Select(s => s.Group).Distinct().ToList();
+
+        Check("随机模板里的姓名组件取抽中的第一位",
+            byName is not null && byName.StartsWith($"请 {twoPicked[0].Name} 回答", StringComparison.Ordinal),
+            byName ?? "(没有输出)");
+
+        Check("随机模板里的小组组件按抽中的几位去重",
+            byName is not null && byName.EndsWith($"（{string.Join("、", groups)}）", StringComparison.Ordinal),
+            byName ?? "(没有输出)");
+
+        Check("没抽到人时什么都不发",
+            CallComposer.ComposeRandom(template, [], roster, "数学张老师") is null,
+            "返回了 null");
+
+        Check("随机模板默认带「随机叫人」组件",
+            template.HasRandomComponent && TeacherCallSettings.DefaultTemplate().HasRandomComponent == false,
+            $"随机模板 {template.Components.Count} 个组件，普通模板 {TeacherCallSettings.DefaultTemplate().Components.Count} 个");
+
+        // ---------- 设置项被手改过也要收回来 ----------
+
+        var wild = new TeacherCallSettings { RandomCount = 99, DecayMinutes = 7, RandomGender = "male", RandomGroup = "  A组  " };
+        wild.Normalized();
+
+        Check("离谱的抽位数被夹到上限",
+            wild.RandomCount == RandomCall.MaxCount,
+            wild.RandomCount.ToString());
+
+        Check("不认识的衰减窗口退回默认 40 分钟",
+            wild.DecayMinutes == 40,
+            wild.DecayMinutes.ToString());
+
+        Check("设置里的性别写法也归一化",
+            wild.RandomGender == "男",
+            wild.RandomGender ?? "(空)");
+
+        Check("小组名前后的空格被去掉",
+            wild.RandomGroup == "A组",
+            wild.RandomGroup ?? "(空)");
+
+        var zero = new TeacherCallSettings { RandomCount = 0, RandomGroup = "   " };
+        zero.Normalized();
+
+        Check("抽位数写成 0 时回到 1",
+            zero.RandomCount == 1,
+            zero.RandomCount.ToString());
+
+        Check("空白的小组名当作不限",
+            zero.RandomGroup is null,
+            zero.RandomGroup ?? "(空)");
+
+        var kept = new TeacherCallSettings { DecayMinutes = 90, RandomCount = 3 };
+        kept.Normalized();
+
+        Check("合法的设置不会被改动",
+            kept.DecayMinutes == 90 && kept.RandomCount == 3,
+            $"{kept.DecayMinutes} 分钟 / {kept.RandomCount} 位");
+
+        Check("衰减窗口换算成 TimeSpan",
+            new TeacherCallSettings { DecayMinutes = 60 }.DecayWindow == TimeSpan.FromMinutes(60)
+                && new TeacherCallSettings { DecayMinutes = 0 }.DecayWindow == RandomCall.DefaultDecayWindow,
+            $"60 分钟 → {new TeacherCallSettings { DecayMinutes = 60 }.DecayWindow.TotalMinutes} 分钟");
     }
 
     /// <summary>
@@ -3354,11 +3933,113 @@ internal static class Program
             Check("分享链接的错误也能点掉",
                 !shell.HasShareError,
                 $"HasShareError={shell.HasShareError}");
+
+            // —— 呼叫页的随机模式（视图模型这一层） ——
+            //
+            // 这一块平时是藏着的（要先从组件面板里把「随机叫人」拖进拼装区），
+            // 而渲染预览时它露过两个马脚：
+            //   · 小组下拉框是**空白**的 —— 设置里明明存着「A组」，
+            //     原因是这个列表每次读属性都新建一份，下拉框判定"这一项不在列表里"，
+            //     于是把选中项清成了空。所以这里锁"两次读到的必须是同一个实例"；
+            //   · 随机模式下"还没有选学生""按小组叫""按哪种标识显示"这些
+            //     只对手动勾选有意义的控件仍然出现，和抽签范围各说各的。
+            AssertRandomCallPage();
         }
         finally
         {
             Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", originalDataDir);
         }
+    }
+
+    /// <summary>呼叫页随机模式的界面状态（跑在临时数据目录里，不碰使用者的设置）。</summary>
+    private static void AssertRandomCallPage()
+    {
+        var rosters = new TeacherRosterSettings();
+        // 刻意让 B组 只有男生：这样"B组 + 只要女生"是一个**空范围**，
+        // 才测得到"范围里一个人都没有"那句话（每个组合都有人时永远走不到那个分支）
+        var parsed = RosterCsv.Parse(
+            "张三,20250101,小张,A组,男\n李四,20250102,,A组,女\n赵六,20250105,六六,A组,女\n王五,,小五,B组,男",
+            "三年二班");
+
+        if (parsed.Roster is not { } roster)
+        {
+            Check("随机叫人页：名单能解析出来", false, "名单没解析出来，后面的断言无法进行");
+            return;
+        }
+
+        rosters.Rosters.Add(roster);
+        rosters.ActiveRosterId = roster.Id;
+        LocalSettings.SaveRosters(rosters);
+
+        var template = TeacherCallSettings.RandomTemplate();
+        LocalSettings.SaveCalls(new TeacherCallSettings
+        {
+            Templates = [template],
+            ActiveTemplateId = template.Id,
+            RandomGroup = "A组",
+            RandomGender = "男",
+            RandomCount = 2,
+            DecayMinutes = 40,
+        });
+
+        var vm = new ClassShout.Teacher.ViewModels.TeacherShellViewModel();
+
+        Check("随机叫人页：模板里有「随机叫人」时整页切到随机模式",
+            vm.Call.IsRandomMode && !vm.Call.IsPickMode,
+            $"IsRandomMode={vm.Call.IsRandomMode}，IsPickMode={vm.Call.IsPickMode}");
+
+        Check("随机叫人页：存着的小组会出现在下拉项里（不然下拉框会是空白）",
+            vm.Call.RandomGroupChoices.Any(choice => choice.Value == "A组"),
+            string.Join("、", vm.Call.RandomGroupChoices.Select(choice => choice.Label)));
+
+        Check("随机叫人页：小组下拉项是**同一个实例**（每次新建一份会让选中项被清空）",
+            ReferenceEquals(vm.Call.RandomGroupChoices, vm.Call.RandomGroupChoices),
+            "两次读属性拿到同一个列表");
+
+        Check("随机叫人页：存着的小组仍然是选中的那一项",
+            vm.Call.SelectedRandomGroup.Value == "A组",
+            vm.Call.SelectedRandomGroup.Label);
+
+        Check("随机叫人页：人数与冷却也照存着的值还原",
+            vm.Call.SelectedRandomCount == 2 && vm.Call.SelectedDecayMinutes == 40,
+            $"{vm.Call.SelectedRandomCount} 位 / {vm.Call.SelectedDecayMinutes} 分钟");
+
+        Check("随机叫人页：右上角写的是「发送时抽几位」，不是「还没有选学生」",
+            vm.Call.PickedSummary.Contains("抽") && !vm.Call.PickedSummary.Contains("没有选"),
+            vm.Call.PickedSummary);
+
+        // 范围里只有 1 位男生（张三），而要抽 2 位：预览必须把这件事说出来
+        Check("随机叫人页：预览说清范围与人数",
+            vm.Call.PreviewText.Contains("「A组」") && vm.Call.PreviewText.Contains("1 位"),
+            vm.Call.PreviewText);
+
+        Check("随机叫人页：要抽的人数超过范围内的人数时写明这一点",
+            vm.Call.PreviewText.Contains("只有 1 人") && vm.Call.PreviewText.Contains("2 位"),
+            vm.Call.PreviewText);
+
+        Check("随机叫人页：随机模式下预览不会把谁抽掉（因子全不变）",
+            roster.Students.All(student => student.TimeFactor == 0 && student.FactorSetAt is null),
+            $"最大因子 {roster.Students.Max(student => student.TimeFactor)}");
+
+        // 换一个筛不出人的范围：界面必须说"这个范围里一个人都没有"
+        vm.Call.SelectedRandomGender = vm.Call.RandomGenderChoices.First(choice => choice.Value == "女");
+        vm.Call.SelectedRandomGroup = vm.Call.RandomGroupChoices.First(choice => choice.Value == "B组");
+
+        Check("随机叫人页：范围里没人时预览直说（而不是发一条空喊话）",
+            vm.Call.PreviewText.Contains("一个人都没有"),
+            vm.Call.PreviewText);
+
+        Check("随机叫人页：范围里没人的那句话里也写着是哪一段",
+            vm.Call.PreviewText.Contains("「B组」") && vm.Call.PreviewText.Contains("女生"),
+            vm.Call.PreviewText);
+
+        // 换回"不限"，范围那句话要跟着变
+        vm.Call.SelectedRandomGroup = vm.Call.RandomGroupChoices[0];
+        vm.Call.SelectedRandomGender = vm.Call.RandomGenderChoices[0];
+
+        Check("随机叫人页：改回「不限」之后范围也回到全班",
+            vm.Call.RandomScopeText == "全班" && vm.Call.PreviewText.Contains("全班"),
+            vm.Call.RandomScopeText);
     }
 
     /// <summary>语音页的假采集器：不碰真麦克风，只为把"开始/结束"这条路走通。</summary>

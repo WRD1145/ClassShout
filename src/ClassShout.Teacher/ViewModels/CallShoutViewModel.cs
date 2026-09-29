@@ -448,7 +448,9 @@ public partial class CallShoutViewModel : ObservableObject
 
     public int PickedCount => Students.Count(row => row.IsSelected);
 
-    public string PickedSummary => PickedCount == 0 ? "还没有选学生" : $"已选 {PickedCount} 人";
+    public string PickedSummary => IsRandomMode
+        ? $"发送时抽 {SelectedRandomCount} 位"
+        : PickedCount == 0 ? "还没有选学生" : $"已选 {PickedCount} 人";
 
     public StudentRoster? Roster => _rosterSettings.Active;
 
@@ -487,6 +489,7 @@ public partial class CallShoutViewModel : ObservableObject
         }
 
         PersistSelection();
+        RefreshRandomGroupChoices();
         RefreshDerived();
     }
 
@@ -546,11 +549,214 @@ public partial class CallShoutViewModel : ObservableObject
         private set => SetProperty(ref _statusHint, value);
     }
 
+    private bool CanSend => Components.Count > 0 && !IsSending
+                            && (IsRandomMode || PickedCount > 0);
+
+    /// <summary>
+    /// 随机叫人：模板里有「随机叫人」组件时就换成这条路 ——
+    /// 不按勾选的学生逐条发，而是先按筛选范围抽签，再把抽中的几位拼成一句。
+    /// </summary>
+    public bool IsRandomMode => _draft.HasRandomComponent;
+
+    public bool IsPickMode => !IsRandomMode;
+
+    // ======================== 随机叫人的参数 ========================
+
+    private IReadOnlyList<RandomGroupChoice> _randomGroupChoices = [new(null, "不限小组")];
+
+    /// <summary>抽签范围里的小组（含「不限」）。</summary>
+    public IReadOnlyList<RandomGroupChoice> RandomGroupChoices => _randomGroupChoices;
+
+    /// <summary>
+    /// 重建小组下拉项，并让下拉框重新去找一次"当前选中的是哪一个"。
+    ///
+    /// 两件事都必须做，少一件界面上就是空白：
+    ///   · 列表要**缓存成同一个实例**。每次读属性都新建一个列表的话，
+    ///     下拉框先后拿到的是两份不同的列表，判定"这一项在不在列表里"就会落空；
+    ///   · 重建之后必须广播 <see cref="SelectedRandomGroup"/>。选中项是在列表
+    ///     换掉的那一刻被清成空的，只广播列表本身不会让它自己找回来 ——
+    ///     结果就是"设置明明存着「A组」，界面上却是空的"，看起来像设置没生效。
+    ///
+    /// （这一条是渲染预览时看出来的：种子里写着「A组」，导出的小组下拉框是空白。）
+    /// </summary>
+    private void RefreshRandomGroupChoices()
+    {
+        var choices = new List<RandomGroupChoice> { new(null, "不限小组") };
+
+        choices.AddRange(Groups
+            .Where(group => !string.IsNullOrWhiteSpace(group))
+            .OrderBy(group => group, StringComparer.CurrentCulture)
+            .Select(group => new RandomGroupChoice(group, group)));
+
+        _randomGroupChoices = choices;
+
+        OnPropertyChanged(nameof(RandomGroupChoices));
+        OnPropertyChanged(nameof(SelectedRandomGroup));
+    }
+
+    /// <summary>抽签范围里的性别（含「不限」）。</summary>
+    public IReadOnlyList<RandomGroupChoice> RandomGenderChoices { get; } =
+    [
+        new(null, "不限性别"),
+        new("男", "只要男生"),
+        new("女", "只要女生"),
+    ];
+
+    /// <summary>一次抽几位。</summary>
+    public IReadOnlyList<int> RandomCountChoices { get; } =
+        Enumerable.Range(1, RandomCall.MaxCount).ToList();
+
+    /// <summary>衰减窗口（分钟）。</summary>
+    public IReadOnlyList<int> DecayChoices { get; } =
+        RandomCall.DecayChoices.Select(window => (int)window.TotalMinutes).ToList();
+
+    public RandomGroupChoice SelectedRandomGroup
+    {
+        get => RandomGroupChoices.FirstOrDefault(choice =>
+                   string.Equals(choice.Value ?? string.Empty, _settings.RandomGroup ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+               ?? RandomGroupChoices[0];
+        set
+        {
+            if (value is null)
+            {
+                return;
+            }
+
+            _settings.RandomGroup = value.Value;
+            LocalSettings.SaveCalls(_settings);
+
+            OnPropertyChanged();
+            RefreshDerived();
+        }
+    }
+
+    public RandomGroupChoice SelectedRandomGender
+    {
+        get => RandomGenderChoices.FirstOrDefault(choice =>
+                   string.Equals(choice.Value ?? string.Empty, _settings.RandomGender ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+               ?? RandomGenderChoices[0];
+        set
+        {
+            if (value is null)
+            {
+                return;
+            }
+
+            _settings.RandomGender = value.Value;
+            LocalSettings.SaveCalls(_settings);
+
+            OnPropertyChanged();
+            RefreshDerived();
+        }
+    }
+
+    public int SelectedRandomCount
+    {
+        get => Math.Clamp(_settings.RandomCount, 1, RandomCall.MaxCount);
+        set
+        {
+            if (value <= 0 || value == _settings.RandomCount)
+            {
+                return;
+            }
+
+            _settings.RandomCount = Math.Clamp(value, 1, RandomCall.MaxCount);
+            LocalSettings.SaveCalls(_settings);
+
+            OnPropertyChanged();
+            RefreshDerived();
+        }
+    }
+
+    public int SelectedDecayMinutes
+    {
+        get => _settings.DecayMinutes > 0 ? _settings.DecayMinutes : (int)RandomCall.DefaultDecayWindow.TotalMinutes;
+        set
+        {
+            if (value <= 0 || value == _settings.DecayMinutes)
+            {
+                return;
+            }
+
+            _settings.DecayMinutes = value;
+            LocalSettings.SaveCalls(_settings);
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DecayHint));
+            RefreshDerived();
+        }
+    }
+
+    /// <summary>衰减窗口那句话 —— "40 分钟"对老师来说不如"一节课"直观。</summary>
+    public string DecayHint
+        => $"被抽中的人会先冷却 {SelectedDecayMinutes} 分钟：这段时间里他的时间因子从 1.00 线性回到 0.00，"
+           + "回到 0 之后就和所有人一样了。";
+
+    /// <summary>当前抽签范围的一句话（界面上给老师核对）。</summary>
+    public string RandomRangeText
+    {
+        get
+        {
+            var candidates = RandomCandidates();
+
+            return candidates.Count == 0
+                ? $"{RandomScopeText}：这个范围里一个人都没有。"
+                : $"{RandomScopeText}：{candidates.Count} 人参与抽签。";
+        }
+    }
+
+    /// <summary>
+    /// 范围的简短说法（"全班" / "「A组」的男生"）。
+    ///
+    /// 单独拎出来，是因为预览那一行也要用它，而两处拼出来的话必须一模一样 ——
+    /// 否则老师会在两行字里读到两个范围。
+    /// </summary>
+    public string RandomScopeText
+    {
+        get
+        {
+            var group = SelectedRandomGroup.Value;
+            var gender = SelectedRandomGender.Value;
+
+            return (group, gender) switch
+            {
+                (null, null) => "全班",
+                ({ } only, null) => $"「{only}」",
+                (null, { } boys) => $"全体{boys}生",
+                ({ } only, { } boys) => $"「{only}」的{boys}生",
+            };
+        }
+    }
+
+    /// <summary>按当前筛选范围取出候选（顺序已打乱）。</summary>
+    private IReadOnlyList<Student> RandomCandidates()
+        => Roster is { } roster
+            ? RandomCall.Candidates(roster.Students, _settings.RandomGroup, _settings.RandomGender)
+            : [];
+
     /// <summary>拼出来的第一句（界面上给老师核对）。</summary>
     public string PreviewText
     {
         get
         {
+            // 随机叫人**不在预览里真的抽**：抽一次就要重置那个人的时间因子，
+            // 而"看一眼预览"不该影响抽签结果。这里只说清范围与人数。
+            if (IsRandomMode)
+            {
+                var candidates = RandomCandidates();
+
+                if (candidates.Count == 0)
+                {
+                    return $"（随机叫人：{RandomScopeText}一个人都没有 —— 换一个小组或性别再试）";
+                }
+
+                // 要抽的人数超过范围内的实际人数时把话说清：只写"抽 3 位"，
+                // 老师会以为屏幕上会出现三个名字，实际只会出现两个。
+                return SelectedRandomCount > candidates.Count
+                    ? $"（随机叫人：发送时从{RandomScopeText}里抽 {candidates.Count} 位 —— 范围内只有 {candidates.Count} 人，你要的是 {SelectedRandomCount} 位）"
+                    : $"（随机叫人：发送时从{RandomScopeText}里抽 {SelectedRandomCount} 位 —— 范围里共 {candidates.Count} 人参与抽签）";
+            }
+
             var messages = ComposeCurrent();
 
             if (messages.Count == 0)
@@ -565,12 +771,16 @@ public partial class CallShoutViewModel : ObservableObject
     private IReadOnlyList<string> ComposeCurrent()
         => CallComposer.Compose(_draft, PickedStudents, Roster, _teacherNameProvider());
 
-    private bool CanSend => PickedCount > 0 && Components.Count > 0 && !IsSending;
-
     /// <summary>把拼出来的句子依次发出去。</summary>
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendCallAsync()
     {
+        if (IsRandomMode)
+        {
+            await SendRandomCallAsync().ConfigureAwait(true);
+            return;
+        }
+
         var messages = ComposeCurrent();
 
         if (messages.Count == 0)
@@ -599,6 +809,55 @@ public partial class CallShoutViewModel : ObservableObject
         }
     }
 
+    /// <summary>随机叫人：抽签 → 拼一句 → 发出去 → 把抽中的人记下来（时间因子落盘）。</summary>
+    private async Task SendRandomCallAsync()
+    {
+        var candidates = RandomCandidates();
+
+        if (candidates.Count == 0)
+        {
+            StatusHint = "这个范围里一个人都没有：换个小组或性别再试。";
+            return;
+        }
+
+        IsSending = true;
+
+        try
+        {
+            var now = DateTimeOffset.Now;
+            var picked = RandomCall.Pick(candidates, SelectedRandomCount, now, _settings.DecayWindow);
+
+            var text = CallComposer.ComposeRandom(_draft, picked, Roster, _teacherNameProvider());
+
+            if (text is null)
+            {
+                StatusHint = "这套模板拼不出内容。";
+                return;
+            }
+
+            // 时间因子在抽中的那一刻就写回内存了（见 RandomCall.Pick），这里负责落盘 ——
+            // 不落盘的话，"刚叫过"这件事一关应用就没了，冷却也就形同虚设。
+            LocalSettings.SaveRosters(_rosterSettings);
+
+            var names = string.Join("、", picked.Select(student => student.Name));
+            var sent = await _sender([text]).ConfigureAwait(true);
+
+            StatusHint = sent > 0
+                ? $"抽到：{names} —— {text}"
+                : $"抽到 {names}，但这条没送出去。";
+
+            RefreshDerived();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException)
+        {
+            StatusHint = $"发送失败：{ex.Message}";
+        }
+        finally
+        {
+            IsSending = false;
+        }
+    }
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SendCallCommand))]
     private bool _isSending;
@@ -615,6 +874,14 @@ public partial class CallShoutViewModel : ObservableObject
         OnPropertyChanged(nameof(PickedSummary));
         OnPropertyChanged(nameof(PreviewText));
 
+        // 模板里加/删「随机叫人」会切换整条发送路径（抽签 or 按勾选逐条），
+        // 所以这几个派生量要一起重算，否则界面会停在上一套控件上。
+        // （小组下拉项不在这里重建 —— 它只在名单换掉时才变，见 RefreshRandomGroupChoices。）
+        OnPropertyChanged(nameof(IsRandomMode));
+        OnPropertyChanged(nameof(IsPickMode));
+        OnPropertyChanged(nameof(RandomRangeText));
+        OnPropertyChanged(nameof(DecayHint));
+
         SendCallCommand.NotifyCanExecuteChanged();
     }
 }
@@ -628,3 +895,10 @@ public sealed record ComponentPaletteItem(string Kind, string Label);
 /// <param name="Value">取值见 <see cref="StudentLabelStyles"/>。</param>
 /// <param name="Label">界面显示文本。</param>
 public sealed record StudentLabelChoice(string Value, string Label);
+
+/// <summary>
+/// 随机叫人里"范围"的下拉项（小组 / 性别共用）。
+/// </summary>
+/// <param name="Value">取值；null 表示不限。</param>
+/// <param name="Label">界面显示文本。</param>
+public sealed record RandomGroupChoice(string? Value, string Label);

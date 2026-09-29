@@ -328,7 +328,8 @@ async function loadTeacherRoster() {
 
   list.innerHTML = active.students.map(s => {
     const checked = callSelection[s.id] ? ' checked' : '';
-    const detail = [s.studentNo, s.shortName, s.group].filter(Boolean).join('，');
+    // 与 App 里的名单页显示同一组字段：学号、简写、小组、性别
+    const detail = [s.studentNo, s.shortName, s.group, s.gender].filter(Boolean).join('，');
 
     return '<div class="pick-row">' +
       '<input type="checkbox" data-call-student="' + escapeAttr(s.id) + '"' + checked + '>' +

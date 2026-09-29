@@ -17,6 +17,29 @@ public sealed class Student
     /// <summary>小组。可空。</summary>
     public string? Group { get; set; }
 
+    /// <summary>
+    /// 性别。可空 —— 名单里没这一列时就是空的，随机叫人里"按性别筛选"也就用不上。
+    /// </summary>
+    public string? Gender { get; set; }
+
+    /// <summary>
+    /// 时间因子（隐形 tag）：越大代表"刚被叫过"，被随机抽中的概率越小。
+    ///
+    /// 语义见 <see cref="RandomCall"/>：0.00 表示很久没叫到（概率最高），上限 1.00；
+    /// 被抽中一次就重置到 0.95～1.00 之间，之后随时间线性衰减回 0。
+    /// 界面上不显示它 —— 它对老师没有意义，显示出来只会让人以为哪里坏了。
+    /// </summary>
+    public double TimeFactor { get; set; }
+
+    /// <summary>
+    /// 上一次"把时间因子写成 <see cref="TimeFactor"/> 这个值"的时刻。
+    ///
+    /// 存时刻而不是靠定时器不停改：因子随时间衰减，而"现在是多少"用一个减法就推得出来
+    /// （见 <see cref="RandomCall.EffectiveFactor"/>）—— 后台跑个计时器去改它，
+    /// 只会让应用必须一直开着，还会在休眠、改系统时间之后彻底失准。
+    /// </summary>
+    public DateTimeOffset? FactorSetAt { get; set; }
+
     /// <summary>界面上显示这个学生时用哪个标识，见 <see cref="StudentLabelStyles"/>。</summary>
     public string? LabelStyle { get; set; }
 
@@ -144,67 +167,123 @@ public readonly record struct RosterImportResult(StudentRoster? Roster, IReadOnl
 }
 
 /// <summary>
-/// 学生名单的 CSV 导入。
+/// 学生名单的导入：CSV（粘贴或文件）与 Excel（.xlsx / .xls）走**同一套行解析**。
 ///
-/// 与"控制台批量导入老师"用的是同一套宽容规则：带表头、带空行、带引号、
-/// 从 Excel 直接复制粘贴都能读。老师的名单通常就是从教务系统里导出、
-/// 或者在 Excel 里手打的一份表 —— 要求它格式规整，等于要求老师先学一遍 CSV。
+/// 为什么两种格式共用一段：学校里流传的名单一半是教务系统导出的表、一半是从 Excel
+/// 里复制粘贴的一片字，而"哪些行该跳过""表头怎么认""空列怎么算"这些规则必须一致 ——
+/// 否则同一份名单从文件导入和从剪贴板导入会得到两个结果，那才是最难查的一种错。
+///
+/// 宽容规则（与"控制台批量导入老师"同一套）：带表头、带空行、带引号、
+/// 少几列都行。老师的名单通常是从教务系统里导出、或者在 Excel 里手打的，
+/// 要求它格式规整，等于要求老师先学一遍 CSV。
 /// </summary>
 public static class RosterCsv
 {
-    /// <summary>列顺序：姓名,学号,简写,小组。后三列可选。</summary>
+    /// <summary>列顺序：姓名,学号,简写,小组,性别。只有姓名必填，后面四列可选。</summary>
+    public static IReadOnlyList<string> Columns { get; } = ["姓名", "学号", "简写", "小组", "性别"];
+
+    /// <summary>从一段文本（粘贴的内容，或 .csv 文件的内容）解析。</summary>
     public static RosterImportResult Parse(string? text, string rosterName)
     {
-        var roster = new StudentRoster { Name = string.IsNullOrWhiteSpace(rosterName) ? "学生名单" : rosterName.Trim() };
-        var skipped = new List<string>();
-
         if (string.IsNullOrWhiteSpace(text))
         {
             return new RosterImportResult(null, ["没有可导入的内容。"]);
         }
 
-        var lineNumber = 0;
+        return FromRows(
+            text.ReplaceLineEndings("\n").Split('\n').Select(CsvLine.Split).ToList(),
+            rosterName,
+            source: null);
+    }
 
-        foreach (var raw in text.ReplaceLineEndings("\n").Split('\n'))
+    /// <summary>从一张表里解析：<paramref name="rows"/> 已经按行/列切好（Excel 与 CSV 都归到这里）。</summary>
+    /// <param name="rows">每一行是一个字段数组。</param>
+    /// <param name="rosterName">名单名。</param>
+    /// <param name="source">来源文件名（用于提示里写清是哪一份文件；为空表示粘贴的内容）。</param>
+    public static RosterImportResult FromRows(
+        IReadOnlyList<IReadOnlyList<string?>> rows,
+        string rosterName,
+        string? source = null)
+    {
+        var roster = new StudentRoster { Name = string.IsNullOrWhiteSpace(rosterName) ? "学生名单" : rosterName.Trim() };
+        var skipped = new List<string>();
+        var where = string.IsNullOrWhiteSpace(source) ? string.Empty : $"（{source}）";
+
+        var isFirstRow = true;
+
+        for (var index = 0; index < rows.Count; index++)
         {
-            lineNumber++;
-            var line = raw.Trim();
+            var fields = rows[index];
+            var lineNumber = index + 1;
 
-            if (line.Length == 0 || line.StartsWith('#'))
+            // 整行空：跳过，不当作错误（表格里常有这种收尾行）
+            if (fields.All(string.IsNullOrWhiteSpace))
             {
                 continue;
             }
 
-            var fields = CsvLine.Split(line);
-
-            // 表头行跳过：从 Excel 复制时几乎一定带着它
-            if (lineNumber == 1 &&
-                (fields[0].Contains("姓名") || fields[0].Equals("name", StringComparison.OrdinalIgnoreCase)))
+            // 以 # 开头的注释行：粘贴的名单里常有人拿它写"三年二班名单"这种标题
+            if (fields.Count == 1 && (fields[0]?.TrimStart().StartsWith('#') ?? false))
             {
                 continue;
             }
 
-            var name = fields.Length > 0 ? fields[0] : string.Empty;
+            var first = (fields.Count > 0 ? fields[0] : null)?.Trim() ?? string.Empty;
 
-            if (string.IsNullOrWhiteSpace(name))
+            // 表头行跳过：从 Excel 复制、或直接读表格时几乎一定带着它
+            if (isFirstRow && (first.Contains("姓名") || first.Equals("name", StringComparison.OrdinalIgnoreCase)))
             {
-                skipped.Add($"第 {lineNumber} 行：没有姓名，已跳过。");
+                isFirstRow = false;
+                continue;
+            }
+
+            isFirstRow = false;
+
+            if (first.Length == 0)
+            {
+                skipped.Add($"第 {lineNumber} 行{where}：没有姓名，已跳过。");
                 continue;
             }
 
             roster.Students.Add(new Student
             {
-                Name = name,
+                Name = first,
                 StudentNo = At(fields, 1),
                 ShortName = At(fields, 2),
                 Group = At(fields, 3),
+                Gender = NormalizeGender(At(fields, 4)),
             });
         }
 
         return new RosterImportResult(roster.Students.Count > 0 ? roster : null, skipped);
     }
 
+    /// <summary>
+    /// 把性别统一成「男」「女」，认不出来的留空。
+    ///
+    /// 认得出几种常见写法（男/女、M/F、male/female、1/0、男生/女生）——
+    /// 教务系统导出的表里这几样都有；认不出就留空，而不是原样存进去：
+    /// 留空只意味着"这一项筛不了"，原样存进去则会让"按性别筛选"出现
+    /// 「男」「男生」「M」三个互不相干的选项。
+    /// </summary>
+    public static string? NormalizeGender(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var text = value.Trim();
+
+        return text switch
+        {
+            "男" or "男生" or "男性" or "M" or "m" or "male" or "Male" or "MALE" or "1" => "男",
+            "女" or "女生" or "女性" or "F" or "f" or "female" or "Female" or "FEMALE" or "0" => "女",
+            _ => null,
+        };
+    }
+
     /// <summary>取第 n 列；没有或为空都返回 null（空字符串会被写成"填了但空着"）。</summary>
-    private static string? At(string[] fields, int index)
-        => index < fields.Length && !string.IsNullOrWhiteSpace(fields[index]) ? fields[index] : null;
+    private static string? At(IReadOnlyList<string?> fields, int index)
+        => index < fields.Count && !string.IsNullOrWhiteSpace(fields[index]) ? fields[index]!.Trim() : null;
 }

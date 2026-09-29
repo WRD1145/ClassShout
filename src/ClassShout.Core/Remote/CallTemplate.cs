@@ -21,7 +21,16 @@ public static class MessageComponentKinds
     /// <summary>老师自己的名字（含任教科目，例如"数学张老师"）。</summary>
     public const string Teacher = "teacher";
 
-    public static readonly string[] All = [Text, StudentName, StudentShort, StudentNo, Group, Teacher];
+    /// <summary>
+    /// 随机叫人：抽中的那几位学生的姓名（顿号分隔）。
+    ///
+    /// 与其他组件不同，它不取"当前这位学生"的字段 —— 由谁出现在这句话里是抽签决定的
+    /// （见 <see cref="RandomCall"/>），所以渲染时要一次拿到抽中的整组人。
+    /// </summary>
+    public const string RandomStudent = "randomStudent";
+
+    public static readonly string[] All =
+        [Text, StudentName, StudentShort, StudentNo, Group, Teacher, RandomStudent];
 
     /// <summary>界面上那个组件叫什么。</summary>
     public static string Label(string kind) => kind switch
@@ -31,12 +40,16 @@ public static class MessageComponentKinds
         StudentNo => "学生（学号）",
         Group => "小组成员",
         Teacher => "教师名字",
+        RandomStudent => "随机叫人",
         _ => "文字",
     };
 
     /// <summary>是不是"每个学生一条"的那类组件。</summary>
     public static bool IsPerStudent(string kind)
         => kind is StudentName or StudentShort or StudentNo;
+
+    /// <summary>是不是"随机叫人"这一种（它会改变整条呼叫的拼法，见 CallComposer）。</summary>
+    public static bool IsRandom(string kind) => kind == RandomStudent;
 }
 
 /// <summary>
@@ -70,6 +83,11 @@ public sealed class CallTemplate
     /// <summary>模板里有没有"小组成员"组件 —— 有它时按小组归并发送，而不是逐个学生。</summary>
     public bool HasGroupComponent => Components.Any(c => c.Kind == MessageComponentKinds.Group);
 
+    /// <summary>
+    /// 模板里有没有"随机叫人"组件 —— 有它时不再按勾选的学生逐条发，而是先抽签再拼一句。
+    /// </summary>
+    public bool HasRandomComponent => Components.Any(c => MessageComponentKinds.IsRandom(c.Kind));
+
     /// <summary>给界面看的摘要：组件用 · 连起来。</summary>
     public string Summary
     {
@@ -96,6 +114,27 @@ public sealed class TeacherCallSettings
 
     public string? ActiveTemplateId { get; set; }
 
+    // ======================== 随机叫人的参数 ========================
+    //
+    // 三个都存本机：它们是"这节课想怎么抽"的临时选择，不该跑到服务器上去。
+    // 衰减窗口也是每位老师自己的偏好 —— 有的班一节课 40 分钟，有的连堂 90 分钟。
+
+    /// <summary>随机叫人的范围：只要这一组；留空表示不限。</summary>
+    public string? RandomGroup { get; set; }
+
+    /// <summary>随机叫人的范围：只要这个性别（「男」「女」）；留空表示不限。</summary>
+    public string? RandomGender { get; set; }
+
+    /// <summary>一次抽几位（1 ～ <see cref="RandomCall.MaxCount"/>）。</summary>
+    public int RandomCount { get; set; } = 1;
+
+    /// <summary>时间因子从 1.00 衰减到 0.00 要多少分钟。</summary>
+    public int DecayMinutes { get; set; } = (int)RandomCall.DefaultDecayWindow.TotalMinutes;
+
+    /// <summary>衰减窗口（分钟换算成 TimeSpan，非法值退回默认）。</summary>
+    public TimeSpan DecayWindow =>
+        DecayMinutes > 0 ? TimeSpan.FromMinutes(DecayMinutes) : RandomCall.DefaultDecayWindow;
+
     /// <summary>默认给一份能直接用的模板 —— 空白的组件面板对第一次用的人毫无提示作用。</summary>
     public static CallTemplate DefaultTemplate() => new()
     {
@@ -109,7 +148,35 @@ public sealed class TeacherCallSettings
         ],
     };
 
+    /// <summary>随机叫人那条默认模板：一句话把抽到的人叫起来回答。</summary>
+    public static CallTemplate RandomTemplate() => new()
+    {
+        Name = "随机叫人",
+        Components =
+        [
+            MessageComponent.Of(MessageComponentKinds.Text, "请 "),
+            MessageComponent.Of(MessageComponentKinds.RandomStudent),
+            MessageComponent.Of(MessageComponentKinds.Text, " 来回答这个问题"),
+        ],
+    };
+
     public CallTemplate? Active => Templates.FirstOrDefault(t => t.Id == ActiveTemplateId) ?? Templates.FirstOrDefault();
+
+    /// <summary>把离谱的取值收回来（名单/设置文件都可能被手改过）。</summary>
+    public TeacherCallSettings Normalized()
+    {
+        RandomCount = Math.Clamp(RandomCount <= 0 ? 1 : RandomCount, 1, RandomCall.MaxCount);
+
+        if (!RandomCall.DecayChoices.Contains(TimeSpan.FromMinutes(DecayMinutes)))
+        {
+            DecayMinutes = (int)RandomCall.DefaultDecayWindow.TotalMinutes;
+        }
+
+        RandomGender = RosterCsv.NormalizeGender(RandomGender);
+        RandomGroup = string.IsNullOrWhiteSpace(RandomGroup) ? null : RandomGroup.Trim();
+
+        return this;
+    }
 }
 
 /// <summary>
@@ -200,6 +267,68 @@ public static class CallComposer
         }
 
         return messages;
+    }
+
+    /// <summary>
+    /// 随机叫人：把抽中的那几位拼成**一句**。
+    ///
+    /// 与 <see cref="Compose"/> 的区别在"谁出现在句子里"：那边是勾选的学生各发一条，
+    /// 这边是先抽签（见 <see cref="RandomCall.Pick"/>）、再把这一组人拼进同一句 ——
+    /// 随机叫人要的正是"请 张三、李四 来回答"这样一句话，而不是抽三个人发三条。
+    ///
+    /// 模板里同时写了别的组件时按这个规矩解释（写在文档里，免得靠猜）：
+    ///   · 「随机叫人」→ 抽中这几位，顿号分隔；
+    ///   · 姓名 / 简写 / 学号 → 抽中的第一位（用来做"张三 请回答"这种写法）；
+    ///   · 「小组成员」→ 抽中这几位所在的小组（去重，顿号分隔）。
+    /// </summary>
+    public static string? ComposeRandom(
+        CallTemplate template,
+        IReadOnlyList<Student> picked,
+        StudentRoster? roster,
+        string teacherName)
+    {
+        if (template.Components.Count == 0 || picked.Count == 0)
+        {
+            return null;
+        }
+
+        var builder = new System.Text.StringBuilder();
+
+        foreach (var component in template.Components)
+        {
+            builder.Append(component.Kind switch
+            {
+                MessageComponentKinds.RandomStudent => string.Join("、", picked.Select(s => s.Name)),
+
+                MessageComponentKinds.StudentName => picked[0].Name,
+                MessageComponentKinds.StudentShort => picked[0].ShortName ?? string.Empty,
+                MessageComponentKinds.StudentNo => picked[0].StudentNo ?? string.Empty,
+
+                MessageComponentKinds.Group => PickedGroups(picked),
+
+                MessageComponentKinds.Teacher => teacherName,
+
+                _ => component.Text ?? string.Empty,
+            });
+        }
+
+        _ = roster;
+
+        var text = builder.ToString().Trim();
+        return text.Length == 0 ? null : text;
+    }
+
+    /// <summary>抽中这几位所在的小组（去重、顿号分隔）。没分组的不占位置。</summary>
+    private static string PickedGroups(IReadOnlyList<Student> picked)
+    {
+        var groups = picked
+            .Select(student => student.Group?.Trim())
+            .Where(group => !string.IsNullOrWhiteSpace(group))
+            .Select(group => group!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return groups.Count == 0 ? string.Empty : string.Join("、", groups);
     }
 
     /// <summary>把一条消息渲染出来。<paramref name="selected"/> 用于"小组成员"取同组的人。</summary>

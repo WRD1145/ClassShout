@@ -1368,6 +1368,96 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         RefreshRosterStudents();
     }
 
+    /// <summary>
+    /// 从文件导入名单（.csv / .txt / .xlsx / .xls）。
+    ///
+    /// 与"粘贴导入"共用同一套行解析（见 <see cref="RosterFile"/>）：同一份名单从文件进来
+    /// 和从剪贴板进来必须得到同一个结果，否则"表头怎么认""缺列怎么算"会变成两套规则。
+    /// </summary>
+    [RelayCommand]
+    private async Task ImportRosterFromFileAsync()
+    {
+        if (!TeacherPlatform.HasRosterFilePicker)
+        {
+            RosterHint = "这个平台还没接上文件选择器：请把名单内容直接粘贴到上面的输入框。";
+            return;
+        }
+
+        RosterFilePickResult? picked;
+
+        try
+        {
+            picked = await TeacherPlatform.PickRosterFileAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            RosterHint = $"打开文件选择器失败：{ex.Message}";
+            return;
+        }
+
+        // 用户按了取消：什么都不做，也不要留一句"导入失败"
+        if (picked is not { } file)
+        {
+            return;
+        }
+
+        var name = string.IsNullOrWhiteSpace(RosterImportName)
+            ? Path.GetFileNameWithoutExtension(file.FileName)
+            : RosterImportName.Trim();
+
+        RosterImportResult result;
+
+        try
+        {
+            // Excel 读的时候要能回头读文件中央目录，所以先把内容整个读进内存
+            // —— 安卓从 SAF 拿到的流常常不支持 Seek。
+            using var buffer = new MemoryStream();
+            await file.Content.CopyToAsync(buffer).ConfigureAwait(true);
+            buffer.Position = 0;
+
+            result = RosterFile.Read(file.FileName, buffer, name);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            RosterHint = $"读这个文件失败：{ex.Message}";
+            return;
+        }
+        finally
+        {
+            await file.Content.DisposeAsync().ConfigureAwait(true);
+        }
+
+        if (!result.Ok || result.Roster is null)
+        {
+            RosterHint = result.SkippedLines.Count > 0
+                ? string.Join(" ", result.SkippedLines)
+                : "没有读到任何学生。表的第一列应当是姓名（表头可有可无）。";
+
+            AddLog($"导入「{file.FileName}」失败：{RosterHint}");
+            return;
+        }
+
+        _rosterSettings.Rosters.Add(result.Roster);
+        _rosterSettings.ActiveRosterId = result.Roster.Id;
+        LocalSettings.SaveRosters(_rosterSettings);
+
+        RosterImportText = string.Empty;
+        RosterImportName = string.Empty;
+
+        var withGender = result.Roster.Students.Count(s => !string.IsNullOrWhiteSpace(s.Gender));
+        var skipped = result.SkippedLines.Count == 0
+            ? string.Empty
+            : $"（跳过 {result.SkippedLines.Count} 行：{string.Join(" ", result.SkippedLines)}）";
+
+        RosterHint = $"已从「{file.FileName}」导入「{result.Roster.Name}」，共 {result.Roster.Students.Count} 名学生"
+                     + (withGender > 0 ? $"（其中 {withGender} 位填了性别）" : "（表里没有性别这一列）")
+                     + $"。{skipped}";
+
+        AddLog(RosterHint);
+
+        RefreshRosterStudents();
+    }
+
     /// <summary>删除当前名单。</summary>
     [RelayCommand]
     private void DeleteRoster()
@@ -2846,6 +2936,43 @@ public sealed class StudentRow
     public string ShortNameText => Student.HasShortName ? Student.ShortName! : "—";
 
     public string GroupText => Student.HasGroup ? Student.Group! : "—";
+
+    /// <summary>
+    /// 学号 / 简写 / 小组 / 性别摊平成一行。
+    ///
+    /// 这几项抽人时都要拿来筛，所以让老师一眼看见谁缺了哪一项 —— 光显示
+    /// 「小组」的话，导入的表格少填一列没人会发现，直到抽不到人为止。
+    /// 隐形的「时间因子」不在这里出现。
+    /// </summary>
+    public string DetailText
+    {
+        get
+        {
+            var parts = new List<string>(4);
+
+            if (Student.HasStudentNo)
+            {
+                parts.Add($"学号 {Student.StudentNo}");
+            }
+
+            if (Student.HasShortName)
+            {
+                parts.Add($"简写 {Student.ShortName}");
+            }
+
+            if (Student.HasGroup)
+            {
+                parts.Add($"小组 {Student.Group}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(Student.Gender))
+            {
+                parts.Add($"性别 {Student.Gender}");
+            }
+
+            return parts.Count == 0 ? "未填学号 / 简写 / 小组 / 性别" : string.Join(" · ", parts);
+        }
+    }
 
     public IRelayCommand UseCommand { get; }
 }

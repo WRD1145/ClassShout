@@ -5,6 +5,7 @@ using Avalonia.Markup.Xaml;
 using ClassShout.Core.Remote;
 using ClassShout.Design.Controls;
 using ClassShout.Design.Theming;
+using ClassShout.Teacher.Services;
 using ClassShout.Teacher.ViewModels;
 
 namespace ClassShout.Teacher.Views;
@@ -233,6 +234,66 @@ public partial class MainView : UserControl
             vm.ShowSnackbar($"打开这张图片失败：{ex.Message}");
         }
     }
+
+    /// <summary>
+    /// 从文件导入名单（.csv / .xlsx）。
+    ///
+    /// 与选图片不同，这里走的是平台层的"选文件"钩子：安卓上这条路的实现是 SAF
+    /// （要一个 ActivityResult），而桌面端是 StorageProvider —— 两边都只有平台头做得了。
+    /// 所以视图这里不再自己弹选择器，而是把选择器**注册**给平台层，
+    /// 让"导入名单"这个动作在两种宿主下是同一段视图模型代码。
+    /// </summary>
+    private void OnPickRosterFileClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        RegisterRosterFilePicker();
+
+        if (DataContext is TeacherShellViewModel vm)
+        {
+            vm.ImportRosterFromFileCommand.Execute(null);
+        }
+    }
+
+    /// <summary>把桌面端的文件选择器接到平台层（幂等：重复注册同一份即可）。</summary>
+    private void RegisterRosterFilePicker()
+        => TeacherPlatform.RegisterRosterFilePicker(async () =>
+        {
+            var top = TopLevel.GetTopLevel(this);
+
+            if (top is null)
+            {
+                return null;
+            }
+
+            var files = await top.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+            {
+                Title = "选一份学生名单",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new Avalonia.Platform.Storage.FilePickerFileType("名单文件（CSV / Excel）")
+                    {
+                        Patterns = ["*.csv", "*.txt", "*.xlsx", "*.xlsm", "*.xls"],
+                        MimeTypes =
+                        [
+                            "text/csv",
+                            "text/plain",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "application/vnd.ms-excel",
+                        ],
+                    },
+                ],
+            });
+
+            if (files.Count == 0)
+            {
+                return null;
+            }
+
+            var stream = await files[0].OpenReadAsync();
+            return new RosterFilePickResult(files[0].Name, stream);
+        });
 
     /// <summary>
     /// 换主题色：先存、再当场生效。

@@ -50,7 +50,139 @@ public class MainActivity : AvaloniaMainActivity<App>
             return Task.CompletedTask;
         });
 
+        // 选一份名单文件（.csv / .xlsx）走 SAF：桌面端是 StorageProvider，
+        // 安卓端则要一个 ActivityResult —— 这就是"选文件"必须放在平台层的原因。
+        TeacherPlatform.RegisterRosterFilePicker(PickRosterFileAsync);
+
         return base.CustomizeAppBuilder(builder);
+    }
+
+    private const int PickRosterFileRequestCode = 1002;
+
+    /// <summary>等待文件选择结果的那次调用。</summary>
+    private TaskCompletionSource<RosterFilePickResult?>? _rosterPick;
+
+    /// <summary>
+    /// 用 SAF 让老师挑一个名单文件。
+    ///
+    /// 用 ACTION_OPEN_DOCUMENT（而不是 GET_CONTENT）：它能拿到一个可长期读取的 Uri，
+    /// 而且"最近"列表里会记住位置 —— 老师每学期导一次名单，不该每次都从头翻目录。
+    /// </summary>
+    private Task<RosterFilePickResult?> PickRosterFileAsync()
+    {
+        // 上一次还没结束就再点一次：把上一次当作取消，避免两次选择互相覆盖
+        _rosterPick?.TrySetResult(null);
+
+        var pick = new TaskCompletionSource<RosterFilePickResult?>();
+        _rosterPick = pick;
+
+        var intent = new Intent(Intent.ActionOpenDocument);
+        intent.AddCategory(Intent.CategoryOpenable);
+        intent.SetType("*/*");
+        intent.PutExtra(Intent.ExtraMimeTypes, new[]
+        {
+            "text/csv",
+            "text/comma-separated-values",
+            "text/plain",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+        });
+
+        try
+        {
+            StartActivityForResult(intent, PickRosterFileRequestCode);
+        }
+        catch (ActivityNotFoundException ex)
+        {
+            // 设备上没有任何文件管理器：如实回报，别让界面永远停在"正在选文件"
+            _rosterPick = null;
+            global::Android.Util.Log.Warn("ClassShout", $"没有可用的文件选择器：{ex.Message}");
+            return Task.FromResult<RosterFilePickResult?>(null);
+        }
+
+        return pick.Task;
+    }
+
+    protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
+    {
+        base.OnActivityResult(requestCode, resultCode, data);
+
+        if (requestCode != PickRosterFileRequestCode)
+        {
+            return;
+        }
+
+        var pick = _rosterPick;
+        _rosterPick = null;
+
+        if (pick is null)
+        {
+            return;
+        }
+
+        if (resultCode != Result.Ok || data?.Data is not { } uri)
+        {
+            // 用户取消：不是错误，界面不该弹提示
+            pick.TrySetResult(null);
+            return;
+        }
+
+        try
+        {
+            // 先把内容整个读进内存再交出去：Excel 需要可 Seek 的流，
+            // 而 SAF 给的 ContentStream 通常不支持 Seek；顺带也让调用方
+            // 不必担心这个 Uri 的读取权限什么时候过期。
+            var buffer = new MemoryStream();
+
+            using (var stream = ContentResolver?.OpenInputStream(uri))
+            {
+                if (stream is null)
+                {
+                    pick.TrySetResult(null);
+                    return;
+                }
+
+                stream.CopyTo(buffer);
+            }
+
+            buffer.Position = 0;
+
+            pick.TrySetResult(new RosterFilePickResult(QueryDisplayName(uri), buffer));
+        }
+        catch (Exception ex) when (ex is Java.IO.IOException or Java.Lang.SecurityException or UnauthorizedAccessException)
+        {
+            global::Android.Util.Log.Warn("ClassShout", $"读选中的文件失败：{ex.Message}");
+            pick.TrySetResult(null);
+        }
+    }
+
+    /// <summary>从 SAF 的 Uri 里问出显示名（扩展名决定用哪种读法）。</summary>
+    private string QueryDisplayName(global::Android.Net.Uri uri)
+    {
+        try
+        {
+            using var cursor = ContentResolver?.Query(uri, null, null, null, null);
+
+            if (cursor is not null && cursor.MoveToFirst())
+            {
+                var index = cursor.GetColumnIndex(global::Android.Provider.IOpenableColumns.DisplayName);
+                if (index >= 0)
+                {
+                    var name = cursor.GetString(index);
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        return name!;
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is Java.Lang.Exception or InvalidOperationException)
+        {
+            // 问不到名字就退回 Uri 的最后一段；扩展名认不出时 RosterFile 会按文本读
+            global::Android.Util.Log.Warn("ClassShout", $"取文件名失败：{ex.Message}");
+        }
+
+        return uri.LastPathSegment ?? "名单文件";
     }
 
     protected override void OnCreate(Bundle? savedInstanceState)

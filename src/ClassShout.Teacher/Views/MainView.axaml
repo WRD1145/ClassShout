@@ -177,7 +177,15 @@
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="每行一位学生：姓名,学号,简写,小组 —— 只有姓名是必填，后面三项留空就行。可以直接从 Excel 里复制粘贴，带表头也没关系。" />
+                           Text="每行一位学生：姓名,学号,简写,小组,性别 —— 只有姓名是必填，后面四项留空就行。可以直接从 Excel 里复制粘贴，带表头也没关系。" />
+
+                <!-- 从文件导入：老师手里的名单多半就是个表格，让他"先另存为 CSV"是多一道无用功 -->
+                <Button Classes="tonal block" Click="OnPickRosterFileClick">
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                    <md3:Md3Icon Kind="FileImport" Size="18" />
+                    <TextBlock Text="从文件导入（.csv / .xlsx）" VerticalAlignment="Center" />
+                  </StackPanel>
+                </Button>
 
                 <TextBox Classes="outlined dense"
                          Watermark="这份名单叫什么（例如 三年二班）"
@@ -218,7 +226,7 @@
                             <TextBlock Classes="bodyMedium" Text="{Binding Label}" />
                             <TextBlock Classes="bodySmall"
                                        Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                                       Text="{Binding GroupText, StringFormat='小组：{0}'}" />
+                                       Text="{Binding DetailText}" />
                           </StackPanel>
                           <Button Grid.Column="1" Classes="tonal small" Content="叫这位"
                                   VerticalAlignment="Center"
@@ -388,42 +396,48 @@
                              Text="{Binding Call.PickedSummary}" />
                 </Grid>
 
-                <StackPanel Spacing="6">
-                  <TextBlock Classes="bodySmall"
-                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                             Text="列表里按哪种标识显示（只有填过的学生才会出现在这一档里）" />
-                  <ComboBox HorizontalAlignment="Stretch"
-                            ItemsSource="{Binding Call.LabelStyles}"
-                            SelectedItem="{Binding Call.SelectedLabelStyle}">
-                    <ComboBox.ItemTemplate>
-                      <DataTemplate x:DataType="vm:StudentLabelChoice">
-                        <TextBlock Text="{Binding Label}" />
-                      </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                  </ComboBox>
+                <!-- 下面这一整块是"手动勾学生"才用得上的：随机模式下勾选不参与发送
+                     （发送时按范围抽），留着它们会出现两个小组控件、各说各的。 -->
+                <StackPanel Spacing="10" IsVisible="{Binding Call.IsPickMode}">
+                  <StackPanel Spacing="6">
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="列表里按哪种标识显示（只有填过的学生才会出现在这一档里）" />
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Call.LabelStyles}"
+                              SelectedItem="{Binding Call.SelectedLabelStyle}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:StudentLabelChoice">
+                          <TextBlock Text="{Binding Label}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                  </StackPanel>
+
+                  <StackPanel Orientation="Horizontal" Spacing="8"
+                              IsVisible="{Binding Call.HasGroups}">
+                    <TextBlock Classes="bodySmall" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="按小组叫：" />
+                    <ItemsControl ItemsSource="{Binding Call.Groups}">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                          <WrapPanel />
+                        </ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                          <Button Classes="tonal small" Margin="0,0,6,0" Content="{Binding}"
+                                  Command="{Binding $parent[ItemsControl].((vm:TeacherShellViewModel)DataContext).Call.PickGroupCommand}"
+                                  CommandParameter="{Binding}" />
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding Call.HasGroups}">
-                  <TextBlock Classes="bodySmall" VerticalAlignment="Center"
-                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                             Text="按小组叫：" />
-                  <ItemsControl ItemsSource="{Binding Call.Groups}">
-                    <ItemsControl.ItemsPanel>
-                      <ItemsPanelTemplate>
-                        <WrapPanel />
-                      </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                      <DataTemplate x:DataType="x:String">
-                        <Button Classes="tonal small" Margin="0,0,6,0" Content="{Binding}"
-                                Command="{Binding $parent[ItemsControl].((vm:TeacherShellViewModel)DataContext).Call.PickGroupCommand}"
-                                CommandParameter="{Binding}" />
-                      </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                  </ItemsControl>
-                </StackPanel>
-
-                <ItemsControl ItemsSource="{Binding Call.Students}" MaxHeight="320">
+                <ItemsControl ItemsSource="{Binding Call.Students}" MaxHeight="320"
+                              IsVisible="{Binding Call.IsPickMode}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:StudentPickRow">
                       <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,2">
@@ -444,11 +458,81 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
+                <!-- 随机叫人：模板里放了「随机叫人」组件时，勾学生那一块换成抽签设置 -->
+                <StackPanel Spacing="10" IsVisible="{Binding Call.IsRandomMode}">
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="这套模板里有「随机叫人」：发送时按下面的范围抽签，抽到的人会先冷却一阵子（时间因子），冷却期内更难被再抽到。" />
+
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                    <StackPanel Spacing="4">
+                      <TextBlock Classes="bodyMedium" Text="小组" />
+                      <ComboBox HorizontalAlignment="Stretch"
+                                ItemsSource="{Binding Call.RandomGroupChoices}"
+                                SelectedItem="{Binding Call.SelectedRandomGroup}">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate x:DataType="vm:RandomGroupChoice">
+                            <TextBlock Text="{Binding Label}" />
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Spacing="4">
+                      <TextBlock Classes="bodyMedium" Text="性别" />
+                      <ComboBox HorizontalAlignment="Stretch"
+                                ItemsSource="{Binding Call.RandomGenderChoices}"
+                                SelectedItem="{Binding Call.SelectedRandomGender}">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate x:DataType="vm:RandomGroupChoice">
+                            <TextBlock Text="{Binding Label}" />
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                    </StackPanel>
+                  </Grid>
+
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                    <StackPanel Spacing="4">
+                      <TextBlock Classes="bodyMedium" Text="一次抽几位" />
+                      <ComboBox HorizontalAlignment="Stretch"
+                                ItemsSource="{Binding Call.RandomCountChoices}"
+                                SelectedItem="{Binding Call.SelectedRandomCount}" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Spacing="4">
+                      <TextBlock Classes="bodyMedium" Text="冷却多久（分钟）" />
+                      <ComboBox HorizontalAlignment="Stretch"
+                                ItemsSource="{Binding Call.DecayChoices}"
+                                SelectedItem="{Binding Call.SelectedDecayMinutes}" />
+                    </StackPanel>
+                  </Grid>
+
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding Call.RandomRangeText}" />
+
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding Call.DecayHint}" />
+                </StackPanel>
+
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                   <Button Grid.Column="0" Classes="outlined" Content="清空选择"
+                          IsVisible="{Binding Call.IsPickMode}"
                           Command="{Binding Call.ClearPicksCommand}" />
                   <Button Grid.Column="1" Classes="block" Content="呼叫"
+                          IsVisible="{Binding Call.IsPickMode}"
                           Command="{Binding Call.SendCallCommand}" />
+
+                  <Button Grid.Column="0" Grid.ColumnSpan="2" Classes="block"
+                          IsVisible="{Binding Call.IsRandomMode}"
+                          Command="{Binding Call.SendCallCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                      <md3:Md3Icon Kind="DiceMultiple" Size="18" />
+                      <TextBlock Text="随机叫人" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </Button>
                 </Grid>
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"

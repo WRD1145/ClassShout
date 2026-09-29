@@ -617,6 +617,24 @@ internal static class Program
     }
 
     /// <summary>
+    /// 种完种子数据之后把某个设置文件还原回去。
+    ///
+    /// 视图模型在构造时就把内容读进内存了，所以渲染过程不必占着使用者的真实设置文件 ——
+    /// 预览工具跑在别人的机器上时，这一点是"看一眼界面"与"改掉别人的名单"的区别。
+    /// </summary>
+    private static void Restore(string path, bool had, string? backup)
+    {
+        if (had && backup is not null)
+        {
+            File.WriteAllText(path, backup);
+        }
+        else if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
     /// 教师端"服务器地址"这条配置的断言。
     ///
     /// 锁的是一个具体的死锁：服务器地址原本和「教室 UUID / 口令」挤在同一张卡里，
@@ -1157,7 +1175,7 @@ internal static class Program
                     {
                         var settings = new TeacherRosterSettings();
                         var parsed = RosterCsv.Parse(
-                            "张三,20250101,小张,A组\n李四,20250102,,B组\n王五\n赵六,20250105,六六,A组",
+                            "张三,20250101,小张,A组,男\n李四,20250102,,B组,女\n王五,,,,\n赵六,20250105,六六,A组,男",
                             "三年二班");
 
                         if (parsed.Roster is { } roster)
@@ -1200,7 +1218,7 @@ internal static class Program
                     {
                         var settings = new TeacherRosterSettings();
                         var parsed = RosterCsv.Parse(
-                            "张三,20250101,小张,A组\n李四,20250102,,A组\n王五,,小五,B组\n赵六,20250105,六六,B组",
+                            "张三,20250101,小张,A组,男\n李四,20250102,,A组,女\n王五,,小五,B组,男\n赵六,20250105,六六,B组,女",
                             "三年二班");
 
                         if (parsed.Roster is { } roster)
@@ -1234,6 +1252,63 @@ internal static class Program
                         {
                             File.Delete(path);
                         }
+                    }
+                }, 430, 1700,
+                _ => null),
+
+            // 教师端「呼叫」页的随机模式：模板里带上「随机叫人」之后，学生列表让位给
+            // 小组 / 性别 / 人数 / 冷却这四项，发送按钮也换成「随机叫人」。
+            //
+            // 这一块平时是**藏着的**（要先从组件面板里把「随机叫人」拖进拼装区），
+            // 而"藏起来的排版走样"正是最容易漏的一类问题 —— 所以专门导一张。
+            // 种子刻意选了「A组 + 只要男生 + 2 位」：这样范围那一行、人数与冷却两个
+            // 下拉框都有内容可看，也才看得出筛选之后范围内还剩几个人。
+            new("teacher-call-random",
+                () =>
+                {
+                    var rosterPath = Path.Combine(LocalSettings.Directory, "teacher-rosters.json");
+                    var callsPath = Path.Combine(LocalSettings.Directory, "teacher-calls.json");
+                    var hadRoster = File.Exists(rosterPath);
+                    var backupRoster = hadRoster ? File.ReadAllText(rosterPath) : null;
+                    var hadCalls = File.Exists(callsPath);
+                    var backupCalls = hadCalls ? File.ReadAllText(callsPath) : null;
+
+                    try
+                    {
+                        var rosters = new TeacherRosterSettings();
+                        var parsed = RosterCsv.Parse(
+                            "张三,20250101,小张,A组,男\n李四,20250102,,A组,女\n王五,,小五,B组,男\n赵六,20250105,六六,B组,女",
+                            "三年二班");
+
+                        if (parsed.Roster is { } roster)
+                        {
+                            rosters.Rosters.Add(roster);
+                            rosters.ActiveRosterId = roster.Id;
+                        }
+
+                        LocalSettings.SaveRosters(rosters);
+
+                        // 让这一页一进去就是随机模式：把「随机叫人」那套模板存成当前模板
+                        var template = TeacherCallSettings.RandomTemplate();
+                        LocalSettings.SaveCalls(new TeacherCallSettings
+                        {
+                            Templates = [template],
+                            ActiveTemplateId = template.Id,
+                            RandomGroup = "A组",
+                            RandomGender = "男",
+                            RandomCount = 2,
+                            DecayMinutes = 40,
+                        });
+
+                        var vm = new TeacherShellViewModel();
+                        vm.NavigateCallCommand.Execute(null);
+
+                        return new TeacherView { DataContext = vm };
+                    }
+                    finally
+                    {
+                        Restore(rosterPath, hadRoster, backupRoster);
+                        Restore(callsPath, hadCalls, backupCalls);
                     }
                 }, 430, 1700,
                 _ => null),

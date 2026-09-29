@@ -7,6 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 读 Excel 名单（.xlsx/.xls）。老师手里的名单多半就是个表格，让他"先另存为 CSV"是多一道无用功。 -->
+    <PackageReference Include="ExcelDataReader" Version="$(ExcelDataReaderVersion)" />
     <PackageReference Include="NLayer" Version="$(NLayerVersion)" />
   </ItemGroup>
 

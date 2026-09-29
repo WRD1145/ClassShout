@@ -80,4 +80,37 @@ public static class TeacherPlatform
         => _recorderFactory?.Invoke()
            ?? throw new InvalidOperationException(
                "尚未注册麦克风采集实现。平台头需要在启动时调用 TeacherPlatform.RegisterAudioRecorder。");
+
+    // ======================== 选文件（导入名单） ========================
+
+    private static Func<Task<RosterFilePickResult?>>? _rosterFilePicker;
+
+    /// <summary>本平台能不能弹出"选文件"。桌面上是文件选择器，安卓上是 SAF。</summary>
+    public static bool HasRosterFilePicker => _rosterFilePicker is not null;
+
+    /// <summary>由平台头调用，注册"选一个名单文件"的实现。</summary>
+    public static void RegisterRosterFilePicker(Func<Task<RosterFilePickResult?>> picker)
+        => _rosterFilePicker = picker;
+
+    /// <summary>
+    /// 让老师挑一个名单文件。返回 null 表示用户取消了 —— 取消不是错误，界面不该弹提示。
+    ///
+    /// 为什么放在平台层：桌面端要用窗口的 StorageProvider，安卓端要走 SAF 的
+    /// ActivityResult —— 这两件事都只有平台头做得了，而"选中之后怎么读这份文件"
+    /// 是共享逻辑（见 <see cref="Core.Remote.RosterFile"/>）。
+    /// </summary>
+    public static async Task<RosterFilePickResult?> PickRosterFileAsync()
+    {
+        if (_rosterFilePicker is null)
+        {
+            return null;
+        }
+
+        return await _rosterFilePicker().ConfigureAwait(true);
+    }
 }
+
+/// <summary>选中的名单文件：名字（决定怎么读）与内容。</summary>
+/// <param name="FileName">文件名，例如 <c>三年二班.xlsx</c>。</param>
+/// <param name="Content">内容流。</param>
+public readonly record struct RosterFilePickResult(string FileName, Stream Content);
