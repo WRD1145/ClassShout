@@ -130,8 +130,11 @@ public static class ClassroomCapabilities
     /// <summary>能按发送方指定的展示方式 / 字号 / 停留时长来呈现。</summary>
     public const string Display = "display";
 
+    /// <summary>支持回复（教室端能把「知道了」/ 快捷 / 文字 / 语音发回教师端）。</summary>
+    public const string Reply = "reply";
+
     /// <summary>本版本教室端会的全部能力。</summary>
-    public static readonly string[] Current = [Image, Display];
+    public static readonly string[] Current = [Image, Display, Reply];
 
     public static bool Has(IReadOnlyList<string>? capabilities, string capability)
         => capabilities is not null && capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);

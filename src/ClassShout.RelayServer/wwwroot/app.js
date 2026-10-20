@@ -109,6 +109,10 @@ async function doLogin() {
 
 async function doLogout() {
   try { await api('/api/auth/logout', { method: 'POST' }); } catch (e) { /* 忽略 */ }
+
+  // 回复与它们的长轮询都只属于这次登录：换个人登进来不该看见上一个人班里的回复
+  resetReplyPanel();
+
   authToken = null;
   currentUser = null;
   sessionStorage.removeItem('classshout_token');
@@ -167,6 +171,10 @@ async function enterTeacherView() {
   setBanner('rosterResult', '');
   setBanner('headError', '');
   setBanner('headResult', '');
+
+  // 回复面板先把内存里那几条画出来：这一页是它们唯一的去处（服务器不存历史），
+  // 换一次视图就得重画，否则列表会空着等第一条新回复
+  initReplyPanel();
 
   // 班级列表要先拿到：名单那一块的班级选择框就是用它填的，
   // 而名单与呼叫又都跟着"选中的那个班"走
@@ -243,8 +251,14 @@ async function loadTeacherClassrooms() {
   host.querySelectorAll('input[data-teacher-classroom]').forEach(input => {
     input.addEventListener('change', () => {
       teacherSelection[input.dataset.teacherClassroom] = input.checked;
+
+      // 勾上哪个班就收哪个班的回复（见「教室回复」那一块的长轮询）
+      syncReplyWatchers();
     });
   });
+
+  // 列表重建之后按当前勾选对齐长轮询：新勾上的开一条，取消掉的停掉
+  syncReplyWatchers();
 }
 
 function setTeacherSelection(value) {
@@ -252,6 +266,9 @@ function setTeacherSelection(value) {
     input.checked = value;
     teacherSelection[input.dataset.teacherClassroom] = value;
   });
+
+  // 「全选 / 全不选」同样要跟着改订阅，否则勾上了却一条回复都收不到
+  syncReplyWatchers();
 }
 
 function selectedTeacherTargets() {
@@ -563,6 +580,537 @@ async function submitTeacherCall(preview) {
   setBannerHtml('callResult',
     escapeHtml(preview ? '预览（还没有发出去）' : (result.message || '已发送')) +
     (lines ? '<div class="call-preview">' + lines + '</div>' : ''));
+}
+
+/* ---------- 教室回复 ----------
+ *
+ * 教室端能回一句「知道了」、一条快捷回复、一句文字，或者一小段语音。服务器把每条回复
+ * 包成一个 kind 为 "reply" 的信封，挂到**这间教室当前绑定的教师**的长轮询上。
+ *
+ * 关键取舍：这些回复只留在本页面的内存里，不落盘、也不问服务器要历史 ——
+ * 因为服务器根本没有历史。回复只投给"当时正好拿着那条长轮询"的那一页，投完就没了。
+ * 所以"换台电脑打开就看不见之前收过的回复"是这套设计的直接结果，不是漏做；
+ * 真正需要追查"我错过了哪几条"的场合在 App 里解决（它自己能对上 replyToId 并留记录），
+ * 这一页不重复造一份。
+ *
+ * 最多留 30 条：一条语音回复的 WAV 可以到 650 KB，留几百条会把标签页撑爆。
+ */
+
+const REPLY_KEEP = 30;
+
+// 同时盯几间教室。每间教室都是一条常驻长轮询：老师勾三五个班是常见用法，
+// 而内置管理员看得见全校的班，全勾上就是几十条连接 —— 没有意义，也没有必要。
+const REPLY_MAX_WATCH = 12;
+
+// 桌面通知在安全上下文里才存在，这句话在界面与提示里共用
+const REPLY_INSECURE_HINT =
+  '浏览器的桌面通知需要 HTTPS（或本机 localhost）。当前是 http://，所以这里只能用页面内提示。';
+
+let replyEntries = [];      // 收到的回复，新的在前
+let replyUnread = 0;        // 面板不在视野里时累加的未读数
+let replyWatchers = {};     // uuid → { uuid, name, token, since, stopped }
+let replyWatchErrors = {};  // uuid → 订阅失败的原因（摆给老师看）
+let replySync = Promise.resolve();   // syncReplyWatchers 的串行队列，见那里
+let replyAudioContext = null;        // 播放语音用的 AudioContext，第一次播放时才建
+
+/// 回复方式的说法，与 Core 里 ReplyKinds.Label 一字不差。
+/// 两边各写一套的话，界面上叫一个词、日志里叫另一个词，排查时对不上号。
+function replyKindLabel(kind) {
+  switch (kind) {
+    case 'ack': return '知道了';
+    case 'quick': return '快捷回复';
+    case 'text': return '文字回复';
+    case 'voice': return '语音回复';
+    default: return '回复';
+  }
+}
+
+/// 一条回复的本地时间。
+///
+/// Id 就是它的发送时刻（yyyyMMddHHmmssfff，格式见 Core 的 MessageIds.cs），
+/// 所以这里不必另记时间：一条回复迟到多久都不影响它显示成"几点几分发的"。
+/// 认不出来（比如老版本发的随机串）就退回"刚刚" —— 它确实是刚被送上来的。
+function replyTimeText(id) {
+  const text = String(id == null ? '' : id);
+  if (!/^\d{17}$/.test(text)) return '刚刚';
+
+  const at = new Date(
+    Number(text.slice(0, 4)), Number(text.slice(4, 6)) - 1, Number(text.slice(6, 8)),
+    Number(text.slice(8, 10)), Number(text.slice(10, 12)), Number(text.slice(12, 14)),
+    Number(text.slice(14, 17)));
+
+  if (isNaN(at.getTime())) return '刚刚';
+
+  const pad = n => String(n).padStart(2, '0');
+  const clock = pad(at.getHours()) + ':' + pad(at.getMinutes()) + ':' + pad(at.getSeconds());
+  const now = new Date();
+
+  // 跨天的回复带上日期：只写 23:32:25 的话，昨天那条会被当成今天的
+  return at.toDateString() === now.toDateString()
+    ? clock
+    : pad(at.getMonth() + 1) + '-' + pad(at.getDate()) + ' ' + clock;
+}
+
+/// 语音时长。毫秒 → 「3 秒」「3.1 秒」。
+function replyDurationText(ms) {
+  if (!ms || ms <= 0) return '';
+  const seconds = ms / 1000;
+  return (seconds >= 10 ? Math.round(seconds) : Math.round(seconds * 10) / 10) + ' 秒';
+}
+
+/// 收下一条回复（长轮询分发过来的那一条）。
+function addReply(envelope) {
+  const from = String(envelope.from || '教室');
+  const text = String(envelope.text || '');
+  const rawId = String(envelope.id || '');
+
+  // 同一条只收一次：长轮询断线重连时服务器会把最近的历史补发一遍
+  //（MessageQueue 留 2048 条），没有 id 的旧信封只好按"谁 + 说了什么 + 服务器时间"退而求其次
+  const key = rawId || (from + '|' + text + '|' + String(envelope.at || ''));
+
+  if (replyEntries.some(entry => entry.key === key)) return;
+
+  const entry = {
+    key: key,
+    id: rawId,
+    replyToId: String(envelope.replyToId || ''),
+    kind: String(envelope.replyKind || 'text'),
+    from: from,
+    text: text,
+    audioBase64: typeof envelope.replyAudioBase64 === 'string' ? envelope.replyAudioBase64 : '',
+    durationMs: Number(envelope.replyAudioDurationMs) || 0
+  };
+
+  replyEntries.unshift(entry);
+
+  if (replyEntries.length > REPLY_KEEP) {
+    replyEntries.length = REPLY_KEEP;
+  }
+
+  // 面板正被看着就不算未读：数字跳一下又立刻归零，只会让人以为自己错过了什么
+  if (!replyPanelInView()) {
+    replyUnread++;
+  }
+
+  renderReplies();
+  renderReplyUnread();
+  notifyReply(entry);
+}
+
+/// 把内存里那几条画出来。新的在上，每行一段。
+function renderReplies() {
+  const host = document.getElementById('replyList');
+  if (!host) return;
+
+  if (replyEntries.length === 0) {
+    host.innerHTML = '<div class="empty">还没有收到回复。勾上「可喊话的班级」里的班级，' +
+      '教室回的话就会出现在这里。</div>';
+    return;
+  }
+
+  host.innerHTML = replyEntries.map(entry => {
+    const label = replyKindLabel(entry.kind);
+    const time = replyTimeText(entry.id);
+    const duration = replyDurationText(entry.durationMs);
+
+    // 语音回复：一个播放按钮加时长。为什么不用 <audio src="data:audio/wav;base64,...">：
+    // 本服务器的 CSP 是 default-src 'none' 且没有写 media-src（见 WebUi.cs），
+    // 浏览器会把 data: 的音频源直接拦掉，界面上只会留下一个点不动的播放器。
+    // 改成在脚本里解码这段 WAV 再播（playReplyAudio），CSP 管不到它。
+    const voice = entry.kind === 'voice'
+      ? '<div class="reply-extra">' +
+          '<button class="tonal small" data-action="reply-play"' +
+            ' data-reply-id="' + escapeAttr(entry.key) + '">播放语音</button>' +
+          (duration ? '<span class="muted-inline">' + escapeHtml(duration) + '</span>' : '') +
+        '</div>'
+      : '';
+
+    return '<div class="reply-row">' +
+      '<div class="reply-head">' +
+        '<span class="reply-from">' + escapeHtml(entry.from) + '</span>' +
+        '<span class="chip info">' + escapeHtml(label) + '</span>' +
+        '<span class="muted-inline">' + escapeHtml(time) + '</span>' +
+      '</div>' +
+      '<div class="reply-text">' + escapeHtml(entry.text) + '</div>' +
+      voice +
+      '</div>';
+  }).join('');
+}
+
+/// 未读数。就挂在面板标题后面。
+function renderReplyUnread() {
+  const el = document.getElementById('replyUnread');
+  if (!el) return;
+
+  if (replyUnread <= 0) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+
+  el.classList.remove('hidden');
+  el.textContent = '未读 ' + replyUnread;
+}
+
+/// 面板现在是不是在视野里（决定未读要不要加、要不要清零）。
+function replyPanelInView() {
+  const panel = document.getElementById('replySection');
+  if (!panel || typeof panel.getBoundingClientRect !== 'function') return false;
+
+  const rect = panel.getBoundingClientRect();
+  const height = (typeof window !== 'undefined' && window.innerHeight) || 0;
+
+  return rect.bottom > 0 && rect.top < height;
+}
+
+/// 滚到回复面板就把未读清零。
+///
+/// 用"它在视野里"来判定"看过了"，比再点一下省事，也不必猜他到底看到哪一条。
+function onReplyScroll() {
+  if (replyUnread > 0 && replyPanelInView()) {
+    markRepliesRead();
+  }
+}
+
+function markRepliesRead() {
+  replyUnread = 0;
+  renderReplyUnread();
+}
+
+/// 清空。清掉的只是这一页内存里的那几条 —— 服务器那边本来也没有历史可清。
+function clearReplies() {
+  replyEntries = [];
+  replyUnread = 0;
+  renderReplies();
+  renderReplyUnread();
+}
+
+/// 桌面通知的状态与入口。
+///
+/// 为什么不总是摆一个「开启桌面通知」按钮：Notification API 只在**安全上下文**里存在
+///（HTTPS，或 http://localhost）。而这台服务器默认就部署在 http://<内网地址>:8080 上，
+/// 这种页面里那个按钮点了不会有任何反应 —— 浏览器连 Notification 这个对象都不给。
+/// 与其放一个必然点不动的按钮，不如老老实实说清原因，只留页面内提示。
+function renderReplyNotifyState() {
+  const button = document.getElementById('replyNotifyBtn');
+  const state = document.getElementById('replyNotifyState');
+  if (!button || !state) return;
+
+  const secure = typeof window !== 'undefined' && window.isSecureContext === true;
+  const supported = secure && typeof Notification !== 'undefined';
+
+  if (!supported) {
+    // 安全上下文不满足时连按钮都不给：给出来就是一个骗人的入口
+    button.classList.add('hidden');
+    state.textContent = REPLY_INSECURE_HINT;
+    return;
+  }
+
+  button.classList.remove('hidden');
+
+  const permission = Notification.permission;
+
+  button.textContent = permission === 'granted' ? '桌面通知已开启' : '开启桌面通知';
+  button.disabled = permission === 'granted' || permission === 'denied';
+
+  state.textContent = permission === 'granted'
+    ? '桌面通知：已开启。页面不在前台时，新回复会弹一条系统通知。'
+    : (permission === 'denied'
+      ? '桌面通知：被浏览器拒绝。要开启请点地址栏左边的图标，把「通知」改回允许。'
+      : '桌面通知：未开启。点上面的按钮，浏览器会问你一次。');
+}
+
+/// 点「开启桌面通知」：问浏览器要一次权限。
+async function enableReplyNotify() {
+  const secure = typeof window !== 'undefined' && window.isSecureContext === true;
+
+  if (!secure || typeof Notification === 'undefined') {
+    // 按钮本该被藏起来（见 renderReplyNotifyState），走到这里也再确认一次并说明原因
+    renderReplyNotifyState();
+    toast(REPLY_INSECURE_HINT);
+    return;
+  }
+
+  try {
+    const permission = await Notification.requestPermission();
+
+    if (permission !== 'granted') {
+      toast(permission === 'denied' ? '浏览器拒绝了桌面通知。' : '没有开启桌面通知。');
+    }
+  } catch (e) {
+    toast('开启桌面通知失败：' + e.message);
+  }
+
+  renderReplyNotifyState();
+}
+
+/// 新回复弹一条系统通知。
+///
+/// 只在页面不在前台时弹：老师就坐在这一页前面的话，回复已经在面板里了，
+/// 再叠一条系统通知只会挡住他正在写的东西。切到别的标签页、把窗口最小化之后才值得提醒 ——
+/// 那会儿他看不见这一页，也看不见面板上那个未读数。
+function notifyReply(entry) {
+  const secure = typeof window !== 'undefined' && window.isSecureContext === true;
+
+  if (!secure) return;                                        // 非安全上下文里根本没有这个 API
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'granted') return;          // 没授权就别打扰
+  if (document.visibilityState === 'visible') return;         // 页面在前台：面板自己会显示
+
+  try {
+    new Notification('「' + entry.from + '」' + replyKindLabel(entry.kind), {
+      body: entry.text || '（一段语音回复）',
+      tag: 'classshout-reply-' + entry.key
+    });
+  } catch (e) {
+    // 通知失败不该影响面板本身：回复已经进了列表，那才是主要目的
+  }
+}
+
+/// 播一条语音回复。
+///
+/// 用 Web Audio 解码这段 WAV 再播，理由见 renderReplies 里那段注释（CSP 拦 data: 音频）。
+function playReplyAudio(key) {
+  const entry = replyEntries.find(item => item.key === key);
+  if (!entry || !entry.audioBase64) {
+    toast('这条回复没有语音。');
+    return;
+  }
+
+  const AudioCtor = typeof window !== 'undefined'
+    ? (window.AudioContext || window.webkitAudioContext)
+    : null;
+
+  if (!AudioCtor) {
+    toast('这个浏览器不支持播放语音。');
+    return;
+  }
+
+  try {
+    const binary = atob(entry.audioBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    replyAudioContext = replyAudioContext || new AudioCtor();
+
+    // 回调式解码比 Promise 式更老也更稳（Safari 一直是回调式）
+    replyAudioContext.decodeAudioData(bytes.buffer, buffer => {
+      const source = replyAudioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(replyAudioContext.destination);
+      source.start(0);
+    }, () => toast('这段语音解不开。'));
+  } catch (e) {
+    toast('这段语音播不出来：' + e.message);
+  }
+}
+
+/// 面板上"正在接收哪几个班"那行字。
+function renderReplyPanelState() {
+  const el = document.getElementById('replyWatching');
+  if (!el) return;
+
+  const watching = Object.keys(replyWatchers).map(uuid => replyWatchers[uuid].name);
+  const failed = Object.keys(replyWatchErrors).map(uuid =>
+    classroomNameOf(uuid) + '（' + replyWatchErrors[uuid] + '）');
+
+  let text = watching.length === 0
+    ? '还没有在盯任何班级：在上面「可喊话的班级」里勾上班级，这里就会开始收它们的回复。'
+    : '正在接收：' + watching.join('、') + ' 的回复。';
+
+  if (failed.length > 0) {
+    text += ' 没能订阅：' + failed.join('、') + '。';
+  }
+
+  el.textContent = text;
+}
+
+function classroomNameOf(uuid) {
+  const record = (teacherClassrooms || []).find(item => item.uuid === uuid);
+  return record ? record.name : uuid;
+}
+
+/// 进老师视图时先把面板画一遍（内存里可能已经有几条了）。
+function initReplyPanel() {
+  renderReplies();
+  renderReplyUnread();
+  renderReplyPanelState();
+  renderReplyNotifyState();
+}
+
+/// 退出登录时把这页记的东西连同长轮询一起丢掉。
+function resetReplyPanel() {
+  stopAllReplyWatchers();
+  replyEntries = [];
+  replyUnread = 0;
+  replyWatchErrors = {};
+}
+
+/* ---------- 教室回复：长轮询 ----------
+ *
+ * 服务器没有"按老师订阅"的通道：收回复的长轮询是**按教室**开的
+ *（/api/teachers/{token}/events?since=N，token 来自"把这个账号绑到这间教室"）。
+ * 所以这一页先给自己绑一次（账号已被管理员授权，不必再输教室口令），
+ * 再为每间勾上的教室各开一条长轮询。
+ *
+ * 只盯勾上的那几间：每间都是一条常驻连接，而且老师要收回复的，
+ * 正是他刚刚要喊话的那几个班。
+ */
+
+/// 让"正在盯的班级"与勾选对齐。
+function syncReplyWatchers() {
+  // 串行化：班级列表刷新、勾选变化都会触发它，并发跑会给同一间教室绑两次
+  //（多一条要清理的长轮询，也多一条挂在服务器内存里的教师会话）
+  replySync = replySync.then(runReplySync, runReplySync);
+  return replySync;
+}
+
+async function runReplySync() {
+  const wanted = selectedTeacherTargets().slice(0, REPLY_MAX_WATCH);
+
+  Object.keys(replyWatchers).forEach(uuid => {
+    if (wanted.indexOf(uuid) < 0) stopReplyWatcher(uuid);
+  });
+
+  Object.keys(replyWatchErrors).forEach(uuid => {
+    if (wanted.indexOf(uuid) < 0) delete replyWatchErrors[uuid];
+  });
+
+  for (const uuid of wanted) {
+    if (replyWatchers[uuid]) continue;
+    await startReplyWatcher(uuid);
+  }
+
+  renderReplyPanelState();
+}
+
+/// 把账号绑到这间教室，拿到它的教师令牌，再开一条长轮询。
+///
+/// 绑定走的是"已被授权就不必口令"那条规则（见服务器的 BindTeacher）：
+/// 管理员的授权记录本来就摆在那里，网页这边不该再要一遍教室口令。
+async function startReplyWatcher(uuid) {
+  let bound = null;
+
+  try {
+    bound = await apiJson('/api/teachers/bind', {
+      method: 'POST',
+      body: JSON.stringify({
+        uuid: uuid,
+        secret: '',
+        teacherName: (currentUser && currentUser.displayName) || '网页教师'
+      })
+    });
+  } catch (e) {
+    replyWatchErrors[uuid] = '连接服务器失败';
+    return;
+  }
+
+  if (!bound || !bound.ok || !bound.token) {
+    replyWatchErrors[uuid] = (bound && bound.error) || '订阅失败';
+    return;
+  }
+
+  delete replyWatchErrors[uuid];
+
+  const watcher = {
+    uuid: uuid,
+    name: classroomNameOf(uuid),
+    token: bound.token,
+
+    // 0 = 从此刻开始，不补发历史（服务器就是按这个约定解释 since 的）。
+    // 网页这边不要历史：上一次打开时收到的回复不该在这一次又冒出来。
+    since: 0,
+    stopped: false
+  };
+
+  replyWatchers[uuid] = watcher;
+
+  // 不 await：这是一条常驻循环，等它就等于把整个界面卡在这里
+  pollReplyEvents(watcher);
+}
+
+function stopReplyWatcher(uuid) {
+  const watcher = replyWatchers[uuid];
+  if (!watcher) return;
+
+  watcher.stopped = true;
+  delete replyWatchers[uuid];
+}
+
+function stopAllReplyWatchers() {
+  Object.keys(replyWatchers).forEach(uuid => stopReplyWatcher(uuid));
+  replyWatchers = {};
+}
+
+/// 一条教室的长轮询循环。
+///
+/// 用裸 fetch 而不是上面的 api()：api() 见到 401 会当成"登录过期"把人退回登录页，
+/// 而这里的 401 只说明这条**教室绑定**失效了（比如服务器重启过），账号本身还好好的。
+async function pollReplyEvents(watcher) {
+  try {
+    while (!watcher.stopped) {
+      let batch = null;
+
+      try {
+        const headers = {};
+        if (authToken) headers['X-Auth-Token'] = authToken;
+
+        const response = await fetch(
+          '/api/teachers/' + encodeURIComponent(watcher.token) + '/events?since=' + watcher.since,
+          { headers: headers });
+
+        // 绑定没了就停：下次刷新班级列表或重新勾选会再绑一次
+        if (response.status === 401) return;
+
+        if (response.ok) batch = await response.json();
+      } catch (e) {
+        batch = null;
+      }
+
+      if (watcher.stopped) return;
+
+      if (!batch) {
+        // 网络断了先退一步再试。不弹提示：教室离线、服务器重启都是常态，
+        // 一条转个不停的错误横幅只会把真正要看的回复盖掉。
+        await sleep(5000);
+        continue;
+      }
+
+      if (typeof batch.next === 'number') {
+        watcher.since = batch.next;
+      }
+
+      (batch.events || []).forEach(dispatchRelayEvent);
+    }
+  } finally {
+    // 这条循环结束了就把登记摘掉（401、页面切走都走这里）。
+    // 留一个"早就停了"的条目在 replyWatchers 里，下一次对齐会以为它还在跑、
+    // 于是不再重新绑定 —— 界面看起来一切正常，回复却再也不来。
+    if (replyWatchers[watcher.uuid] === watcher) {
+      delete replyWatchers[watcher.uuid];
+      renderReplyPanelState();
+    }
+  }
+}
+
+/// 长轮询送上来的每一条事件都从这里过。
+///
+/// 只处理 reply：这一页没有教室状态与喊话回显的位置 —— status / classroomOnline /
+/// classroomOffline / textShout / audio* / image* / stop 都是给教室端和 App 用的，
+/// 网页既没有地方显示它们，也不该因为"多了一种事件"就整条轮询出错。
+/// 认不出来的 kind 一律忽略（老服务器、未来的新事件都走这条路）。
+function dispatchRelayEvent(envelope) {
+  if (!envelope || typeof envelope !== 'object') return;
+
+  if (envelope.kind === 'reply') {
+    addReply(envelope);
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /* ---------- 我的班级（班主任） ----------
@@ -1691,6 +2239,12 @@ const actions = {
   'roster-save': () => submitTeacherRoster(),
   'roster-refresh': () => loadTeacherRoster(),
 
+  // 教室回复：标为已读 / 清空 / 播语音 / 要桌面通知的权限
+  'reply-mark-all-read': () => markRepliesRead(),
+  'reply-clear': () => clearReplies(),
+  'reply-play': (el) => playReplyAudio(el.dataset.replyId),
+  'reply-enable-notify': () => enableReplyNotify(),
+
   // 我的班级（班主任）：给这个班授权 / 收回，以及这个班统一的名单
   'head-teacher-refresh': () => loadHeadTeacherSection(),
   'head-teacher-grant': (el) => grantHeadTeacherTeacher(el.dataset.uuid, el.dataset.name),
@@ -1726,6 +2280,9 @@ document.addEventListener('click', (event) => {
   document.getElementById('rosterClassroom').addEventListener('change', e => {
     switchRosterClassroom(e.target.value);
   });
+
+  // 滚到回复面板就把它标成已读（点「全部标为已读」是另一条路，见 actions）
+  document.addEventListener('scroll', onReplyScroll, { passive: true });
 
   // 刷新页面后尽量保持登录状态；令牌无效会被 api() 统一打回登录页
   const saved = sessionStorage.getItem('classshout_token');

@@ -471,7 +471,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
             return false;
         }
 
-        message.Id = string.IsNullOrEmpty(message.Id) ? Guid.NewGuid().ToString("N") : message.Id;
+        message.Id = string.IsNullOrEmpty(message.Id) ? MessageIds.New() : message.Id;
 
         var started = await PostAsync(
             Url(string.Format(RelayPaths.TeacherImageStart, _token)),

@@ -41,6 +41,14 @@ public static class RelayPaths
 
     public const string ClassroomStatus = "/api/classrooms/{0}/status";
 
+    /// <summary>
+    /// 教室端回复（教室 → 教师）。服务器只是转发：把它挂到"这间教室的老师"的长轮询上。
+    ///
+    /// 走"教室端主动 POST"而不是让教师端来拉：教室里那台电脑不对外开端口（也开不了），
+    /// 而回复必须由它发起 —— 与状态上报同一条路子。
+    /// </summary>
+    public const string ClassroomReply = "/api/classrooms/{0}/reply";
+
     // —— 账号 ——
     public const string AuthRegister = "/api/auth/register";
     public const string AuthLogin = "/api/auth/login";
@@ -138,6 +146,9 @@ public static class RelayKinds
     public const string Status = "status";
     public const string ClassroomOnline = "classroomOnline";
     public const string ClassroomOffline = "classroomOffline";
+
+    /// <summary>教室端回复（教室 → 教师）。服务器只是转发，不理解内容。</summary>
+    public const string Reply = "reply";
 }
 
 // ======================== 教室端：注册与查询 ========================
@@ -301,6 +312,21 @@ public sealed record ImageStartRequest(
 public sealed record ImageChunkRequest(string Id, string DataBase64);
 
 public sealed record ClassroomStatusRequest(bool Muted, int Volume, string State);
+
+/// <summary>教室端发来的一条回复（教室 → 教师）。</summary>
+/// <param name="Id">这条回复的 ID（发送时间戳）。</param>
+/// <param name="ReplyToId">回的是哪一条消息；空表示不针对某一条。</param>
+/// <param name="Kind">取值见 <see cref="Protocol.ReplyKinds"/>。</param>
+/// <param name="Text">拼好的那句话（语音回复时是文字说明）。</param>
+/// <param name="AudioWavBase64">语音回复的 WAV（base64），可为空。</param>
+/// <param name="AudioDurationMs">语音时长（毫秒）。</param>
+public sealed record ClassroomReplyRequest(
+    string? Id = null,
+    string? ReplyToId = null,
+    string Kind = Protocol.ReplyKinds.Text,
+    string Text = "",
+    string? AudioWavBase64 = null,
+    int AudioDurationMs = 0);
 
 // ======================== 账号 ========================
 
@@ -525,6 +551,26 @@ public sealed class RelayEnvelope
     public int ImageWidth { get; set; }
 
     public int ImageHeight { get; set; }
+
+    // —— 消息 ID 与回复 ——
+    //
+    // Id 就是这条消息的**发送时间戳**（见 MessageIds）：同一句话在两条路上身份一致，
+    // 而教室回复时用它说明"回的是哪一条"。
+
+    /// <summary>这条消息的 ID（发送时间戳）。</summary>
+    public string? Id { get; set; }
+
+    /// <summary>回复针对的原消息 ID。空表示这条不是回复。</summary>
+    public string? ReplyToId { get; set; }
+
+    /// <summary>回复方式，取值见 <see cref="Protocol.ReplyKinds"/>。</summary>
+    public string? ReplyKind { get; set; }
+
+    /// <summary>语音回复的 WAV（base64）。</summary>
+    public string? ReplyAudioBase64 { get; set; }
+
+    /// <summary>语音回复的时长（毫秒）。</summary>
+    public int ReplyAudioDurationMs { get; set; }
 
     // —— 状态 ——
     public bool Muted { get; set; }

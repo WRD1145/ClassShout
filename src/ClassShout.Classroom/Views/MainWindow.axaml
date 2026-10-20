@@ -36,7 +36,7 @@
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,*,Auto">
+  <Grid RowDefinitions="Auto,*,Auto,Auto">
 
     <!-- ==================== 顶栏 ==================== -->
     <Border Grid.Row="0" Background="{DynamicResource Md3.SurfaceContainer}" Padding="24,14">
@@ -184,11 +184,100 @@
                        Text="{Binding AudioSecondsText}" />
           </StackPanel>
 
-      </Panel>
+          </Panel>
     </md3:Md3Card>
 
+    <!-- 回复条：主区下方自己的那一行，不压在内容上（压在内容上会把正显示的那句话盖掉一半）。
+         教室里的人看到这句话之后，一秒就能回一句 —— 「知道了」、预置的几句、
+         一句现打的文字，或者一小段语音。
+         回复针对的是"屏上正显示的这一条"：它的 ID（发送时刻）会原样带回去，
+         老师那边才知道这条回复对应哪一句话。 -->
+    <Border Grid.Row="2" IsVisible="{Binding HasReplyPanel}"
+            HorizontalAlignment="Stretch"
+            Margin="24,0,24,14"
+            Background="{DynamicResource Md3.SurfaceContainerHigh}"
+            BorderBrush="{DynamicResource Md3.OutlineVariant}"
+            BorderThickness="1"
+            CornerRadius="{DynamicResource Md3.Shape.Large}"
+            BoxShadow="{DynamicResource Md3.Elevation.Level2}"
+            Padding="18,14">
+            <StackPanel Spacing="10">
+
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Classes="cardTitle" Text="回老师" Margin="0" />
+                <TextBlock Grid.Column="1" Classes="bodySmall" Margin="12,0,12,0"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding ReplyTargetText}" />
+                <TextBlock Grid.Column="2" Classes="bodySmall" VerticalAlignment="Center"
+                           Foreground="{DynamicResource Md3.Primary}"
+                           Text="{Binding LastReplyText}" />
+              </Grid>
+
+              <WrapPanel>
+                <!-- 「知道了」：最常用的那一个，永远排在最前 -->
+                <Button Classes="tonal" Margin="0,0,8,6"
+                        IsVisible="{Binding ShowAcknowledgeButton}"
+                        Command="{Binding AcknowledgeCommand}"
+                        Content="知道了" />
+
+                <!-- 设置里那几条快捷回复 -->
+                <ItemsControl ItemsSource="{Binding ReplyQuickReplies}"
+                              IsVisible="{Binding ShowQuickReplies}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <WrapPanel />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="remote:QuickReply">
+                      <Button Classes="outlined" Margin="0,0,8,6" Content="{Binding Label}"
+                              Command="{Binding $parent[ItemsControl].((vm:ClassroomViewModel)DataContext).SendQuickReplyCommand}"
+                              CommandParameter="{Binding}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </WrapPanel>
+
+              <!-- 文字回复 -->
+              <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8"
+                    IsVisible="{Binding ShowTextReply}">
+                <TextBox Classes="outlined" MaxLength="120"
+                         Watermark="打一句回复…"
+                         Text="{Binding ReplyText}" />
+                <Button Grid.Column="1" Classes="tonal" Content="发送"
+                        Command="{Binding SendTextReplyCommand}" />
+
+                <!-- 语音回复放同一行：教室里那块屏的回复区越矮越好，
+                     而"打一句"和"录一段"本来就是二选一的两条路。 -->
+                <Button Grid.Column="2" Classes="outlined"
+                        IsVisible="{Binding ShowVoiceReply}"
+                        Command="{Binding ToggleVoiceReplyCommand}"
+                        Content="{Binding ReplyVoiceButtonText}" />
+              </Grid>
+
+              <!-- 只有语音回复、没有文字回复时的单独一行 -->
+              <StackPanel Orientation="Horizontal" Spacing="10"
+                          IsVisible="{Binding ShowVoiceReply}">
+                <Button Classes="outlined" Command="{Binding ToggleVoiceReplyCommand}"
+                        Content="{Binding ReplyVoiceButtonText}"
+                        IsVisible="{Binding !ShowTextReply}" />
+                <TextBlock Classes="titleSmall" VerticalAlignment="Center"
+                           IsVisible="{Binding IsRecordingReply}"
+                           Text="{Binding ReplyRecordText}" />
+                <Button Classes="text small" Content="放弃这段"
+                        IsVisible="{Binding IsRecordingReply}"
+                        Command="{Binding CancelVoiceReplyCommand}" />
+                <TextBlock Classes="bodySmall" VerticalAlignment="Center"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           IsVisible="{Binding !IsRecordingReply}"
+                           Text="最多一段 15 秒" />
+              </StackPanel>
+            </StackPanel>
+    </Border>
+
     <!-- ==================== 日志 ==================== -->
-    <Border Grid.Row="2" Background="{DynamicResource Md3.SurfaceContainerLow}" Padding="24,12">
+    <Border Grid.Row="3" Background="{DynamicResource Md3.SurfaceContainerLow}" Padding="24,12">
       <Grid RowDefinitions="Auto,*" Height="150">
         <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
           <TextBlock Classes="cardTitle" Text="运行日志" Margin="0,0,0,8" />

@@ -203,6 +203,71 @@ public sealed class AckMessage : ShoutMessage
     public string? Detail { get; set; }
 }
 
+/// <summary>回复的四种方式。</summary>
+public static class ReplyKinds
+{
+    /// <summary>「知道了」：一秒点完，老师知道教室里看到了。</summary>
+    public const string Acknowledge = "ack";
+
+    /// <summary>快捷回复：教室里预置的几句（内容由组件拼成）。</summary>
+    public const string Quick = "quick";
+
+    /// <summary>文字回复：教室里现打一句话。</summary>
+    public const string Text = "text";
+
+    /// <summary>语音回复：教室里录一小段。</summary>
+    public const string Voice = "voice";
+
+    public static IReadOnlyList<string> All { get; } = [Acknowledge, Quick, Text, Voice];
+
+    public static string Label(string? kind) => kind switch
+    {
+        Acknowledge => "知道了",
+        Quick => "快捷回复",
+        Text => "文字回复",
+        Voice => "语音回复",
+        _ => "回复",
+    };
+}
+
+/// <summary>
+/// 教室端的一条回复（教室 → 教师）。
+///
+/// 它是**反方向**的：此前这条 TCP 连接上跑的都是教师端发起的东西（喊话、音频、
+/// 图片、停止），教室端只回 ack 与 status。回复让教室端也能主动说话，
+/// 而承载它的仍然是同一条连接 —— 教室里那台电脑不对外开端口，反向连接无从建立。
+///
+/// 语音回复直接把 WAV 塞进这条消息（base64），而不是再开一套"声明 + 分片 + 收尾"：
+/// 回复是十几秒以内的小片段，一次发完比分片少一整类"中途断开"的状态，
+/// 时长的上限由 <see cref="ClassShout.Core.Remote.ClassroomReplySettings.VoiceMaxSeconds"/> 保证。
+/// </summary>
+public sealed class ReplyMessage : ShoutMessage
+{
+    public const string TypeName = "reply";
+    public override string Type => TypeName;
+
+    /// <summary>这条回复自己的 ID —— 同样是发送时刻（见 <see cref="MessageIds"/>）。</summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>回的是哪一条：原消息的 ID。空表示"不针对某一条"。</summary>
+    public string ReplyToId { get; set; } = string.Empty;
+
+    /// <summary>取值见 <see cref="ReplyKinds"/>。</summary>
+    public string Kind { get; set; } = ReplyKinds.Text;
+
+    /// <summary>拼好的那句话（语音回复时是它的文字说明）。</summary>
+    public string Text { get; set; } = string.Empty;
+
+    /// <summary>谁回的（教室名）。</summary>
+    public string From { get; set; } = string.Empty;
+
+    /// <summary>语音回复的 WAV（base64）。只有 <see cref="ReplyKinds.Voice"/> 有值。</summary>
+    public string? AudioWav { get; set; }
+
+    /// <summary>语音时长（毫秒），界面用来显示"3 秒"。</summary>
+    public int AudioDurationMs { get; set; }
+}
+
 /// <summary>教室端状态上报，用于教师端显示“正在朗读 / 队列长度”等。</summary>
 public sealed class StatusMessage : ShoutMessage
 {

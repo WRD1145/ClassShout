@@ -2635,6 +2635,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
                 AddLog(ack.Ok ? $"教室端已确认：{ack.Detail}" : $"教室端拒绝：{ack.Detail}");
                 break;
 
+            case ReplyMessage reply:
+                // 教室端回了一句：进「教室回复」列表，并按需要弹系统通知
+                AcceptReply(reply);
+                break;
+
             case ErrorMessage error:
                 ErrorMessage = $"教室端报错：{error.Message}";
                 AddLog($"教室端报错：{error.Message}");
@@ -3145,6 +3150,25 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     {
         Post(() =>
         {
+            // 教室回复**先处理**，排在下面那道"只看当前链路"的判断之前：
+            // 回复不是"当前链路的状态"，而是一条消息 —— 局域网正连着的时候，
+            // 老师照样要知道另一间教室里有人回了一句。
+            if (envelope.Kind == RelayKinds.Reply)
+            {
+                AcceptReply(new ReplyMessage
+                {
+                    Id = envelope.Id ?? string.Empty,
+                    ReplyToId = envelope.ReplyToId ?? string.Empty,
+                    Kind = envelope.ReplyKind ?? ReplyKinds.Text,
+                    From = envelope.From ?? ClassroomName,
+                    Text = envelope.Text ?? string.Empty,
+                    AudioWav = envelope.ReplyAudioBase64,
+                    AudioDurationMs = envelope.ReplyAudioDurationMs,
+                });
+
+                return;
+            }
+
             // 中继不是当前链路时，它的状态事件一律不写界面。
             //
             // 老师可能一边绑着服务器上的 A 教室，一边走进 B 教室用局域网直连 ——

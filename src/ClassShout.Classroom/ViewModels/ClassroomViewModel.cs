@@ -1050,6 +1050,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     {
         AddLog("文字", $"「{sourceName}」说：{message.Text}");
 
+        // 记下"现在可以回哪一条"：教室里那块屏上正显示的就是它，
+        // 而回复时要把它的 ID 原样带回去（= 老师发出这条消息的时刻）。
+        // 静音时也记：静音只是不朗读，教室里的人照样看得到、照样能回一句。
+        CurrentMessageId = message.Id;
+        RememberReplyTarget(message.Id, sourceName, message.Text);
+
         if (IsMuted)
         {
             AddLog("文字", "已静音，本条不朗读");
@@ -1429,6 +1435,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 静音期间先加一，教师列表就会显示"喊过 N 次"，而教室里一次都没响过。
         Post(() =>
         {
+            // 语音这条消息也带着 ID（发送时刻），回复要对得上它
+            CurrentMessageId = message.Id;
+
             PresentAudioStart(
                 LanOwnerKey(session),
                 session.ClientName,
@@ -1456,6 +1465,11 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             AddLog("语音", $"「{sourceName}」的音频格式不受支持（{format}），本次语音已忽略");
             return;
         }
+
+        // 语音喊话也能回一句：教室里的人听到"请把作业收上来"，同样需要一个
+        // "知道了"。记的是"最近一条喊话"，与文字那条共用同一个位置 ——
+        // 屏上正显示哪一条，回复就针对哪一条。
+        RememberReplyTarget(CurrentMessageId, sourceName, "（语音喊话）");
 
         if (IsMuted)
         {
@@ -2086,6 +2100,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                 case RelayKinds.TextShout:
                     PresentTextShout(envelope.From ?? "教师端", new TextShoutMessage
                     {
+                        // 中继这条路上，消息 ID 是教师端定的、服务器原样转发的 ——
+                        // 带上它，教室里那次回复才对应得到老师手机上的那一条。
+                        Id = envelope.Id ?? string.Empty,
                         Text = envelope.Text ?? string.Empty,
                         Rate = envelope.Rate,
                         Volume = envelope.Volume,
@@ -2101,6 +2118,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                     break;
 
                 case RelayKinds.AudioStart:
+                    // 语音这条消息的 ID 由教师端定（发送时刻），回复要对得上它
+                    CurrentMessageId = envelope.Id ?? string.Empty;
+
                     PresentAudioStart(
                         RelayOwnerKey(envelope),
                         envelope.From ?? "教师端",
@@ -2738,6 +2758,11 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                 FontSize = plan?.FontSize ?? ShoutFontSizes.Default,
                 HoldMs = plan?.HoldMs ?? ShoutHoldDurations.Unspecified,
                 Image = image,
+
+                // 「知道了」只在回复功能开着时出现：关掉回复的教室不该看到一个点了没反应的按钮
+                AcknowledgeCommand = _replySettings.Enabled && _replySettings.ShowAcknowledge && HasReplyTarget
+                    ? AcknowledgeCommand
+                    : null,
             });
         }
 

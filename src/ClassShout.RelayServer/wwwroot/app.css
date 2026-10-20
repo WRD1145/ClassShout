@@ -306,3 +306,29 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: -1px; border
 /* 输入框 + 按钮并排（授权给某位老师）：输入框吃掉剩下的宽度 */
 .inline-form { display: flex; gap: 8px; align-items: center; margin: 12px 0 4px; }
 .inline-form input[type=text] { flex: 1; }
+
+/* ---------- 教室回复 ----------
+   一条回复一小块而不是一行表格：它有一句可能换行的话、还可能带一段语音，
+   表格里那几列反而挤。最多 30 条，列表自己滚，卡片不会被撑得老长。 */
+#replyList {
+  max-height: 520px; overflow-y: auto; margin-top: 10px;
+}
+.reply-row {
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--shape-sm);
+  background: var(--surface-container);
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+.reply-row:last-child { margin-bottom: 0; }
+.reply-row .reply-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 13px;
+}
+.reply-row .reply-from { font-weight: 500; }
+/* 文字回复是教室里现打的一句话：换行、长串都要照原样留着，别把词拆得莫名其妙 */
+.reply-row .reply-text {
+  margin-top: 6px; font-size: 14px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.reply-row .reply-extra { display: flex; align-items: center; gap: 8px; margin-top: 8px; }

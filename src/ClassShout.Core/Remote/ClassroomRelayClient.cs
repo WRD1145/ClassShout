@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClassShout.Core.Protocol;
 
 namespace ClassShout.Core.Remote;
 
@@ -322,6 +323,47 @@ public sealed class ClassroomRelayClient : IAsyncDisposable
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             // 状态上报失败不影响主流程，下一次状态变化会再报
+        }
+    }
+
+    /// <summary>
+    /// 把一条回复发给教师端（经服务器）。
+    ///
+    /// 返回 false 不代表"这条回复没意义"，只代表这次没送出去 —— 教室端会把它显示成
+    /// "没发出去"，让教室里那个人知道该再点一次，而不是以为老师已经收到了。
+    /// </summary>
+    public async Task<bool> SendReplyAsync(ReplyMessage reply, CancellationToken cancellationToken = default)
+    {
+        if (_token is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var url = Url(string.Format(RelayPaths.ClassroomReply, Uri.EscapeDataString(_settings.Uuid)));
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(
+                    new ClassroomReplyRequest(
+                        reply.Id,
+                        reply.ReplyToId,
+                        reply.Kind,
+                        reply.Text,
+                        reply.AudioWav,
+                        reply.AudioDurationMs),
+                    options: JsonOptions),
+            };
+
+            request.Headers.TryAddWithoutValidation(RelayPaths.TokenHeader, _token);
+
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return false;
         }
     }
 

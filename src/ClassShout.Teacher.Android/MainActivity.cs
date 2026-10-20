@@ -7,6 +7,11 @@ using Avalonia.Android;
 using ClassShout.Teacher.Android.Services;
 using ClassShout.Teacher.Services;
 
+// 通知权限（Android 13 / API 33 起是"危险权限"，必须运行时申请）。
+// 收到教室回复时要用它提醒老师；没有它只是不弹通知，应用内照样看得到。
+// 程序集特性必须写在所有其它元素之前（C# 的硬性要求）。
+[assembly: UsesPermission(global::Android.Manifest.Permission.PostNotifications)]
+
 namespace ClassShout.Teacher.Android;
 
 [Activity(
@@ -53,6 +58,10 @@ public class MainActivity : AvaloniaMainActivity<App>
         // 选一份名单文件（.csv / .xlsx）走 SAF：桌面端是 StorageProvider，
         // 安卓端则要一个 ActivityResult —— 这就是"选文件"必须放在平台层的原因。
         TeacherPlatform.RegisterRosterFilePicker(PickRosterFileAsync);
+
+        // 收到教室回复时的系统通知（渠道 + Android 13 的通知权限），
+        // 以及语音回复的播放（AudioTrack）
+        AndroidNotifier.Register(this);
 
         return base.CustomizeAppBuilder(builder);
     }

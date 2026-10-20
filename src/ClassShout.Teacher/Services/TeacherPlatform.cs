@@ -75,6 +75,67 @@ public static class TeacherPlatform
         return null;
     }
 
+    // ======================== 系统通知（收到教室回复时） ========================
+
+    private static Action<string, string>? _notifier;
+
+    /// <summary>本平台能不能弹系统通知。不能时界面只留应用内提示。</summary>
+    public static bool HasNotifier => _notifier is not null;
+
+    /// <summary>
+    /// 由平台头调用，注册"弹一条系统通知"的实现。
+    ///
+    /// 为什么放在平台层：安卓要用 NotificationManager（还要一条渠道 + 通知权限），
+    /// Windows 要走托盘气泡，Linux 上是 notify-send —— 三件事没有一处是共通的，
+    /// 而"什么时候该通知"（收到哪条回复）是视图模型的事。分开之后，
+    /// 视图模型只说"提醒一下老师"，不关心底下是哪种弹法。
+    /// </summary>
+    public static void RegisterNotifier(Action<string, string> notifier) => _notifier = notifier;
+
+    /// <summary>
+    /// 弹一条系统通知。
+    ///
+    /// 失败不抛出：通知发不出去只是"少提醒一次"，而它由收到回复触发 ——
+    /// 为了一次通知失败把消息处理链路打断，就成了"少一条回复"。
+    /// </summary>
+    public static void Notify(string title, string body)
+    {
+        try
+        {
+            _notifier?.Invoke(title, body);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            // 通知失败就算了：应用内还有一条提示
+        }
+    }
+
+    // ======================== 播放一段 WAV（语音回复） ========================
+
+    private static Action<byte[]>? _wavPlayer;
+
+    /// <summary>本平台能不能直接播一段 WAV。</summary>
+    public static bool HasWavPlayer => _wavPlayer is not null;
+
+    /// <summary>由平台头调用，注册"把这段 WAV 放出来"的实现。</summary>
+    public static void RegisterWavPlayer(Action<byte[]> player) => _wavPlayer = player;
+
+    /// <summary>
+    /// 播一段 WAV。
+    ///
+    /// 与通知同理放在平台层：桌面端是 NAudio，安卓端是 AudioTrack（喂 PCM），
+    /// Linux 上是 aplay —— 上层只关心"这段语音能不能听"。
+    /// </summary>
+    public static void PlayWav(byte[] wav)
+    {
+        if (_wavPlayer is null)
+        {
+            throw new NotSupportedException("这个平台还没有注册 WAV 播放实现。");
+        }
+
+        _wavPlayer(wav);
+    }
+
     /// <summary>创建一个录音器实例。</summary>
     public static IAudioRecorder CreateAudioRecorder()
         => _recorderFactory?.Invoke()

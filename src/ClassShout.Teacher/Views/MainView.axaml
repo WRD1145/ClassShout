@@ -685,6 +685,62 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!-- 教室回复：教室那块屏上回了一句之后，这里能看到。
+                 只在有回复时出现 —— 没回复时它只是一块占地方的空卡片。 -->
+            <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding HasReplies}">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="教室回复" Margin="0" />
+                  <TextBlock Grid.Column="1" Classes="bodySmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding ReplySummaryText}" />
+                </Grid>
+
+                <ItemsControl ItemsSource="{Binding Replies}" MaxHeight="260">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ClassroomReplyItem">
+                      <Border CornerRadius="10" Margin="0,0,0,6" Padding="10"
+                              Background="{DynamicResource Md3.SurfaceContainerHigh}">
+                        <StackPanel Spacing="4">
+                          <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Classes="bodyMedium" TextWrapping="Wrap"
+                                       Text="{Binding DisplayText}" />
+                            <TextBlock Grid.Column="1" Classes="labelSmall" Margin="8,0,0,0"
+                                       VerticalAlignment="Top"
+                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                       Text="{Binding TimeText}" />
+                          </Grid>
+
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Classes="bodySmall"
+                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                       Text="{Binding From}" />
+                            <Border CornerRadius="9999" Padding="7,1"
+                                    Background="{DynamicResource Md3.SecondaryContainer}">
+                              <TextBlock Classes="labelSmall"
+                                         Foreground="{DynamicResource Md3.OnSecondaryContainer}"
+                                         Text="{Binding KindLabel}" />
+                            </Border>
+                            <Button Classes="text small" Content="播放"
+                                    IsVisible="{Binding HasAudio}"
+                                    Command="{Binding $parent[ItemsControl].((vm:TeacherShellViewModel)DataContext).PlayReplyCommand}"
+                                    CommandParameter="{Binding}" />
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                  <Button Grid.Column="0" Classes="outlined" Content="全部标为已读"
+                          Command="{Binding MarkRepliesReadCommand}" />
+                  <Button Grid.Column="1" Classes="text" Content="清空"
+                          Command="{Binding ClearRepliesCommand}" />
+                </Grid>
+              </StackPanel>
+            </md3:Md3Card>
+
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="12">
                 <TextBlock Classes="cardTitle" Text="这条怎么显示" />
@@ -1794,7 +1850,22 @@
                        GroupName="Md3Nav" Tag="文字"
                        IsChecked="{Binding IsTextPage, Mode=OneWay}"
                        Command="{Binding NavigateTextCommand}">
-            <md3:Md3Icon Kind="MessageText" Size="24" />
+            <Panel>
+              <md3:Md3Icon Kind="MessageText" Size="24" />
+
+              <!-- 教室回复的未读数：贴在图标右上角。老师多半不看日志，
+                   而"教室里回了一句"是他需要立刻知道的事。 -->
+              <Border IsVisible="{Binding HasUnreadReplies}"
+                      HorizontalAlignment="Right" VerticalAlignment="Top"
+                      Margin="0,-4,-10,0" MinWidth="16" Height="16"
+                      CornerRadius="8" Padding="4,0"
+                      Background="{DynamicResource Md3.Error}">
+                <TextBlock Classes="labelSmall" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" FontSize="10"
+                           Foreground="{DynamicResource Md3.OnError}"
+                           Text="{Binding UnreadReplies}" />
+              </Border>
+            </Panel>
           </RadioButton>
           <RadioButton Grid.Column="1" Theme="{StaticResource Md3NavItem}"
                        GroupName="Md3Nav" Tag="语音"

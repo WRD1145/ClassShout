@@ -41,4 +41,16 @@ public sealed record NotificationContent(string SourceName, string Text, bool Is
     public string Hint => IsVoice
         ? "语音喊话正在教室播放"
         : HasImage ? "图片喊话正在教室显示" : "教室端正在朗读这条内容";
+
+    /// <summary>
+    /// 弹窗上那颗「知道了」。
+    ///
+    /// 做成一个命令而不是回调：弹窗的 DataContext 就是这个对象，绑一个命令最省事，
+    /// 界面里不必写"找父级视图模型"那类容易写错的绑定。
+    /// 教室端没开回复、或者这条消息不该被回复时它是 null —— 按钮跟着不显示。
+    /// </summary>
+    public CommunityToolkit.Mvvm.Input.IRelayCommand? AcknowledgeCommand { get; init; }
+
+    /// <summary>这条提示上要不要出现「知道了」。</summary>
+    public bool CanAcknowledge => AcknowledgeCommand is not null;
 }

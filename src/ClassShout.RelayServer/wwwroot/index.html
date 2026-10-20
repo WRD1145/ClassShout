@@ -123,6 +123,32 @@
     </section>
 
     <!--
+      教室回复。教室那边能回「知道了」、快捷回复、一句文字或一小段语音。
+      服务器不存历史：一条回复只投给"当时正好拿着那条长轮询"的那一页，
+      所以它们只留在这一页的内存里（见 app.js 的「教室回复」那一块），
+      刷新页面或换台电脑就看不见之前收过的那些 —— 这是设计的直接结果，不是漏做。
+      真正要追查"我错过了哪几条"的场合在 App 里解决。
+    -->
+    <section class="card" id="replySection">
+      <h2>教室回复 <span id="replyUnread" class="chip info hidden"></span></h2>
+      <p>新的一直加在最上面，最多留 30 条。只收你在上面「可喊话的班级」里勾上的那几个班 ——
+        勾上之后这里就开始收它们的回复。</p>
+
+      <p class="muted" id="replyWatching">正在检查订阅…</p>
+
+      <div class="row-actions">
+        <button class="outlined small" data-action="reply-mark-all-read">全部标为已读</button>
+        <button class="text small" data-action="reply-clear">清空</button>
+        <button class="outlined small hidden" id="replyNotifyBtn" data-action="reply-enable-notify">开启桌面通知</button>
+      </div>
+
+      <!-- 桌面通知的状态。安全上下文不满足时这里直接说明原因，见 renderReplyNotifyState -->
+      <p class="muted" id="replyNotifyState">正在检查桌面通知…</p>
+
+      <div id="replyList"><div class="empty">还没有收到回复。</div></div>
+    </section>
+
+    <!--
       班主任管理。一间我当班主任的班都没有时，整块藏起来（见 loadHeadTeacherSection）——
       给普通老师看一个只有标题的空架子，他只会以为界面坏了。
       这里的边界是死的：只限我当班主任的那几间班，而且只能增删普通任课老师 ——

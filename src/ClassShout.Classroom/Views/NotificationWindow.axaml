@@ -72,6 +72,13 @@
         <TextBlock Classes="bodySmall"
                    Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                    Text="{Binding Hint}" />
+
+        <!-- 弹窗上的「知道了」：教室里那块屏的角上就能一秒回完。
+             完整的回复（快捷/文字/语音）在主界面，这里只放最常用的那一个。 -->
+        <Button Classes="tonal small" HorizontalAlignment="Left"
+                IsVisible="{Binding CanAcknowledge}"
+                Command="{Binding AcknowledgeCommand}"
+                Content="知道了" />
       </StackPanel>
     </Grid>
   </Border>

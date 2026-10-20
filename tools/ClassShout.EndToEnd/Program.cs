@@ -291,6 +291,7 @@ internal static class Program
         // ---------- 3m2. 随机叫人与时间因子 ----------
         AssertRandomCall();
 
+
         // ---------- 3n. 常用语的自定义 ----------
         AssertPhraseSettings();
 
@@ -312,6 +313,11 @@ internal static class Program
         // ---------- 3t. 日志按天分文件、只留 7 天 ----------
         AssertLogRetention();
         AssertLogLevels();
+
+        // ---------- 3t2. 消息 ID、回复的拼装与教师端收件箱 ----------
+        // 放在日志那几条之后：这一段会临时改 CLASSSHOUT_DATA_DIR，
+        // 而日志断言对"日志目录是哪一个"很敏感。
+        AssertReplies();
         AssertShoutTargetCard();
         await AssertVoiceTimerResetsAsync();
 
@@ -664,6 +670,122 @@ internal static class Program
         Check("来源里带上了任教科目（同一间教室一天里有好几位老师来喊）",
             text.From?.StartsWith("数学", StringComparison.Ordinal) == true,
             $"From={text.From}");
+
+        // ---------- 3r2. 教室端回复（教室 → 教师，经服务器） ----------
+        //
+        // 这是这条链路上**唯一**反方向的业务消息：此前服务器只把教师端的东西转给教室，
+        // 教室端只回 ack/status。回复走的是"教室端主动 POST + 服务器挂到老师的长轮询"，
+        // 所以两头都要断言：教室端那条链发得出去，老师这条链收得到。
+        var replyReceived = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnReplyEnvelope(RelayEnvelope envelope)
+        {
+            if (envelope.Kind == RelayKinds.Reply)
+            {
+                replyReceived.TrySetResult(envelope);
+            }
+        }
+
+        teacher.EventReceived += OnReplyEnvelope;
+
+        try
+        {
+            // 原消息的 ID 是它的发送时刻；回复带着它回去，老师那边才知道回的是哪一句
+            var replyToId = MessageIds.New();
+            var replyId = MessageIds.New();
+
+            var replyOk = await classroom.SendReplyAsync(new ReplyMessage
+            {
+                Id = replyId,
+                ReplyToId = replyToId,
+                Kind = ReplyKinds.Acknowledge,
+                Text = "三年二班知道了",
+                From = "三年二班",
+            });
+
+            Check("教室回复：教室端把回复发到服务器（HTTP 成功）",
+                replyOk,
+                replyOk ? "已发送" : "发送失败");
+
+            if (replyOk)
+            {
+                var reply = await replyReceived.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+                Check("教师端经服务器收到教室回复", reply.ReplyKind == ReplyKinds.Acknowledge,
+                    $"kind={reply.ReplyKind}，text=「{reply.Text}」");
+
+                Check("回复带着原消息的 ID（老师据此知道回的是哪一句）",
+                    reply.ReplyToId == replyToId,
+                    $"replyToId={reply.ReplyToId}（期望 {replyToId}）");
+
+                Check("回复的 ID 就是它的发送时刻（服务器不另发一个随机串）",
+                    reply.Id == replyId && MessageIds.LooksLikeTimestamp(reply.Id),
+                    $"id={reply.Id}");
+
+                Check("回复里的教室名由服务器填（不接受客户端自称）",
+                    !string.IsNullOrWhiteSpace(reply.From) && reply.From != "三年二班",
+                    $"from={reply.From}（客户端传的是「三年二班」）");
+            }
+        }
+        finally
+        {
+            teacher.EventReceived -= OnReplyEnvelope;
+        }
+
+        // 语音回复：同一端点、带一段 base64 WAV
+        var voiceReplyReceived = new TaskCompletionSource<RelayEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnVoiceReply(RelayEnvelope envelope)
+        {
+            if (envelope.Kind == RelayKinds.Reply && envelope.ReplyKind == ReplyKinds.Voice)
+            {
+                voiceReplyReceived.TrySetResult(envelope);
+            }
+        }
+
+        teacher.EventReceived += OnVoiceReply;
+
+        try
+        {
+            var wav = WavCodec.Encode(AudioFormat.Default, new byte[16000]); // 半秒静音
+            var voiceOk = await classroom.SendReplyAsync(new ReplyMessage
+            {
+                Id = MessageIds.New(),
+                Kind = ReplyKinds.Voice,
+                Text = "（语音 1 秒）",
+                AudioWav = Convert.ToBase64String(wav),
+                AudioDurationMs = 1000,
+            });
+
+            Check("教室回复：语音回复也能经服务器发出去", voiceOk, voiceOk ? "已发送" : "发送失败");
+
+            if (voiceOk)
+            {
+                var voice = await voiceReplyReceived.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+                Check("语音回复带着一段可播放的 WAV，以及时长",
+                    voice.ReplyAudioBase64 is { Length: > 0 }
+                    && WavCodec.TryDecode(Convert.FromBase64String(voice.ReplyAudioBase64), out _, out _)
+                    && voice.ReplyAudioDurationMs == 1000,
+                    $"{voice.ReplyAudioBase64?.Length ?? 0} 字符 base64，{voice.ReplyAudioDurationMs} ms");
+            }
+        }
+        finally
+        {
+            teacher.EventReceived -= OnVoiceReply;
+        }
+
+        // 接口自己的闸门：没有教室令牌、或者认不出的回复方式，一律拒收
+        using (var noToken = new HttpRequestMessage(
+                   HttpMethod.Post, $"{root}{string.Format(RelayPaths.ClassroomReply, uuid)}")
+               {
+                   Content = JsonContent.Create(
+                       new ClassroomReplyRequest(Kind: ReplyKinds.Text, Text: "没令牌"), options: JsonOptions),
+               })
+        {
+            using var response = await http.SendAsync(noToken);
+            Check("教室回复：没有教室令牌的请求被拒（401）",
+                response.StatusCode == System.Net.HttpStatusCode.Unauthorized,
+                $"HTTP {(int)response.StatusCode}");
+        }
 
         // ---------- 4. 语音流（含逐字节校验） ----------
         var format = AudioFormat.Default;
@@ -4695,6 +4817,268 @@ internal static class Program
             //   · 随机模式下"还没有选学生""按小组叫""按哪种标识显示"这些
             //     只对手动勾选有意义的控件仍然出现，和抽签范围各说各的。
             AssertRandomCallPage();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", originalDataDir);
+        }
+    }
+
+    /// <summary>
+    /// 回复：消息 ID、回复的拼装、教师端的收件箱。
+    ///
+    /// 三件事都必须钉住，因为它们的错法都很安静：
+    ///   · ID 不是"发送时刻"时，回复对不上原消息 —— 界面上只是"回的那一条"显示成空白；
+    ///   · 组件拼错（多一个空格、漏一个组件）在教室里看不出来，只有老师那边觉得"这条有点怪"；
+    ///   · 收件箱不去重时，同一条回复会从局域网与中继各来一次 → 弹两次通知。
+    /// </summary>
+    private static void AssertReplies()
+    {
+        // ---------- 消息 ID = 发送时刻 ----------
+
+        // 用一个远未来的时刻：MessageIds 是单调的（同一毫秒连发会 +1ms），
+        // 用"过去的时间"做断言会被前面已经生成过的 ID 顶上去，变成一条会随运行顺序变化的测试。
+        var at = new DateTimeOffset(2099, 10, 20, 23, 32, 25, 123, TimeSpan.FromHours(8));
+        var id = MessageIds.New(at);
+
+        Check("消息 ID：就是发送时刻（yyyyMMddHHmmssfff）",
+            id == "20991020233225123",
+            id);
+
+        Check("消息 ID：定长，认得出是时间戳（与老版本的 GUID 区分开）",
+            id.Length == MessageIds.Length && MessageIds.LooksLikeTimestamp(id),
+            $"{id.Length} 位");
+
+        Check("消息 ID：能还原回时刻（排序就是按时间排）",
+            MessageIds.Parse(id) is { } parsed
+                && parsed.ToString("yyyyMMddHHmmssfff") == id,
+            MessageIds.Parse(id)?.ToString("yyyy-MM-dd HH:mm:ss.fff") ?? "(解析失败)");
+
+        // 时间没走或走回去了也要单调递增：重复的 ID 会让"回复对应哪条"变成多解
+        var first = MessageIds.New(at);
+        var second = MessageIds.New(at);
+        var third = MessageIds.New(at.AddHours(-1));
+
+        Check("消息 ID：同一时刻连发三条也不重复，而且仍按时间递增",
+            first != second && second != third
+            && string.CompareOrdinal(first, second) < 0
+            && string.CompareOrdinal(second, third) < 0,
+            $"{first} < {second} < {third}");
+
+        Check("消息 ID：认不出的一律返回空（不猜）",
+            MessageIds.Parse("abc") is null
+            && MessageIds.TimeText("") == string.Empty
+            && !MessageIds.LooksLikeTimestamp("a1b2c3d4e5f6a7b8c"),
+            "三次都按「认不出」处理");
+
+        // ---------- 回复的拼装（组件） ----------
+
+        var context = new ReplyContext("三年二班", "数学张老师", "请把作业收上来", at);
+
+        var ack = new ClassroomReplySettings().Normalized();
+        var ackText = ReplyComposer.ComposeAcknowledge(ack, context);
+
+        Check("回复拼装：默认的「知道了」带上教室名",
+            ackText == "三年二班知道了",
+            ackText);
+
+        var quick = QuickReply.Of("收到", "收到");
+        var quickText = ReplyComposer.Compose(quick, context);
+
+        Check("回复拼装：快捷回复拼出它的内容",
+            quickText == "收到",
+            quickText);
+
+        var composed = new List<MessageComponent>
+        {
+            MessageComponent.Of(ReplyComponentKinds.Classroom),
+            MessageComponent.Of(ReplyComponentKinds.Text, "收到，"),
+            MessageComponent.Of(ReplyComponentKinds.Original),
+            MessageComponent.Of(ReplyComponentKinds.Text, "（"),
+            MessageComponent.Of(ReplyComponentKinds.Time),
+            MessageComponent.Of(ReplyComponentKinds.Text, "）"),
+        };
+
+        var composedText = ReplyComposer.Compose(composed, context);
+
+        Check("回复拼装：教室名 / 原消息 / 时间都能拼进来，且不自动加空格",
+            composedText == "三年二班收到，请把作业收上来（23:32）",
+            composedText);
+
+        Check("回复拼装：组件为空时拼出空串（不瞎填占位）",
+            ReplyComposer.Compose(new List<MessageComponent>(), context) == string.Empty,
+            "返回空串");
+
+        Check("回复拼装：「知道了」的组件也被清空时兜一句「知道了」",
+            ReplyComposer.ComposeAcknowledge(new ClassroomReplySettings { AcknowledgeComponents = [] }, context) == "知道了",
+            ReplyComposer.ComposeAcknowledge(new ClassroomReplySettings { AcknowledgeComponents = [] }, context));
+
+        var teacherComponent = ReplyComposer.Compose(
+            [MessageComponent.Of(ReplyComponentKinds.Teacher)],
+            context);
+
+        Check("回复拼装：教师名字组件取老师在这间教室里的称呼（含科目）",
+            teacherComponent == "数学张老师",
+            teacherComponent);
+
+        // ---------- 教室端的回复设置 ----------
+
+        var messy = new ClassroomReplySettings
+        {
+            VoiceMaxSeconds = 999,
+            QuickReplies = [.. Enumerable.Range(0, 10).Select(i => QuickReply.Of($"第{i}句", $"第{i}句"))],
+        }.Normalized();
+
+        Check("回复设置：语音时长被夹到 60 秒以内",
+            messy.VoiceMaxSeconds == 60,
+            messy.VoiceMaxSeconds.ToString());
+
+        Check("回复设置：快捷回复最多留 6 个（再多教室那块屏摆不下）",
+            messy.QuickReplies.Count == 6,
+            messy.QuickReplies.Count.ToString());
+
+        var nothing = new ClassroomReplySettings
+        {
+            ShowAcknowledge = false,
+            AllowText = false,
+            AllowVoice = false,
+            QuickReplies = [],
+        }.Normalized();
+
+        Check("回复设置：全都关掉时至少保住「知道了」（否则教室里一个能点的都没有）",
+            nothing.ShowAcknowledge && nothing.AcknowledgeComponents.Count > 0,
+            $"知道了={nothing.ShowAcknowledge}，组件 {nothing.AcknowledgeComponents.Count} 个");
+
+        Check("回复设置：默认给了几条快捷回复（空面板对第一次用的人毫无提示）",
+            ClassroomReplySettings.WithDefaults().Normalized().QuickReplies.Count >= 3,
+            ClassroomReplySettings.WithDefaults().QuickReplies.Count.ToString());
+
+        var defaults = ClassroomReplySettings.WithDefaults();
+        Check("回复设置：默认语音上限是 15 秒",
+            defaults.VoiceMaxSeconds == 15,
+            defaults.VoiceMaxSeconds.ToString());
+
+        // ---------- 教师端的收件箱 ----------
+
+        var originalDataDir = Environment.GetEnvironmentVariable("CLASSSHOUT_DATA_DIR");
+        var tempDataDir = Path.Combine(Path.GetTempPath(), "cs-replies-" + Guid.NewGuid().ToString("N")[..8]);
+
+        try
+        {
+            // 收件箱会读写本机设置（名单、日志），指到临时目录免得动使用者自己的
+            Environment.SetEnvironmentVariable("CLASSSHOUT_DATA_DIR", tempDataDir);
+
+            var shell = new TeacherShellViewModel();
+
+            Check("教室回复：一开始是空的",
+                !shell.HasReplies && shell.UnreadReplies == 0,
+                $"{shell.Replies.Count} 条");
+
+            // 接一个假的通知器，验证"收到回复会提醒老师"这条链
+            var notified = new List<string>();
+            TeacherPlatform.RegisterNotifier((title, body) => notified.Add($"{title}|{body}"));
+
+            var shoutId = MessageIds.New(at);
+            var reply = new ReplyMessage
+            {
+                Id = MessageIds.New(at.AddSeconds(3)),
+                ReplyToId = shoutId,
+                Kind = ReplyKinds.Acknowledge,
+                From = "三年二班",
+                Text = "三年二班知道了",
+            };
+
+            shell.AcceptReply(reply);
+
+            Check("教室回复：收下之后出现在列表里，并且算一条未读",
+                shell.HasReplies && shell.Replies.Count == 1 && shell.UnreadReplies == 1,
+                $"{shell.Replies.Count} 条，未读 {shell.UnreadReplies}");
+
+            Check("教室回复：那一条写着教室、方式、内容与时间",
+                shell.Replies[0].From == "三年二班"
+                && shell.Replies[0].KindLabel == "知道了"
+                && shell.Replies[0].DisplayText == "三年二班知道了"
+                && shell.Replies[0].TimeText.Length == 8,
+                $"{shell.Replies[0].From} / {shell.Replies[0].KindLabel} / {shell.Replies[0].DisplayText} / {shell.Replies[0].TimeText}");
+
+            Check("教室回复：记得回的是哪一条（按原消息的 ID）",
+                shell.Replies[0].ReplyToId == shoutId
+                && shell.Replies[0].ReplyToText.Contains(MessageIds.TimeText(shoutId), StringComparison.Ordinal),
+                shell.Replies[0].ReplyToText);
+
+            Check("教室回复：收到回复会弹一次系统通知（标题带教室名，正文是回复内容）",
+                notified.Count == 1
+                && notified[0].Contains("三年二班", StringComparison.Ordinal)
+                && notified[0].Contains("三年二班知道了", StringComparison.Ordinal),
+                notified.Count == 0 ? "(没有通知)" : notified[0]);
+
+            // 同一条从两条路（局域网 + 中继）各来一次：只算一条、只通知一次
+            shell.AcceptReply(reply);
+
+            Check("教室回复：同一条从两条路各来一次时只算一条（不重复弹通知）",
+                shell.Replies.Count == 1 && notified.Count == 1,
+                $"{shell.Replies.Count} 条，通知 {notified.Count} 次");
+
+            // 语音回复：没有正文，显示时长
+            var voice = new ReplyMessage
+            {
+                Id = MessageIds.New(at.AddSeconds(9)),
+                ReplyToId = shoutId,
+                Kind = ReplyKinds.Voice,
+                From = "三年二班",
+                Text = string.Empty,
+                AudioWav = Convert.ToBase64String([1, 2, 3, 4]),
+                AudioDurationMs = 3200,
+            };
+
+            shell.AcceptReply(voice);
+
+            Check("教室回复：语音回复显示成「（语音 N 秒）」，并带着可播放的音频",
+                shell.Replies.Count == 2
+                && shell.Replies[0].IsVoice
+                && shell.Replies[0].DisplayText.Contains("语音 3 秒", StringComparison.Ordinal)
+                && shell.Replies[0].HasAudio,
+                shell.Replies.Count > 0 ? shell.Replies[0].DisplayText : "(缺)");
+
+            Check("教室回复：最新的排在最前",
+                shell.Replies[0].Kind == ReplyKinds.Voice && shell.Replies[1].Kind == ReplyKinds.Acknowledge,
+                string.Join("、", shell.Replies.Select(r => r.KindLabel)));
+
+            Check("教室回复：两条未读，标题行写着有几条新的",
+                shell.UnreadReplies == 2 && shell.ReplySummaryText.Contains("2 条", StringComparison.Ordinal),
+                shell.ReplySummaryText);
+
+            shell.MarkRepliesReadCommand.Execute(null);
+
+            Check("教室回复：标为已读之后未读数归零，列表还在",
+                shell.UnreadReplies == 0 && shell.Replies.Count == 2 && !shell.HasUnreadReplies,
+                $"未读 {shell.UnreadReplies}，共 {shell.Replies.Count} 条");
+
+            shell.ClearRepliesCommand.Execute(null);
+
+            Check("教室回复：清空之后列表与未读都没了",
+                shell.Replies.Count == 0 && shell.UnreadReplies == 0 && !shell.HasReplies,
+                $"{shell.Replies.Count} 条");
+
+            // 列表上限：只留最近 50 条，免得一学期之后启动时读一份巨大的配置
+            for (var i = 0; i < 60; i++)
+            {
+                shell.AcceptReply(new ReplyMessage
+                {
+                    Id = MessageIds.New(at.AddSeconds(20 + i)),
+                    Kind = ReplyKinds.Quick,
+                    From = "三年二班",
+                    Text = $"第 {i} 条",
+                });
+            }
+
+            Check("教室回复：只留最近 50 条（再多也不会有人翻）",
+                shell.Replies.Count == 50,
+                shell.Replies.Count.ToString());
+
+            Check("教室回复：留下的是最新的那 50 条（最旧的被挤掉）",
+                shell.Replies[0].Text == "第 59 条" && shell.Replies[^1].Text == "第 10 条",
+                $"{shell.Replies[0].Text} … {shell.Replies[^1].Text}");
         }
         finally
         {

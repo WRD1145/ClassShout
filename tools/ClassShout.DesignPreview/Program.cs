@@ -1517,6 +1517,29 @@ internal static class Program
                 }, 0, 0,
                 _ => null),
 
+            // 教室端「回复条」。这一块新加，而且只在"收到一条喊话之后"才出现 ——
+            // 待机那张图里它整个不可见，不单独导一张就等于从没渲染过。
+            // 三样东西都要出现：知道了、设置里那几条快捷回复、文字与语音入口。
+            new("classroom-reply",
+                () =>
+                {
+                    var vm = new ClassroomViewModel
+                    {
+                        CurrentSpeaker = "张老师",
+                        CurrentText = "请把昨天的作业收上来，课代表送到办公室。",
+                        Stage = ClassroomStage.SpeakingText,
+                    };
+
+                    // 与真实路径同一个入口：记下"回哪一条"（那条消息的 ID 是它的发送时刻）
+                    vm.RememberReplyForPreview(
+                        ClassShout.Core.Protocol.MessageIds.New(DateTimeOffset.Now),
+                        "张老师",
+                        "请把昨天的作业收上来，课代表送到办公室。");
+
+                    return new ClassroomWindow { DataContext = vm };
+                }, 0, 0,
+                _ => null),
+
             // 教室端设置窗口。设置项从主界面搬出来之后，主界面只留大字区，
             // 所以必须单独渲染一次确认它自己站得住 ——
             // 不做像素判据（内容以文字与控件为主，颜色占比判据不适用），

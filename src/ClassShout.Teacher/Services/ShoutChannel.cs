@@ -125,7 +125,8 @@ public sealed class ShoutChannel : IShoutTransport, IAsyncDisposable
         // 而教室端从来没见过这个 audioStart —— 后续的裸 PCM 会被发到一个
         // 没有格式说明的对端，结尾还会补一个教室端不认识的 audioEnd。
         // 而且这个脏状态没有任何地方会清，只能靠断开重连。
-        var id = Guid.NewGuid().ToString("N");
+        // 语音这条消息的 id 同样是**发送时刻**：教室端回复时要靠它对上"回的哪一句语音"。
+        var id = MessageIds.New();
         await _client.SendAudioStartAsync(id, format, cancellationToken).ConfigureAwait(false);
 
         // 走到这里才说明教室端确实进入了播放状态

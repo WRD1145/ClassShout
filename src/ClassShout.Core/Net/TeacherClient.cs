@@ -143,7 +143,7 @@ public sealed class TeacherClient : IAsyncDisposable
     /// <summary>发送文字喊话。</summary>
     public Task SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default)
     {
-        message.Id = string.IsNullOrEmpty(message.Id) ? Guid.NewGuid().ToString("N") : message.Id;
+        message.Id = string.IsNullOrEmpty(message.Id) ? MessageIds.New() : message.Id;
         return SendAsync(message, cancellationToken);
     }
 
@@ -218,7 +218,7 @@ public sealed class TeacherClient : IAsyncDisposable
         int chunkSize = ShoutProtocol.DefaultImageChunkSize,
         CancellationToken cancellationToken = default)
     {
-        message.Id = string.IsNullOrEmpty(message.Id) ? Guid.NewGuid().ToString("N") : message.Id;
+        message.Id = string.IsNullOrEmpty(message.Id) ? MessageIds.New() : message.Id;
         message.TotalBytes = image.Length;
 
         await SendAsync(message, cancellationToken).ConfigureAwait(false);

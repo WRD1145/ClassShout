@@ -552,6 +552,118 @@
         </md3:Md3Card>
 
         <md3:Md3Card Classes="outlined">
+          <StackPanel Spacing="10">
+            <TextBlock Classes="cardTitle" Text="回复" />
+
+            <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="老师喊一句之后，教室里那块屏的下方会出现回复按钮：点「知道了」、挑一句快捷回复、打一句话，或者录一小段语音。回复会带着原消息的 ID 回到教师端。" />
+
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="bodyMedium" Text="允许回复" />
+                <TextBlock Classes="bodySmall"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="关掉之后教室这块屏上不出现任何回复入口" />
+              </StackPanel>
+              <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                            IsChecked="{Binding ReplyEnabled}" />
+            </Grid>
+
+            <StackPanel Spacing="10" IsEnabled="{Binding ReplyEnabled}">
+
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="bodyMedium" Text="显示「知道了」按钮" />
+                  <TextBlock Classes="bodySmall"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="最常用的一颗：一秒点完，老师就知道教室里看到了" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                              IsChecked="{Binding ReplyShowAcknowledge}" />
+              </Grid>
+
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="bodyMedium" Text="允许文字回复" />
+                  <TextBlock Classes="bodySmall"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="教室里可以现打一句话" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                              IsChecked="{Binding ReplyAllowText}" />
+              </Grid>
+
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="2">
+                  <TextBlock Classes="bodyMedium" Text="允许语音回复" />
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding ReplyMicHint}" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                              IsEnabled="{Binding HasReplyMicrophone}"
+                              IsChecked="{Binding ReplyAllowVoice}" />
+              </Grid>
+
+              <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="bodyMedium" Text="语音回复最长" />
+                  <TextBlock Grid.Column="1" Classes="bodySmall"
+                             VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding ReplyVoiceMaxSeconds, StringFormat='{}{0} 秒'}" />
+                </Grid>
+                <Slider Minimum="3" Maximum="60" TickFrequency="1" IsSnapToTickEnabled="True"
+                        Value="{Binding ReplyVoiceMaxSeconds}" />
+              </StackPanel>
+
+              <!-- 快捷回复：增删都由教室端自己决定 -->
+              <StackPanel Spacing="6">
+                <TextBlock Classes="bodyMedium" Text="快捷回复" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="最多 6 个：按钮就排在「知道了」旁边，屏上摆得下也点得准。" />
+
+                <ItemsControl ItemsSource="{Binding ReplyQuickReplyRows}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ClassroomViewModel+QuickReplyRow">
+                      <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,4">
+                        <StackPanel Spacing="1">
+                          <TextBlock Classes="bodyMedium" Text="{Binding Label}" />
+                          <TextBlock Classes="bodySmall"
+                                     Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                     Text="{Binding Summary}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Classes="text small" Content="删除"
+                                Command="{Binding $parent[ItemsControl].((vm:ClassroomViewModel)DataContext).RemoveQuickReplyCommand}"
+                                CommandParameter="{Binding Reply}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="8">
+                  <TextBox Classes="outlined dense" Watermark="按钮文字（可留空）"
+                           Text="{Binding NewQuickReplyLabel}" />
+                  <TextBox Grid.Column="1" Classes="outlined dense" Watermark="回复内容"
+                           Text="{Binding NewQuickReplyText}" />
+                  <Button Grid.Column="2" Classes="tonal" Content="添加"
+                          Command="{Binding AddQuickReplyCommand}" />
+                </Grid>
+
+                <Button Classes="text small" Content="恢复默认的几条"
+                        Command="{Binding ResetQuickRepliesCommand}" />
+              </StackPanel>
+
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="这些设置存在本机的 classroom-reply.json 里：能怎么回取决于这间教室（有没有麦克风、这个班习惯怎么答），所以由教室端决定，而不是所有教室共用一个开关。" />
+            </StackPanel>
+          </StackPanel>
+        </md3:Md3Card>
+
+        <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="8" IsEnabled="{Binding !IsBackgroundLocked}">
             <TextBlock Classes="cardTitle" Text="后台运行" />
             <TextBlock Classes="bodySmall" TextWrapping="Wrap"

@@ -81,6 +81,7 @@ public static class ShoutCodec
                 AudioEndMessage.TypeName => root.Deserialize<AudioEndMessage>(JsonOptions),
                 StopMessage.TypeName => root.Deserialize<StopMessage>(JsonOptions),
                 AckMessage.TypeName => root.Deserialize<AckMessage>(JsonOptions),
+                ReplyMessage.TypeName => root.Deserialize<ReplyMessage>(JsonOptions),
                 StatusMessage.TypeName => root.Deserialize<StatusMessage>(JsonOptions),
                 ByeMessage.TypeName => root.Deserialize<ByeMessage>(JsonOptions),
                 ErrorMessage.TypeName => root.Deserialize<ErrorMessage>(JsonOptions),

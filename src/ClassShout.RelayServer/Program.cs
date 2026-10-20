@@ -211,6 +211,15 @@ var OnlineWindow = TimeSpan.FromSeconds(90);
 /// </summary>
 const int MaxAudioChunkBytes = 16 * 1024;
 
+/// <summary>
+/// 语音回复的上限（base64 之后的字符数，约 1 MiB 原始音频）。
+///
+/// 教室端的设置里语音回复默认限 15 秒（16 kHz 单声道 16 bit ≈ 490 KB，
+/// base64 后 ≈ 650 KB），这里再留一点余量给"老师手动把上限调到 30 秒"的教室。
+/// 超了直接 413 并说明原因，而不是收下半截 —— 截断的 WAV 播出来是一声爆音。
+/// </summary>
+const int MaxReplyAudioBase64 = 1400 * 1024;
+
 logger.LogInformation("注册表：{Path}（已有 {Count} 条记录）", statePath, store.Count);
 logger.LogInformation("用户表：{Path}（已有 {Count} 个账号）", userStatePath, users.Count);
 
@@ -1930,6 +1939,67 @@ app.MapPost(RelayPaths.Route(RelayPaths.ClassroomStatus), (
     });
 
     return Results.Ok(new { ok = true });
+});
+
+/// <summary>
+/// 教室端回复（教室 → 教师）。
+///
+/// 服务器在这里仍然只是转发：验教室令牌、补上"谁回的"，然后挂到"这间教室的老师"的
+/// 长轮询上 —— 它不理解"知道了"与"语音回复"的区别，也不该理解。
+///
+/// 语音回复带在同一个请求体里（WAV base64），所以对请求体单独放宽到 2 MiB：
+/// 15 秒 16 kHz 单声道 16 bit 的 WAV 约 490 KB，base64 之后约 650 KB。
+/// 宽松上限配一条明确的下限校验（超过就 413 并说清原因），
+/// 而不是"收下来再默默截断"—— 截断的 WAV 在教师端播出来会是一声爆音。
+/// </summary>
+app.MapPost(RelayPaths.Route(RelayPaths.ClassroomReply), (
+    string uuid,
+    ClassroomReplyRequest request,
+    [FromHeader(Name = RelayPaths.TokenHeader)] string? token) =>
+{
+    if (!sessions.ValidateClassroomToken(uuid, token))
+    {
+        return Results.Unauthorized();
+    }
+
+    if (!ReplyKinds.All.Contains(request.Kind, StringComparer.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { error = "认不出这是哪一种回复。" });
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Text) && string.IsNullOrWhiteSpace(request.AudioWavBase64))
+    {
+        return Results.BadRequest(new { error = "这条回复既没有文字也没有语音。" });
+    }
+
+    if (request.AudioWavBase64 is { Length: > MaxReplyAudioBase64 })
+    {
+        return Results.Json(
+            new { error = "这段语音太长了，请缩短一点再发。" },
+            statusCode: StatusCodes.Status413PayloadTooLarge);
+    }
+
+    store.Touch(uuid);
+
+    var classroom = store.Get(uuid);
+    var id = string.IsNullOrWhiteSpace(request.Id) ? MessageIds.New() : request.Id!.Trim();
+
+    NotifyTeachers(uuid, new RelayEnvelope
+    {
+        Kind = RelayKinds.Reply,
+        Id = id,
+        ReplyToId = request.ReplyToId,
+        ReplyKind = request.Kind,
+        From = classroom?.Name ?? "教室",
+        Text = request.Text,
+        ReplyAudioBase64 = request.AudioWavBase64,
+        ReplyAudioDurationMs = request.AudioDurationMs,
+    });
+
+    logger.LogInformation("教室 {Classroom} 回复（{Kind}）：{Text}",
+        classroom?.Name ?? uuid, request.Kind, request.Text);
+
+    return Results.Ok(new { ok = true, id });
 });
 
 // ======================== 安全响应头 ========================

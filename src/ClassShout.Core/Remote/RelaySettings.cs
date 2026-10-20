@@ -303,6 +303,18 @@ public static class LocalSettings
     public static TeacherRosterSettings LoadRosters()
         => Load("teacher-rosters.json", static () => new TeacherRosterSettings());
 
+    /// <summary>
+    /// 教室端的回复设置（快捷回复、知道了、文字/语音开关）。
+    ///
+    /// 存在教室端：回复是教室里的人在做，而"能怎么回"取决于那间教室的实际情况
+    /// （有没有麦克风、这个班习惯怎么答）。放在教师端就会变成"所有教室同一套按钮"。
+    /// </summary>
+    public static ClassroomReplySettings LoadReply()
+        => Load("classroom-reply.json", ClassroomReplySettings.WithDefaults);
+
+    public static bool SaveReply(ClassroomReplySettings settings)
+        => Save("classroom-reply.json", settings.Normalized());
+
     public static bool SaveRosters(TeacherRosterSettings settings)
         => Save("teacher-rosters.json", settings);
 

@@ -14,6 +14,9 @@ internal static class Program
         TeacherPlatform.DeviceName = $"{Environment.MachineName}（PC）";
         TeacherPlatform.RegisterAudioRecorder(() => new NAudioRecorder());
 
+        // 收到教室回复时的系统通知，以及语音回复的播放（Windows 托盘气泡 / Linux notify-send）
+        DesktopNotifier.Register();
+
         // 把 classshout:// 注册到本用户，让网页上的"用教师端打开"按钮能叫起这个程序。
         // 注册不上不影响使用：设备页里粘贴链接那条路一直可用。
         UrlSchemeRegistrar.TryRegister(out _);
