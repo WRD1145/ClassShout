@@ -25,11 +25,11 @@ public sealed class ClassroomMicRecorder : IDisposable
     private readonly Lock _gate = new();
 
     private CancellationTokenSource? _cts;
-    private Task? _pump;
 
 #if WINDOWS
     private NAudio.Wave.WaveInEvent? _waveIn;
 #else
+    private Task? _pump;
     private Process? _arecord;
 #endif
 

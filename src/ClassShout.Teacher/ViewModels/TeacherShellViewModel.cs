@@ -468,7 +468,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 语音那条"实时链路"同时只能发往一间（手边这条连接对着一间教室）。
         // 告诉页面是哪一间：多班发送时要把它从"额外那几路"里排除，否则同一段声音
         // 会从那一间出两遍 —— 听起来像回声。
-        Voice.ActiveTargetUuid = lanUuid ?? (IsServerBound ? BindUuid : null);
+        if (Voice is not null)
+        {
+            Voice.ActiveTargetUuid = lanUuid ?? (IsServerBound ? BindUuid : null);
+        }
 
         // 名单页那一行"这个班用的是谁的名单"跟着一起刷新（名单按班隔离，
         // 换个班就可能换成班主任那份，上传入口也要跟着开或关）。
