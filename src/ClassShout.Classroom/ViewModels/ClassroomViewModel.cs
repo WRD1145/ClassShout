@@ -90,7 +90,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     private long _presentationTicket;
 
     // —— 跨局域网中继 ——
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
+    private readonly HttpClient _http = TlsPolicy.CreateClient(TimeSpan.FromSeconds(60));
 
     /// <summary>把喊话投给本机 ClassIsland 联动插件用的投递器。</summary>
     private readonly ClassIslandNotifier _classIslandNotifier;
@@ -159,7 +159,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 系统语音始终建起来：它不依赖外网，是保底引擎，
         // 也是 Edge 连不上时的回落目标。
         _speechSettings = LocalSettings.LoadSpeech();
-        _speech = new EdgeTtsSynthesizer(new EdgeTtsClient(_http), ClassroomPlatform.CreateSystemSpeech())
+        // 在线朗读走的是**第三方**（微软），所以给它一把永远严格的客户端：
+        // "允许不信任的 TLS"那一项只该放宽我们自己那台服务器。
+        _speech = new EdgeTtsSynthesizer(new EdgeTtsClient(TlsPolicy.CreateStrictClient()), ClassroomPlatform.CreateSystemSpeech())
         {
             Engine = _speechSettings.Engine,
             EdgeVoice = _speechSettings.EdgeVoice,
@@ -217,6 +219,10 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         RelayServerUrl = _relaySettings.ServerUrl ?? string.Empty;
         RelayUuid = _relaySettings.Uuid;
         RelaySecret = _relaySettings.Secret;
+
+        // 证书策略在任何一次请求之前生效（连服务器、注册教室都要过它）
+        TlsPolicy.AllowUntrusted = _relaySettings.AllowUntrustedTls;
+        _allowUntrustedTls = _relaySettings.AllowUntrustedTls;
 
         // 让协议层在握手完成后自动回状态，内容由这里提供运行态
         _server.StatusFactory = BuildStatus;
@@ -1926,6 +1932,38 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ConnectRelayCommand))]
     private string _relayServerUrl = string.Empty;
+
+    private bool _allowUntrustedTls;
+
+    /// <summary>
+    /// 允许"证书有问题也继续连"。作用范围是**连中继服务器**（以及教室端的检查更新）。
+    ///
+    /// 改完立刻对下一次连接生效；已经建立的连接不受影响，所以通常要再点一次「连接服务器」。
+    /// </summary>
+    public bool AllowUntrustedTls
+    {
+        get => _allowUntrustedTls;
+        set
+        {
+            if (!SetProperty(ref _allowUntrustedTls, value))
+            {
+                return;
+            }
+
+            TlsPolicy.AllowUntrusted = value;
+
+            _relaySettings.AllowUntrustedTls = value;
+            LocalSettings.SaveClassroom(_relaySettings);
+
+            OnPropertyChanged(nameof(TlsPolicyHint));
+            AddLog("服务器", value
+                ? "已允许证书有问题的连接：自签证书的服务器能连了，但中间人也能读到内容。"
+                : "已恢复只接受证书正常的连接。");
+        }
+    }
+
+    /// <summary>这一项现在是什么策略、代价是什么。</summary>
+    public string TlsPolicyHint => TlsPolicy.Describe(AllowUntrustedTls);
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RelayStatusText))]

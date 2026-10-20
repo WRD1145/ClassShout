@@ -3,6 +3,7 @@ using System.Text;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.Security;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClassShout.Classroom.Services;
@@ -318,6 +319,9 @@ internal static class Program
         // 放在日志那几条之后：这一段会临时改 CLASSSHOUT_DATA_DIR，
         // 而日志断言对"日志目录是哪一个"很敏感。
         AssertReplies();
+
+        // ---------- 3u. 证书策略（允许不信任的 TLS） ----------
+        AssertTlsPolicy();
         AssertShoutTargetCard();
         await AssertVoiceTimerResetsAsync();
 
@@ -4825,6 +4829,82 @@ internal static class Program
     }
 
     /// <summary>
+    /// 「允许不信任的 TLS 连接」这条安全开关。
+    ///
+    /// 它是整个应用里唯一一处"主动降低安全性"的开关，所以判定逻辑单独抽成
+    /// <see cref="TlsPolicy.IsAcceptable"/> 并在这里钉死：证书正常时永远接受，
+    /// 证书有问题时**只有**打开开关才接受。这条判断的错法（该拒的放过去）
+    /// 在界面上完全看不出来 —— 连接照样成功，只是中间人也能成功。
+    /// </summary>
+    private static void AssertTlsPolicy()
+    {
+        Check("证书策略：证书正常时永远接受（与开关无关）",
+            TlsPolicy.IsAcceptable(SslPolicyErrors.None, allowUntrusted: false)
+            && TlsPolicy.IsAcceptable(SslPolicyErrors.None, allowUntrusted: true),
+            "两种开关状态都接受");
+
+        Check("证书策略：默认（开关关着）拒绝有问题的证书",
+            !TlsPolicy.IsAcceptable(SslPolicyErrors.RemoteCertificateChainErrors, allowUntrusted: false)
+            && !TlsPolicy.IsAcceptable(SslPolicyErrors.RemoteCertificateNameMismatch, allowUntrusted: false)
+            && !TlsPolicy.IsAcceptable(
+                SslPolicyErrors.RemoteCertificateChainErrors | SslPolicyErrors.RemoteCertificateNameMismatch,
+                allowUntrusted: false),
+            "自签 / 名字不匹配 / 两者都有，全部拒绝");
+
+        Check("证书策略：只有明确打开开关才接受有问题的证书",
+            TlsPolicy.IsAcceptable(SslPolicyErrors.RemoteCertificateChainErrors, allowUntrusted: true)
+            && TlsPolicy.IsAcceptable(SslPolicyErrors.RemoteCertificateNotAvailable, allowUntrusted: true),
+            "打开之后才放行");
+
+        var previous = TlsPolicy.AllowUntrusted;
+
+        try
+        {
+            TlsPolicy.AllowUntrusted = false;
+            var handler = TlsPolicy.CreateHandler();
+            var callback = handler.SslOptions.RemoteCertificateValidationCallback;
+
+            Check("证书策略：处理器带了校验回调（开关唯一起作用的地方）",
+                callback is not null,
+                callback is null ? "(没有回调)" : "有回调");
+
+            if (callback is not null)
+            {
+                // 同一个处理器、同一个坏证书，只翻那个开关 —— 结果必须跟着变。
+                // 这正是"改完立刻对下一次连接生效"的实现依据：回调在每次握手时才读开关。
+                TlsPolicy.AllowUntrusted = false;
+                var strict = callback(null, null, null, SslPolicyErrors.RemoteCertificateChainErrors);
+
+                TlsPolicy.AllowUntrusted = true;
+                var loose = callback(null, null, null, SslPolicyErrors.RemoteCertificateChainErrors);
+
+                TlsPolicy.AllowUntrusted = false;
+                var good = callback(null, null, null, SslPolicyErrors.None);
+
+                Check("证书策略：同一个处理器里，开关一翻结果就变（不必重启应用）",
+                    !strict && loose && good,
+                    $"关着={strict}，打开={loose}，证书正常={good}");
+            }
+        }
+        finally
+        {
+            TlsPolicy.AllowUntrusted = previous;
+        }
+        // 两个应用都把这一项存在各自的联网配置里：这是唯一能在重启之后还生效的地方，
+        // 而它默认必须是关的 —— 一个默认打开的"忽略证书"开关等于没有开关。
+        var teacher = new TeacherRelaySettings();
+        var classroom = new ClassroomRelaySettings();
+
+        Check("证书策略：教师端与教室端的这一项默认都是关的",
+            !teacher.AllowUntrustedTls && !classroom.AllowUntrustedTls,
+            $"教师端={teacher.AllowUntrustedTls}，教室端={classroom.AllowUntrustedTls}");
+
+        Check("证书策略：界面上那句话会讲清代价（打开时提到中间人）",
+            TlsPolicy.Describe(false).Contains("自签", StringComparison.Ordinal)
+            && TlsPolicy.Describe(true).Contains("中间人", StringComparison.Ordinal),
+            TlsPolicy.Describe(true));
+    }
+    /// <summary>
     /// 回复：消息 ID、回复的拼装、教师端的收件箱。
     ///
     /// 三件事都必须钉住，因为它们的错法都很安静：
@@ -4833,8 +4913,7 @@ internal static class Program
     ///   · 收件箱不去重时，同一条回复会从局域网与中继各来一次 → 弹两次通知。
     /// </summary>
     private static void AssertReplies()
-    {
-        // ---------- 消息 ID = 发送时刻 ----------
+    {        // ---------- 消息 ID = 发送时刻 ----------
 
         // 用一个远未来的时刻：MessageIds 是单调的（同一毫秒连发会 +1ms），
         // 用"过去的时间"做断言会被前面已经生成过的 ID 顶上去，变成一条会随运行顺序变化的测试。
@@ -5087,8 +5166,7 @@ internal static class Program
     }
 
     /// <summary>呼叫页随机模式的界面状态（跑在临时数据目录里，不碰使用者的设置）。</summary>
-    private static void AssertRandomCallPage()
-    {
+    private static void AssertRandomCallPage()    {
         var rosters = new TeacherRosterSettings();
         // 刻意让 B组 只有男生：这样"B组 + 只要女生"是一个**空范围**，
         // 才测得到"范围里一个人都没有"那句话（每个组合都有人时永远走不到那个分支）

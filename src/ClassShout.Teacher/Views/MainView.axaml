@@ -1265,6 +1265,7 @@
                          Watermark="https://relay.example.com 或 http://192.168.1.10:8080"
                          Text="{Binding ServerUrl}" />
 
+
                 <!--
                   刻意不写 IsEnabled：按钮的可用性由命令的 CanExecute 决定（含"输入为空"与"正在执行"两种）。
                   再写一条 IsEnabled 绑定等于给同一件事设两个来源，两个都得为真按钮才亮 ——
@@ -1282,6 +1283,31 @@
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                            Text="{Binding ServerAddressStatus}" />
+
+                <!--
+                  「允许不信任的 TLS 连接」：学校里那台中继服务器常常是自签证书，
+                  而浏览器能点"继续访问"，教师端没有那个按钮 —— 不打开这一项就是
+                  一句"SSL 证书有问题"之后什么都做不了。
+                  同一份开关也管着检查更新（学校里的 TLS 代理会把下载地址的证书换掉）。
+                -->
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="bodyMedium" Text="允许不信任的 TLS 连接" />
+                    <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="证书有问题也继续连（自签证书的服务器、或学校换了证书的更新下载）" />
+                  </StackPanel>
+                  <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                                IsChecked="{Binding AllowUntrustedTls}" />
+                </Grid>
+
+                <Border Background="{DynamicResource Md3.SurfaceContainerHighest}"
+                        CornerRadius="8" Padding="10,8">
+                  <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding TlsPolicyHint}" />
+                </Border>
+
 
                 <Border IsVisible="{Binding HasServerAddressError}"
                         Background="{DynamicResource Md3.ErrorContainer}"

@@ -315,6 +315,29 @@
                      Watermark="服务器地址"
                      Text="{Binding RelayServerUrl}" />
 
+            <!--
+              「允许不信任的 TLS 连接」：学校自己部署的服务器常常是自签证书，
+              而教室端没有浏览器那个"继续访问"按钮 —— 不打开这一项就是一句
+              "SSL 证书有问题"之后什么都做不了。
+            -->
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="bodyMedium" Text="允许不信任的 TLS 连接" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="证书有问题也继续连（自签证书的服务器用）" />
+              </StackPanel>
+              <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                            IsChecked="{Binding AllowUntrustedTls}" />
+            </Grid>
+
+            <Border Background="{DynamicResource Md3.SurfaceContainerHighest}"
+                    CornerRadius="8" Padding="10,8">
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                         Text="{Binding TlsPolicyHint}" />
+            </Border>
+
             <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
               <Button Grid.Column="0" Classes="tonal block" Content="连接服务器"
                       Command="{Binding ConnectRelayCommand}" />

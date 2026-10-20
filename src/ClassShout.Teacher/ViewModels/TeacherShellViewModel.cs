@@ -77,7 +77,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly ShoutChannel _channel = new();
     private readonly ClassroomDiscovery _discovery = new();    private readonly ShoutTransportRouter _transport = new();
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
+    private readonly HttpClient _http = TlsPolicy.CreateClient(TimeSpan.FromSeconds(60));
     private readonly ShoutQueue _shoutQueue = new();
     private readonly TeacherRelaySettings _relaySettings;
 
@@ -92,6 +92,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     public TeacherShellViewModel()
     {
         _relaySettings = LocalSettings.LoadTeacher();
+
+        // 证书策略要在任何一次网络请求之前生效：检查更新、登录、绑定都可能
+        // 在界面刚出来时就被点到，而 OpenSSL/Windows 的握手只看当前这个开关。
+        TlsPolicy.AllowUntrusted = _relaySettings.AllowUntrustedTls;
+        _allowUntrustedTls = _relaySettings.AllowUntrustedTls;
+
         ServerUrl = _relaySettings.ServerUrl ?? string.Empty;
 
         // 已保存的地址单独存一份：登录、注册、绑定教室都以它为准，
@@ -2686,6 +2692,39 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasServerAddressError))]
     private string? _serverAddressError;
+
+    private bool _allowUntrustedTls;
+
+    /// <summary>
+    /// 允许"证书有问题也继续连"（连服务器与检查更新都算）。
+    ///
+    /// 改完立刻对**下一次**连接生效（校验回调每次握手都会读这个开关），
+    /// 已经建立的连接不受影响 —— 所以打开之后通常要重新点一次「登录」或「绑定」。
+    /// </summary>
+    public bool AllowUntrustedTls
+    {
+        get => _allowUntrustedTls;
+        set
+        {
+            if (!SetProperty(ref _allowUntrustedTls, value))
+            {
+                return;
+            }
+
+            TlsPolicy.AllowUntrusted = value;
+
+            _relaySettings.AllowUntrustedTls = value;
+            LocalSettings.SaveTeacher(_relaySettings);
+
+            OnPropertyChanged(nameof(TlsPolicyHint));
+            AddLog(value
+                ? "已允许证书有问题的连接：自签证书的服务器能连了，但中间人也能读到内容。"
+                : "已恢复只接受证书正常的连接。");
+        }
+    }
+
+    /// <summary>这一项现在是什么策略、代价是什么。</summary>
+    public string TlsPolicyHint => TlsPolicy.Describe(AllowUntrustedTls);
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasServerAddressNotice))]

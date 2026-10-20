@@ -24,6 +24,15 @@ public sealed class ClassroomRelaySettings
     /// <summary>教室名，注册时上报给服务器，也是教师端绑定后看到的名称。</summary>
     public string ClassroomName { get; set; } = "教室";
 
+    /// <summary>
+    /// 允许"证书有问题也继续连"（自签证书的服务器用）。
+    ///
+    /// 与教师端同一个开关、同一份含义（见 <see cref="TlsPolicy"/>）：
+    /// 教室里那台电脑连的也是运维自己部署的服务器，证书同样可能自签。
+    /// 默认关闭 —— 打开之后，这条链路上的中间人能看到并改动内容。
+    /// </summary>
+    public bool AllowUntrustedTls { get; set; }
+
     /// <summary>是否已配置好联网模式。</summary>
     [JsonIgnore]
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ServerUrl) && !string.IsNullOrWhiteSpace(Uuid);
@@ -45,6 +54,15 @@ public sealed class TeacherRelaySettings
 {
     /// <summary>中继服务器地址。</summary>
     public string? ServerUrl { get; set; }
+
+    /// <summary>
+    /// 允许"证书有问题也继续连"（自签证书的服务器用）。
+    ///
+    /// 同时作用于**连服务器**与**检查更新**：这两类请求在本应用里共用同一个
+    /// HttpClient（见 <see cref="TlsPolicy"/>）。默认关闭 —— 打开之后，
+    /// 这条链路上的中间人能看到并改动内容。
+    /// </summary>
+    public bool AllowUntrustedTls { get; set; }
 
     /// <summary>上次绑定成功的教室 UUID，填入界面省得每次手打。</summary>
     public string? LastUuid { get; set; }
