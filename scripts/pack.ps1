@@ -152,7 +152,13 @@ try {
 
             # hostfxr 必须在 host\fxr\<ver>\ 下：apphost 先看自己旁边的目录，
             # 再按 DOTNET_ROOT 找，而它找的正是这个位置。
-            $hostFxr = Get-ChildItem $fxDir -Filter 'hostfxr.*' -File | Select-Object -First 1
+            #
+            # Windows 上叫 hostfxr.dll，Linux 上叫 **libhostfxr.so** —— 只按 hostfxr.*
+            # 匹配的话，Linux 包里根本不会有 host\fxr，解压出来就是
+            # "You must install .NET to run this application"（这个坑踩过一次）。
+            $hostFxr = Get-ChildItem $fxDir -File |
+                Where-Object { $_.Name -like 'hostfxr.*' -or $_.Name -like 'libhostfxr*' } |
+                Select-Object -First 1
             if ($hostFxr) {
                 $hostDir = Join-Path $runtimeDir ("host\fxr\{0}" -f $ver)
                 New-Item -ItemType Directory -Force -Path $hostDir | Out-Null
@@ -166,10 +172,22 @@ try {
         # hostpolicy 是从**最后一个**框架目录里加载的：多个框架（服务器带 ASP.NET Core）时，
         # 排在后面的那个目录里也得有它 —— 否则宿主报"hostpolicy.dll 找不到"。
         if ($wanted.Count -gt 1 -and $lastFxDir) {
-            $hostPolicy = Get-ChildItem (Join-Path $runtimeDir 'shared') -Recurse -Filter 'hostpolicy.*' -File | Select-Object -First 1
+            $hostPolicy = Get-ChildItem (Join-Path $runtimeDir 'shared') -Recurse -File |
+                Where-Object { $_.Name -like 'hostpolicy.*' -or $_.Name -like 'libhostpolicy*' } |
+                Select-Object -First 1
+
             if ($hostPolicy) {
                 Copy-Item $hostPolicy.FullName (Join-Path $lastFxDir $hostPolicy.Name) -Force
             }
+            else {
+                throw "私有运行时里找不到 hostpolicy（$Rid）：多个框架时宿主只会在最后一个框架目录里找它。"
+            }
+        }
+
+        # 打完自检：没有 host\fxr 的包在目标机上只会给一句"请安装 .NET"，
+        # 那是最难查的一种错 —— 打包时就直接失败。
+        if (-not (Test-Path (Join-Path $runtimeDir 'host\fxr'))) {
+            throw "私有运行时没生成 host\fxr（$Rid）：启动时宿主会找不到 .NET。"
         }
     }
     # ---------- Windows ----------
@@ -520,13 +538,13 @@ $LaunchHint
         New-AppArchive -SourceDir (Join-Path $OutputRoot 'linux\server') -RootName 'ClassShout.RelayServer' `
             -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-linux-x64.tar.gz') `
             -LaunchName 'ClassShout.RelayServer' `
-            -LaunchHint '中继服务器（Linux）：解压后 chmod +x app/ClassShout.RelayServer 与 run.sh。' `
+            -LaunchHint '中继服务器（Linux）：解压后 chmod +x ClassShout.RelayServer 与 run.sh；用 run.sh 启动（它会设好 DOTNET_ROOT）。' `
             -Gzip
 
         New-AppArchive -SourceDir (Join-Path $OutputRoot 'linux\classroom') -RootName 'ClassShout.Classroom' `
             -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-linux-x64.tar.gz') `
             -LaunchName 'ClassShout.Classroom' `
-            -LaunchHint '教室端（Linux）：解压后 chmod +x app/ClassShout.Classroom 与 run.sh；朗读需要有 spd-say 或 espeak-ng。' `
+            -LaunchHint '教室端（Linux）：解压后 chmod +x ClassShout.Classroom 与 run.sh（用 run.sh 启动）；朗读需要有 spd-say 或 espeak-ng。' `
             -Gzip
     }
 
