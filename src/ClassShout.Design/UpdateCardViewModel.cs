@@ -158,13 +158,27 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
 
     // ======================== 代理 ========================
 
-    /// <summary>代理三档：跟随系统 / 不使用 / 自定义。</summary>
-    public IReadOnlyList<ProxyModeOption> ProxyModes { get; } =
-    [
-        new(UpdateProxyMode.System, "跟随系统代理"),
-        new(UpdateProxyMode.None, "不使用代理"),
-        new(UpdateProxyMode.Custom, "自己填代理地址"),
-    ];
+    /// <summary>是否是手机端。手机端不提供"跟随系统代理"那一档（那里根本没有系统代理）。</summary>
+    public static bool IsMobile => OperatingSystem.IsAndroid();
+
+    /// <summary>
+    /// 代理三档：跟随系统 / 不使用 / 自定义。
+    ///
+    /// 手机端只给后两档：Android 上"系统代理"这个概念不存在（那是桌面上的注册表 / 环境变量 /
+    /// IE 设置），点了"跟随系统"也只会得到一句"检测不到"，反而让人以为网络出了问题。
+    /// </summary>
+    public IReadOnlyList<ProxyModeOption> ProxyModes { get; } = IsMobile
+        ?
+        [
+            new(UpdateProxyMode.None, "直连（手机端不检测代理）"),
+            new(UpdateProxyMode.Custom, "自己填代理地址"),
+        ]
+        :
+        [
+            new(UpdateProxyMode.System, "跟随系统代理"),
+            new(UpdateProxyMode.None, "不使用代理"),
+            new(UpdateProxyMode.Custom, "自己填代理地址"),
+        ];
 
     /// <summary>当前选中的代理档位。</summary>
     public ProxyModeOption? SelectedProxyMode

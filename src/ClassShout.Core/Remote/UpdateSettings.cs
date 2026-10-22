@@ -81,15 +81,28 @@ public sealed class UpdateSettings
 
         var proxyUrl = (ProxyUrl ?? string.Empty).Trim();
 
+        // 代理档位的收口：
+        //   · 自定义却没填地址，等于"没配好" —— 退回默认档（桌面是跟随系统、手机是直连）；
+        //   · **手机端没有"系统代理"**：这个值可能是从桌面同步过来、或者是旧版本的默认值，
+        //     留着它只会让那个下拉框显示空白（选项列表里根本没有它）。
+        var fallbackMode = OperatingSystem.IsAndroid() ? UpdateProxyMode.None : UpdateProxyMode.System;
+
+        var proxyMode = ProxyMode == UpdateProxyMode.Custom && proxyUrl.Length == 0
+            ? fallbackMode
+            : ProxyMode;
+
+        if (OperatingSystem.IsAndroid() && proxyMode == UpdateProxyMode.System)
+        {
+            proxyMode = UpdateProxyMode.None;
+        }
+
         return new UpdateSettings
         {
             Repository = NormalizeRepository(Repository),
             Mirrors = mirrors,
             SelectedMirrorId = selectedId,
 
-            // 自定义代理却没填地址，等于"没配好" —— 退回跟随系统。
-            // 否则用户会以为"我明明设了代理"，而实际上一个请求都没走代理。
-            ProxyMode = ProxyMode == UpdateProxyMode.Custom && proxyUrl.Length == 0 ? UpdateProxyMode.System : ProxyMode,
+            ProxyMode = proxyMode,
             ProxyUrl = proxyUrl,
 
             LastCheckedAt = LastCheckedAt,

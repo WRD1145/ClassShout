@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:md3="using:ClassShout.Design.Controls"
         xmlns:svc="using:ClassShout.Classroom.Services"
+        xmlns:remote="using:ClassShout.Core.Remote"
         x:Class="ClassShout.Classroom.Views.NotificationWindow"
         x:DataType="svc:NotificationContent"
         SystemDecorations="None"
@@ -73,12 +74,50 @@
                    Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                    Text="{Binding Hint}" />
 
-        <!-- 弹窗上的「知道了」：教室里那块屏的角上就能一秒回完。
-             完整的回复（快捷/文字/语音）在主界面，这里只放最常用的那一个。 -->
-        <Button Classes="tonal small" HorizontalAlignment="Left"
-                IsVisible="{Binding CanAcknowledge}"
-                Command="{Binding AcknowledgeCommand}"
-                Content="知道了" />
+        <!-- 弹窗上的回复区。
+             发送方选了「只弹窗」时，教室里那块屏上只有这张卡片 —— 主窗口的回复栏
+             等于被藏起来了，所以卡片自己也带一套：知道了 + 快捷回复 + 语音回复。
+             命令与状态都绑 ReplyHost（教室端视图模型），两处显示的是同一份状态。 -->
+        <StackPanel Spacing="6" IsVisible="{Binding CanAcknowledge}">
+          <Button Classes="tonal small" HorizontalAlignment="Left"
+                  IsVisible="{Binding CanAcknowledge}"
+                  Command="{Binding AcknowledgeCommand}"
+                  Content="知道了" />
+
+          <ItemsControl ItemsSource="{Binding ReplyHost.ReplyQuickReplies}"
+                        IsVisible="{Binding HasReplyControls}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <WrapPanel />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="remote:QuickReply">
+                <Button Classes="outlined small" Margin="0,0,6,4" Content="{Binding Label}"
+                        Command="{Binding $parent[ItemsControl].((svc:NotificationContent)DataContext).ReplyHost.SendQuickReplyCommand}"
+                        CommandParameter="{Binding}" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <StackPanel Orientation="Horizontal" Spacing="8"
+                      IsVisible="{Binding HasReplyControls}">
+            <Button Classes="outlined small"
+                    Command="{Binding ReplyHost.ToggleVoiceReplyCommand}"
+                    Content="{Binding ReplyHost.ReplyVoiceButtonText}"
+                    IsVisible="{Binding ReplyHost.ShowVoiceReply}" />
+            <TextBlock Classes="bodySmall" VerticalAlignment="Center"
+                       IsVisible="{Binding ReplyHost.IsRecordingReply}"
+                       Text="{Binding ReplyHost.ReplyRecordText}" />
+            <Button Classes="text small" Content="放弃"
+                    IsVisible="{Binding ReplyHost.IsRecordingReply}"
+                    Command="{Binding ReplyHost.CancelVoiceReplyCommand}" />
+            <TextBlock Classes="bodySmall" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" MaxWidth="220"
+                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                       Text="{Binding ReplyHost.LastReplyText}" />
+          </StackPanel>
+        </StackPanel>
       </StackPanel>
     </Grid>
   </Border>

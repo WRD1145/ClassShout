@@ -322,6 +322,9 @@ internal static class Program
 
         // ---------- 3u. 证书策略（允许不信任的 TLS） ----------
         AssertTlsPolicy();
+
+        // ---------- 3v. 手机端不检测代理 ----------
+        AssertMobileProxyPolicy();
         AssertShoutTargetCard();
         await AssertVoiceTimerResetsAsync();
 
@@ -4828,6 +4831,46 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// 手机端不检测系统代理。
+    ///
+    /// Android 上没有"系统代理"这回事（那是桌面上的注册表 / 环境变量 / IE 设置），
+    /// 而 .NET 那套解析在手机上要么什么都返回不了、要么去读应用沙盒里毫无意义的环境变量 ——
+    /// 更糟的是它可能让一次"检查更新"先卡几秒。所以手机端一律直连，
+    /// 选项里也不该出现"跟随系统代理"。
+    /// </summary>
+    private static void AssertMobileProxyPolicy()
+    {
+        // 这一条按**当前平台**断言：桌面（跑自检的就是桌面）保留三档，手机上只有两档。
+        var modes = new ClassShout.Design.UpdateCardViewModel(
+            null, new UpdateSettings(), _ => Task.CompletedTask).ProxyModes;
+
+        if (OperatingSystem.IsAndroid())
+        {
+            Check("代理：手机端没有「跟随系统代理」这一档",
+                modes.All(option => option.Mode != UpdateProxyMode.System),
+                string.Join("、", modes.Select(option => option.Label)));
+        }
+        else
+        {
+            Check("代理：桌面端保留「跟随系统代理」这一档",
+                modes.Any(option => option.Mode == UpdateProxyMode.System),
+                string.Join("、", modes.Select(option => option.Label)));
+        }
+
+        var normalized = new UpdateSettings { ProxyMode = UpdateProxyMode.System }.Normalized();
+
+        Check("代理：设置收口之后仍是合法的一档（手机上「跟随系统」被折成直连）",
+            OperatingSystem.IsAndroid()
+                ? normalized.ProxyMode == UpdateProxyMode.None
+                : normalized.ProxyMode == UpdateProxyMode.System,
+            normalized.ProxyMode.ToString());
+
+        Check("代理：自定义但没填地址时退回默认档（不留一个走不通的配置）",
+            new UpdateSettings { ProxyMode = UpdateProxyMode.Custom, ProxyUrl = "  " }.Normalized().ProxyMode
+                == (OperatingSystem.IsAndroid() ? UpdateProxyMode.None : UpdateProxyMode.System),
+            new UpdateSettings { ProxyMode = UpdateProxyMode.Custom, ProxyUrl = "  " }.Normalized().ProxyMode.ToString());
+    }
     /// <summary>
     /// 「允许不信任的 TLS 连接」这条安全开关。
     ///

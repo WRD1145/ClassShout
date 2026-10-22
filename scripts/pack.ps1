@@ -76,9 +76,103 @@ try {
     Write-Host "ClassShout 打包  v$version  $Configuration / $Runtime" -ForegroundColor Cyan
     Write-Host ('=' * 66)
 
+    # ==================== 私有运行时（runtime\） ====================
+    #
+    # 发布包的样子：
+    #   <解压根目录>\  程序（exe + 我们的程序集 + json）
+    #   runtime\       运行时（host\fxr\<ver> + shared\<框架>\<ver>）
+    # 启动脚本设好 DOTNET_ROOT 再起 exe —— 目标机上仍然**不需要装 .NET**。
+    #
+    # 为什么不采用"把自包含发布物里的框架文件挪进 runtime\"这条更省事的路：
+    # 自包含发布物的 deps.json 把框架程序集写成**纯文件名**（它们本来就和 exe
+    # 挤在一个目录里），一旦挪走，宿主找不到 hostpolicy 就直接 0xC0000135 ——
+    # 试过，起不来。而 runtime\shared\... 要被宿主认作"装好的 .NET"，
+    # 必须带上框架自己的 deps.json / runtimeconfig.json / .version；
+    # 这三样正好在 NuGet 的运行时包里（runtimes\<rid>\lib\<tfm>\），
+    # 于是"用运行时包拼一份私有 .NET"既有正确元数据，又不用本机装同版本运行时。
+
+    function Find-RuntimePack {
+        param([string]$FxName, [string]$Rid, [int]$Major, [int]$Minor)
+
+        $base = Join-Path $env:USERPROFILE (".nuget\packages\" + $FxName.ToLowerInvariant() + ".runtime.$Rid")
+        if (-not (Test-Path $base)) { return $null }
+
+        Get-ChildItem $base -Directory |
+            ForEach-Object { [pscustomobject]@{ Version = [version]$_.Name; Path = $_.FullName } } |
+            Where-Object { $_.Version.Major -eq $Major -and $_.Version.Minor -eq $Minor } |
+            Sort-Object Version |
+            Select-Object -Last 1
+    }
+
+    function Install-PrivateRuntime {
+        param([string]$AppDir, [string]$Rid)
+
+        $rcFile = Get-ChildItem $AppDir -Filter '*.runtimeconfig.json' -File | Select-Object -First 1
+        if (-not $rcFile) { throw "找不到 runtimeconfig.json：$AppDir" }
+
+        $rc = Get-Content $rcFile.FullName -Raw | ConvertFrom-Json
+        $wanted = @()
+        if ($rc.runtimeOptions.framework) { $wanted += $rc.runtimeOptions.framework }
+        if ($rc.runtimeOptions.frameworks) { $wanted += $rc.runtimeOptions.frameworks }
+
+        if ($wanted.Count -eq 0) {
+            Write-Host '    这次发布没有声明框架（自包含？），跳过 runtime\ 组装' -ForegroundColor DarkGray
+            return
+        }
+
+        $runtimeDir = Join-Path $AppDir 'runtime'
+        $lastFxDir = $null
+
+        foreach ($fx in $wanted) {
+            $want = [version]$fx.version
+            $pack = Find-RuntimePack -FxName $fx.name -Rid $Rid -Major $want.Major -Minor $want.Minor
+            if (-not $pack) {
+                throw "NuGet 缓存里找不到 $($fx.name) 的 $Rid 运行时包（$($want.Major).$($want.Minor).x）。先跑一次 dotnet restore / dotnet publish 让它下载下来，或者改用 -FrameworkDependent。"
+            }
+
+            $ver = $pack.Version.ToString()
+            $packRoot = Join-Path $pack.Path "runtimes\$Rid"
+            $libDir = Get-ChildItem (Join-Path $packRoot 'lib') -Directory -ErrorAction SilentlyContinue | Select-Object -Last 1
+            if (-not $libDir) { throw "运行时包里没有 lib 目录：$($pack.Path)" }
+
+            $fxDir = Join-Path $runtimeDir ("shared\{0}\{1}" -f $fx.name, $ver)
+            New-Item -ItemType Directory -Force -Path $fxDir | Out-Null
+
+            Copy-Item (Join-Path $libDir.FullName '*') $fxDir -Recurse -Force
+            Copy-Item (Join-Path $packRoot 'native\*') $fxDir -Recurse -Force
+
+            # 宿主认"这是一份装好的框架"靠的就是这个文件
+            [System.IO.File]::WriteAllText((Join-Path $fxDir '.version'), "$ver`n")
+
+            # hostfxr 必须在 host\fxr\<ver>\ 下：apphost 先看自己旁边的目录，
+            # 再按 DOTNET_ROOT 找，而它找的正是这个位置。
+            $hostFxr = Get-ChildItem $fxDir -Filter 'hostfxr.*' -File | Select-Object -First 1
+            if ($hostFxr) {
+                $hostDir = Join-Path $runtimeDir ("host\fxr\{0}" -f $ver)
+                New-Item -ItemType Directory -Force -Path $hostDir | Out-Null
+                Move-Item $hostFxr.FullName (Join-Path $hostDir $hostFxr.Name) -Force
+            }
+
+            $lastFxDir = $fxDir
+            Write-Host ("    runtime/{0}/{1}  ({2} 个文件)" -f $fx.name, $ver, (Get-ChildItem $fxDir -Recurse -File).Count)
+        }
+
+        # hostpolicy 是从**最后一个**框架目录里加载的：多个框架（服务器带 ASP.NET Core）时，
+        # 排在后面的那个目录里也得有它 —— 否则宿主报"hostpolicy.dll 找不到"。
+        if ($wanted.Count -gt 1 -and $lastFxDir) {
+            $hostPolicy = Get-ChildItem (Join-Path $runtimeDir 'shared') -Recurse -Filter 'hostpolicy.*' -File | Select-Object -First 1
+            if ($hostPolicy) {
+                Copy-Item $hostPolicy.FullName (Join-Path $lastFxDir $hostPolicy.Name) -Force
+            }
+        }
+    }
     # ---------- Windows ----------
-    $selfContained = if ($FrameworkDependent) { 'false' } else { 'true' }
-    $modeText = if ($FrameworkDependent) { '依赖框架（需装 .NET 10 运行时）' } else { '自包含（免运行时）' }
+    # 发布物本身一律是"依赖框架"的（程序文件因此能直接待在解压根目录里），
+    # 运行时另用 Install-PrivateRuntime 摆进 runtime\：
+    #   · 默认：解压即用，目标机不需要装 .NET（运行时就在 runtime\ 下）；
+    #   · -FrameworkDependent：连 runtime\ 也不带，体积最小，但目标机必须装 .NET。
+    $selfContained = 'false'
+    $modeText = if ($FrameworkDependent) { '依赖框架（需装 .NET 10 运行时，不带 runtime\）' } else { '自带运行时（runtime\ 下，免安装）' }
 
     Write-Host ''
     Write-Host "[Windows] 发布模式：$modeText" -ForegroundColor Yellow
@@ -122,6 +216,11 @@ try {
             throw "$($item.Name) 发布失败（退出码 $LASTEXITCODE）"
         }
 
+        # 运行时单独摆进 runtime\（-FrameworkDependent 时不带，要求目标机装 .NET）
+        if (-not $FrameworkDependent) {
+            Install-PrivateRuntime -AppDir $out -Rid $Runtime
+        }
+
         # Web SDK 会带出 web.config 这类只对 IIS 有意义的文件，独立运行时用不到
         Get-ChildItem $out -File |
             Where-Object { $_.Extension -in '.config', '.pdb' } |
@@ -142,7 +241,7 @@ try {
         $linuxArgs = @(
             '-c', $Configuration
             '-r', 'linux-x64'
-            '--self-contained=true'
+            '--self-contained=false'
             '-p:DebugType=none'
         )
 
@@ -152,6 +251,10 @@ try {
         & dotnet publish 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj' @linuxArgs -o $serverLinuxOut --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "Linux 服务器发布失败（退出码 $LASTEXITCODE）"
+        }
+
+        if (-not $FrameworkDependent) {
+            Install-PrivateRuntime -AppDir $serverLinuxOut -Rid 'linux-x64'
         }
 
         # Web SDK 会带出几个只对 IIS 有意义的文件，独立运行时用不到，清掉免得干扰部署
@@ -170,6 +273,10 @@ try {
         & dotnet publish 'src\ClassShout.Classroom\ClassShout.Classroom.csproj' @classroomLinuxArgs -o $classroomLinuxOut --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "Linux 教室端发布失败（退出码 $LASTEXITCODE）"
+        }
+
+        if (-not $FrameworkDependent) {
+            Install-PrivateRuntime -AppDir $classroomLinuxOut -Rid 'linux-x64'
         }
 
         Get-ChildItem $classroomLinuxOut -File |
@@ -295,13 +402,16 @@ try {
         # 一大半 —— 试过把其余程序集挪进 lib\ 并改 deps.json，应用直接崩在
         # "hostpolicy.dll not found"。所以"一个 exe + 一个 dll 文件夹"在 .NET 上做不到。
         #
-        # 能做的是把**界面**收拾干净：顶层只留一个启动脚本、一份说明和 logs\，
-        # 257 个程序文件全部待在 app\ 里。
-        $appDir = Join-Path $staging 'app'
-        Copy-Item $SourceDir $appDir -Recurse -Force
+        # 现在解压出来是这样的：
+        #   根\           程序本体（exe + 程序集 + json）—— 主程序就在这一层
+        #   根\runtime\   运行时（私有 .NET，见 Install-PrivateRuntime）
+        #   根\logs\      日志
+        #   根\启动脚本    设好 DOTNET_ROOT 再起 exe
+        # 程序与运行时同层不同目录：主程序一眼能找到，运行时不用管。
+        Copy-Item (Join-Path $SourceDir '*') $staging -Recurse -Force
 
         # 顶层 logs\：启动脚本用 CLASSSHOUT_LOG_DIR 指过来，
-        # 于是"找日志"和"找软件"在同一层，不用钻进 app\ 里翻。
+        # 于是"找日志"和"找软件"在同一层，不用钻进子目录里翻。
         New-Item -ItemType Directory -Force -Path (Join-Path $staging 'logs') | Out-Null
 
         if ($Gzip) {
@@ -310,10 +420,12 @@ try {
 #!/bin/sh
 # ClassShout $LaunchName
 #
-# 程序在 app/ 里，日志写进同级的 logs/。
+# 主程序就在这一层，运行时在同级的 runtime/ 下（私有 .NET，不需要另装）。
+# DOTNET_ROOT 必须在启动前设好，否则宿主会去找系统里装的那份。
 cd "`$(dirname "`$0")" || exit 1
+export DOTNET_ROOT="`$(pwd)/runtime"
 export CLASSSHOUT_LOG_DIR="`$(pwd)/logs"
-exec ./app/$LaunchName "`$@"
+exec "./$LaunchName" "`$@"
 "@
 
             $launcher = Join-Path $staging 'run.sh'
@@ -324,10 +436,12 @@ exec ./app/$LaunchName "`$@"
 @echo off
 rem ClassShout $LaunchName
 rem
-rem 程序在 app\ 里，日志写进同级的 logs\。
+rem 主程序就在这一层，运行时在同级的 runtime\ 下（私有 .NET，不需要另装）。
+rem DOTNET_ROOT 必须先设好，否则宿主会去找系统里装的那份。
 cd /d "%~dp0"
+set DOTNET_ROOT=%~dp0runtime
 set CLASSSHOUT_LOG_DIR=%~dp0logs
-start "" "%~dp0app\$LaunchName" %*
+start "" "%~dp0$LaunchName" %*
 "@
 
             $launcher = Join-Path $staging "$LaunchName 启动.cmd"
@@ -343,8 +457,13 @@ $('=' * 60)
       （Windows 会弹一下黑窗口，那是启动脚本，一闪就没了）
 
 目录说明：
-  app\    程序本体（exe 与它需要的全部文件，别单独搬走其中的文件）
+  $LaunchName
+          主程序本体（同层的其它 dll/json 都是它要用的，别单独搬走）
+  runtime\
+          运行时（私有 .NET）。**别删**，也别单独更新它 —— 升级时整个目录一起覆盖。
   logs\   运行日志，按天一个文件，自动只留最近 7 天
+
+（不需要在系统里另装 .NET：运行时就在 runtime\ 下。）
 
 升级：把新的压缩包解压覆盖本目录即可 —— 配置与日志都不在这里
       （Windows 存在 %LOCALAPPDATA%\ClassShout\），覆盖不会丢东西。

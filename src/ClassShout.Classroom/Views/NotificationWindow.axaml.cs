@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using ClassShout.Classroom.Services;
 
 namespace ClassShout.Classroom.Views;
@@ -79,7 +80,56 @@ public partial class NotificationWindow : Window
     protected override void OnPointerPressed(Avalonia.Input.PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
+
+        // 点在回复按钮（或输入框）上不算"点掉这条提示"。
+        //
+        // 原来这里是"点哪儿都关"，而弹窗现在带着回复区：教室里的人一点「知道了」，
+        // 卡片就会在他还没看清"发出去了没有"之前消失；点「录一段语音回复」更糟 ——
+        // 录音开始了，可界面已经没了。所以只把"点在空白处"当作关掉它。
+        if (IsInteractive(e.Source as Visual))
+        {
+            return;
+        }
+
         DismissRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// 指针进 / 出卡片。
+    ///
+    /// 弹窗里现在能回复了：教室里的人可能正在看那一行字、正在点「知道了」、
+    /// 或者正在录一段语音 —— 这时不能按原定秒数把它收走。
+    /// 指针在上面时不自动收，离开之后重新计时（见 NotificationPresenter）。
+    /// </summary>
+    public event EventHandler? PointerEnteredCard;
+
+    /// <inheritdoc cref="PointerEnteredCard" />
+    public event EventHandler? PointerLeftCard;
+
+    protected override void OnPointerEntered(Avalonia.Input.PointerEventArgs e)
+    {
+        base.OnPointerEntered(e);
+        PointerEnteredCard?.Invoke(this, EventArgs.Empty);
+    }
+
+    protected override void OnPointerExited(Avalonia.Input.PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        PointerLeftCard?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>点到的这一处是不是一个会响应的控件（按钮 / 输入框 / 开关）。</summary>
+    private static bool IsInteractive(Visual? source)
+    {
+        for (var node = source; node is not null; node = node.GetVisualParent())
+        {
+            if (node is Button or TextBox or ToggleSwitch or CheckBox)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>应用配置。位置、宽度与置顶档位都在这里生效。</summary>

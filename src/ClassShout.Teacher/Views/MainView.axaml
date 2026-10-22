@@ -637,6 +637,61 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <!--
+              「扫描同一网络下的教室」放在这里，而不是设置页。
+
+              它和"这条发给谁"本来就是同一件事：扫到的教室就是接下来要发过去的那些。
+              以前两处各有一个入口（设置页的「自动发现」+ 这里的选择列表），
+              扫完还得回设置页点连接 —— 多此一举，而且扫到的结果和勾选列表分在两处。
+              现在只有这一处：扫描 → 点一下就连上 → 它立刻出现在下面的列表里。
+            -->
+            <md3:Md3Card Classes="outlined" CardPadding="14">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="cardTitle" Text="同一网络下的教室" Margin="0" />
+                    <TextBlock Classes="bodySmall"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="扫描同一 Wi-Fi 里的教室端，点一下就连上" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Classes="tonal small"
+                          Command="{Binding ScanCommand}"
+                          IsEnabled="{Binding !IsScanning}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <md3:Md3Icon Kind="Radar" Size="16" />
+                      <TextBlock Text="扫描" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+
+                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsScanning}" />
+
+                <TextBlock Classes="bodyMedium" IsVisible="{Binding !HasClassrooms}"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="还没扫到教室。教室端启动后点一次「扫描」；扫不到时确认两台设备在同一网络，或者改用「通过服务器连接」。" />
+
+                <ItemsControl ItemsSource="{Binding Classrooms}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ClassroomListItem">
+                      <Button Classes="outlined block" Margin="0,0,0,8"
+                              HorizontalContentAlignment="Left"
+                              Command="{Binding ConnectCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                          <md3:Md3Icon Kind="School" Size="22" />
+                          <StackPanel>
+                            <TextBlock Classes="bodyLarge" Text="{Binding Name}" />
+                            <TextBlock Classes="bodySmall"
+                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                                       Text="{Binding Subtitle}" />
+                          </StackPanel>
+                        </StackPanel>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </md3:Md3Card>
             <!-- 发给谁：**有一间就显示**。只有一间时"选谁"没得选，但"这条会发到哪"值得看一眼 ——
                  尤其是局域网直连时，屏幕上连的是哪一间本来只在设备页里写着。 -->
             <md3:Md3Card Classes="outlined" CardPadding="14" IsVisible="{Binding Text.HasTargets}">
@@ -1173,57 +1228,34 @@
         <ScrollViewer IsVisible="{Binding IsDevicesPage}">
           <StackPanel Margin="20,18" Spacing="18">
 
+            <!--
+              ==================== 通过局域网连接 ====================
+
+              「扫描」不再放这里：扫到的教室与"这条发给谁"是同一件事，
+              而那张卡在「文字」页上 —— 两处各有一个"扫描"会让人不知道点哪个，
+              扫完的结果也散在两地。这里只留"手输地址"这一条，以及当前连着谁。
+            -->
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="12">
                 <Grid ColumnDefinitions="*,Auto">
                   <StackPanel Spacing="2">
-                    <TextBlock Classes="cardTitle" Text="自动发现" />
+                    <TextBlock Classes="cardTitle" Text="通过局域网连接" Margin="0" />
                     <TextBlock Classes="bodySmall"
                                Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                               Text="同一 Wi-Fi 下会列出所有教室端" />
+                               Text="同一 Wi-Fi 下直接用，不需要账号" />
                   </StackPanel>
-                  <Button Grid.Column="1" Classes="tonal small"
-                          Command="{Binding ScanCommand}"
-                          IsEnabled="{Binding !IsScanning}">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                      <md3:Md3Icon Kind="Radar" Size="16" />
-                      <TextBlock Text="扫描" VerticalAlignment="Center" />
-                    </StackPanel>
-                  </Button>
+                  <Border Grid.Column="1" CornerRadius="9999" Padding="9,3"
+                          Background="{DynamicResource Md3.SecondaryContainer}">
+                    <TextBlock Classes="labelSmall"
+                               Foreground="{DynamicResource Md3.OnSecondaryContainer}"
+                               Text="{Binding ConnectionStatusText}" />
+                  </Border>
                 </Grid>
 
-                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsScanning}" />
-
-                <TextBlock Classes="bodyMedium" IsVisible="{Binding !HasClassrooms}"
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="尚未发现教室端，点上面的「扫描」试试。" />
+                           Text="同一网络下会自动出现教室：去「文字」页的「这条发给谁」那张卡里点「扫描」，扫到的教室直接点一下就连上。下面这一栏是给「扫描扫不到、但知道地址」的情况用的。" />
 
-                <ItemsControl ItemsSource="{Binding Classrooms}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:ClassroomListItem">
-                      <Button Classes="outlined block" Margin="0,0,0,8"
-                              HorizontalContentAlignment="Left"
-                              Command="{Binding ConnectCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                          <md3:Md3Icon Kind="School" Size="22" />
-                          <StackPanel>
-                            <TextBlock Classes="bodyLarge" Text="{Binding Name}" />
-                            <TextBlock Classes="bodySmall"
-                                       Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                                       Text="{Binding Subtitle}" />
-                          </StackPanel>
-                        </StackPanel>
-                      </Button>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-              </StackPanel>
-            </md3:Md3Card>
-
-            <!-- ==================== 同一局域网：直接用，不需要账号 ==================== -->
-            <md3:Md3Card Classes="outlined" CardPadding="14">
-              <StackPanel Spacing="12">
-                <TextBlock Classes="cardTitle" Text="手动连接" />
                 <TextBox Classes="outlined"
                          Watermark="192.168.1.5:45900"
                          Text="{Binding ManualAddress}" />
@@ -1248,7 +1280,7 @@
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <StackPanel Spacing="12">
                 <Grid ColumnDefinitions="*,Auto">
-                  <TextBlock Classes="cardTitle" Text="中继服务器" Margin="0" />
+                  <TextBlock Classes="cardTitle" Text="通过服务器连接" Margin="0" />
                   <Border Grid.Column="1" CornerRadius="9999" Padding="9,3"
                           Background="{DynamicResource Md3.SecondaryContainer}">
                     <TextBlock Classes="labelSmall"
@@ -1259,7 +1291,7 @@
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="与教室不在同一网络时用这个：两端接到同一台中继服务器即可，地址由部署服务器的人提供。只用同一网段内的教室时不必配置，直接在上面「手动连接」里连。" />
+                           Text="与教室不在同一网络时用这个：两端接到同一台中继服务器即可，地址由部署服务器的人提供。只用同一网段内的教室时不必配置，用上面的「通过局域网连接」即可。" />
 
                 <TextBox Classes="outlined dense"
                          Watermark="https://relay.example.com 或 http://192.168.1.10:8080"
@@ -1431,7 +1463,7 @@
 
                   <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                              Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                             Text="登录只在使用「跨局域网」时需要，而且要先用上面的「中继服务器」配好地址；只连同一局域网内的教室不必登录。" />
+                             Text="登录只在使用「跨局域网」时需要，而且要先用上面的「通过服务器连接」配好地址；只连同一局域网内的教室不必登录。" />
                 </StackPanel>
               </StackPanel>
             </md3:Md3Card>
@@ -1490,7 +1522,7 @@
 
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                            Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="向教室管理员索取 UUID 与口令。服务器地址在上面那张「中继服务器」卡片里单独配置 —— 这里只填「哪间教室」。绑定过的教室会存在本机，之后在下面点一下就能切过去。" />
+                           Text="向教室管理员索取 UUID 与口令。服务器地址在上面那张「通过服务器连接」卡片里单独配置 —— 这里只填「哪间教室」。绑定过的教室会存在本机，之后在下面点一下就能切过去。" />
 
                 <TextBox Classes="outlined dense"
                          Watermark="教室 UUID"

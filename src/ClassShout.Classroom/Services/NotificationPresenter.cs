@@ -132,6 +132,11 @@ public sealed class NotificationPresenter : IDisposable
             }
         };
 
+        // 指针停在卡片上时不自动收：弹窗里能回复了，而"刚要点「知道了」它自己消失"
+        // 是最容易让人以为按错了一次的交互。离开之后重新按设置里的秒数计时。
+        window.PointerEnteredCard += (_, _) => _hideTimer?.Stop();
+        window.PointerLeftCard += (_, _) => RestartHideTimer();
+
         _window = window;
         return window;
     }

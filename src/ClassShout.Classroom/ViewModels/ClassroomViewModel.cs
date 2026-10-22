@@ -2801,6 +2801,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                 AcknowledgeCommand = _replySettings.Enabled && _replySettings.ShowAcknowledge && HasReplyTarget
                     ? AcknowledgeCommand
                     : null,
+
+                // 快捷回复与语音回复也放到卡片上：「只弹窗」时教室里只看得到这张卡片
+                ReplyHost = _replySettings.Enabled ? this : null,
             });
         }
 

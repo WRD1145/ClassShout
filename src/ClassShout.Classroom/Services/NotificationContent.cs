@@ -53,4 +53,19 @@ public sealed record NotificationContent(string SourceName, string Text, bool Is
 
     /// <summary>这条提示上要不要出现「知道了」。</summary>
     public bool CanAcknowledge => AcknowledgeCommand is not null;
+
+    /// <summary>
+    /// 回复区的主人（教室端视图模型）。
+    ///
+    /// 弹窗里的快捷回复与语音回复直接绑它的命令与状态，而不是在这里再抄一份：
+    /// 录音状态、已经录了多久、上一条回复的结果都是**活的** —— 抄一份就等于两份状态，
+    /// 而两份状态迟早会对不上（弹窗写着"正在录"，主窗口却停在"录一段"）。
+    ///
+    /// 为什么弹窗也要有回复区：发送方选了「只弹窗」时，教室里那块屏上只有这张卡片，
+    /// 主窗口的回复栏等于被藏起来了 —— 那时教室里的人看得到喊话，却回不了一句。
+    /// </summary>
+    public ClassShout.Classroom.ViewModels.ClassroomViewModel? ReplyHost { get; init; }
+
+    /// <summary>这张卡片上要不要出现回复区（知道了 / 快捷 / 语音）。</summary>
+    public bool HasReplyControls => ReplyHost?.HasReplyPanel == true;
 }

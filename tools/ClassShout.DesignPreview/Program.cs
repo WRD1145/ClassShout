@@ -1517,6 +1517,32 @@ internal static class Program
                 }, 0, 0,
                 _ => null),
 
+            // 教室端「弹窗」：现在它也带回复（知道了 / 快捷 / 语音）。
+            //
+            // 这一块平时只在"发送方选了只弹窗"时才出现，而且它是**另一套窗口**，
+            // 主窗口那几张图完全覆盖不到 —— 不单独导一张就等于从没渲染过。
+            new("classroom-popup-reply",
+                () =>
+                {
+                    var vm = new ClassroomViewModel();
+
+                    vm.RememberReplyForPreview(
+                        ClassShout.Core.Protocol.MessageIds.New(DateTimeOffset.Now),
+                        "张老师",
+                        "请把昨天的作业收上来，课代表送到办公室。");
+
+                    var content = new ClassShout.Classroom.Services.NotificationContent(
+                        "张老师",
+                        "请把昨天的作业收上来，课代表送到办公室。",
+                        IsVoice: false)
+                    {
+                        AcknowledgeCommand = vm.AcknowledgeCommand,
+                        ReplyHost = vm,
+                    };
+
+                    return new ClassShout.Classroom.Views.NotificationWindow { DataContext = content, Width = 420 };
+                }, 470, 0,
+                _ => null),
             // 教室端「回复条」。这一块新加，而且只在"收到一条喊话之后"才出现 ——
             // 待机那张图里它整个不可见，不单独导一张就等于从没渲染过。
             // 三样东西都要出现：知道了、设置里那几条快捷回复、文字与语音入口。
