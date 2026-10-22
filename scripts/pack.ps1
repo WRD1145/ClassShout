@@ -139,7 +139,13 @@ try {
             New-Item -ItemType Directory -Force -Path $fxDir | Out-Null
 
             Copy-Item (Join-Path $libDir.FullName '*') $fxDir -Recurse -Force
-            Copy-Item (Join-Path $packRoot 'native\*') $fxDir -Recurse -Force
+
+            # 不是每个框架的运行时包都有 native\ 目录（AspNetCore 的 linux 包就没有），
+            # 直接 Copy-Item 一个不存在的路径会整段打包失败。
+            $nativeDir = Join-Path $packRoot 'native'
+            if (Test-Path $nativeDir) {
+                Copy-Item (Join-Path $nativeDir '*') $fxDir -Recurse -Force
+            }
 
             # 宿主认"这是一份装好的框架"靠的就是这个文件
             [System.IO.File]::WriteAllText((Join-Path $fxDir '.version'), "$ver`n")
