@@ -606,6 +606,16 @@
                               IsChecked="{Binding ReplyShowAcknowledge}" />
               </Grid>
 
+              <!-- 「知道了」发出去那句话，自己写；占位符会换成教室名与时刻 -->
+              <StackPanel Spacing="4" IsEnabled="{Binding ReplyShowAcknowledge}">
+                <TextBox Classes="outlined dense"
+                         Watermark="例：{教室}知道了，占位符会换成教室名与时刻"
+                         Text="{Binding ReplyAcknowledgeTemplate}" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding ReplyAcknowledgePreview}" />
+              </StackPanel>
+
               <Grid ColumnDefinitions="*,Auto">
                 <StackPanel Spacing="2">
                   <TextBlock Classes="bodyMedium" Text="允许文字回复" />
@@ -641,12 +651,23 @@
                         Value="{Binding ReplyVoiceMaxSeconds}" />
               </StackPanel>
 
-              <!-- 快捷回复：增删都由教室端自己决定 -->
+              <!--
+                快捷回复：内容自己写，写不完的用占位符（{教室} {老师} {时间} {原话}）。
+                这些是"活的"：教室里点了之后才换成实际的名字与时刻，
+                所以三条默认的快捷回复在每间教室说出来的都不同。
+              -->
               <StackPanel Spacing="6">
-                <TextBlock Classes="bodyMedium" Text="快捷回复" />
-                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
-                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                           Text="最多 6 个：按钮就排在「知道了」旁边，屏上摆得下也点得准。" />
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="bodyMedium" Text="快捷回复" />
+                    <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                               Text="最多 6 个：按钮就排在「知道了」旁边，屏上摆得下也点得准。" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="1" Classes="labelSmall" VerticalAlignment="Center"
+                             Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                             Text="{Binding ReplyQuickReplyCountText}" />
+                </Grid>
 
                 <ItemsControl ItemsSource="{Binding ReplyQuickReplyRows}">
                   <ItemsControl.ItemTemplate>
@@ -658,7 +679,10 @@
                                      Foreground="{DynamicResource Md3.OnSurfaceVariant}"
                                      Text="{Binding Summary}" />
                         </StackPanel>
-                        <Button Grid.Column="1" Classes="text small" Content="删除"
+                        <Button Grid.Column="1" Classes="text small" Content="编辑"
+                                Command="{Binding $parent[ItemsControl].((vm:ClassroomViewModel)DataContext).EditQuickReplyCommand}"
+                                CommandParameter="{Binding Reply}" />
+                        <Button Grid.Column="2" Classes="text small" Content="删除"
                                 Command="{Binding $parent[ItemsControl].((vm:ClassroomViewModel)DataContext).RemoveQuickReplyCommand}"
                                 CommandParameter="{Binding Reply}" />
                       </Grid>
@@ -666,13 +690,38 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="8">
-                  <TextBox Classes="outlined dense" Watermark="按钮文字（可留空）"
-                           Text="{Binding NewQuickReplyLabel}" />
-                  <TextBox Grid.Column="1" Classes="outlined dense" Watermark="回复内容"
-                           Text="{Binding NewQuickReplyText}" />
-                  <Button Grid.Column="2" Classes="tonal" Content="添加"
+                <TextBox Classes="outlined dense" Watermark="按钮文字（可留空，留空就用下面那句）"
+                         Text="{Binding NewQuickReplyLabel}" />
+                <TextBox Classes="outlined dense" Watermark="回复内容，可以用占位符"
+                         Text="{Binding NewQuickReplyText}" />
+
+                <ItemsControl ItemsSource="{Binding ReplyPlaceholderButtons}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <WrapPanel />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ClassroomViewModel+ReplyPlaceholderButton">
+                      <Button Classes="outlined small" Margin="0,0,6,4" Content="{Binding Label}"
+                              ToolTip.Tip="点一下追加到回复内容末尾"
+                              Command="{Binding $parent[ItemsControl].((vm:ClassroomViewModel)DataContext).InsertQuickReplyTokenCommand}"
+                              CommandParameter="{Binding Token}" />
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="{Binding ReplyPlaceholderHint}" />
+
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <Button Grid.Column="0" Classes="tonal block"
+                          Content="{Binding QuickReplySubmitText}"
                           Command="{Binding AddQuickReplyCommand}" />
+                  <Button Grid.Column="1" Classes="outlined" Content="取消编辑"
+                          IsVisible="{Binding IsEditingQuickReply}"
+                          Command="{Binding CancelEditQuickReplyCommand}" />
                 </Grid>
 
                 <Button Classes="text small" Content="恢复默认的几条"

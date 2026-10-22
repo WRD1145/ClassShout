@@ -44,6 +44,35 @@ public partial class ClassroomViewModel
         set => SetReplySetting(() => _replySettings.ShowAcknowledge = value);
     }
 
+    /// <summary>
+    /// 「知道了」按钮发出去的那句话（支持占位符，例如 `{教室}收到了`）。
+    ///
+    /// 存两份（模板 + 组件）是因为设置界面只有一行输入框：空着就退回组件那份，
+    /// 填了就按这一行算 —— 旧配置照旧能用，改了也不会"改了没反应"。
+    /// </summary>
+    public string ReplyAcknowledgeTemplate
+    {
+        get => _replySettings.AcknowledgeTemplate;
+        set => SetReplySetting(() => _replySettings.AcknowledgeTemplate = value ?? string.Empty);
+    }
+
+    /// <summary>「知道了」按钮上显示什么（按钮文字本身不跟着模板变，它是个动作名）。</summary>
+    public string ReplyAcknowledgePreview
+    {
+        get
+        {
+            var text = ReplyComposer.ComposeAcknowledge(
+                _replySettings,
+                new ReplyContext(
+                    string.IsNullOrWhiteSpace(ClassroomName) ? "教室" : ClassroomName,
+                    "老师",
+                    _replyOriginal,
+                    DateTimeOffset.Now));
+
+            return text.Length == 0 ? "（空白 —— 会退回「知道了」）" : $"发出去是：{text}";
+        }
+    }
+
     public bool ReplyAllowText
     {
         get => _replySettings.AllowText;
@@ -84,6 +113,8 @@ public partial class ClassroomViewModel
         OnPropertyChanged(nameof(ReplyAllowVoice));
         OnPropertyChanged(nameof(ReplyQuickReplies));
         OnPropertyChanged(nameof(ReplyQuickReplyRows));
+        OnPropertyChanged(nameof(ReplyAcknowledgeTemplate));
+        OnPropertyChanged(nameof(ReplyAcknowledgePreview));
         OnPropertyChanged(nameof(HasQuickReplies));
         OnPropertyChanged(nameof(ReplyHint));
 
@@ -128,15 +159,121 @@ public partial class ClassroomViewModel
         set => SetProperty(ref _newQuickReplyText, value);
     }
 
+    private string? _editingQuickReplyId;
+
+    /// <summary>
+    /// 正在改的那一条（null = 在新增）。
+    ///
+    /// 有了"编辑"之后，同一个输入框要干两件事：新增与修改。用一个字段记"在改哪一条"，
+    /// 比再摆一排输入框干净得多 —— 教室端那块屏上的按钮就这么多。
+    /// </summary>
+    public bool IsEditingQuickReply => _editingQuickReplyId is not null;
+
+    /// <summary>保存按钮的文字跟着变（新增 / 保存修改）。</summary>
+    public string QuickReplySubmitText => IsEditingQuickReply ? "保存修改" : "添加";
+
+    /// <summary>已经用掉几个（x / 6）。</summary>
+    public string ReplyQuickReplyCountText =>
+        $"{_replySettings.QuickReplies.Count} / {ClassroomReplySettings.MaxQuickReplies}";
+
+    /// <summary>把某一条装进输入框，改成编辑那一条。</summary>
+    [RelayCommand]
+    private void EditQuickReply(QuickReply? reply)
+    {
+        if (reply is null)
+        {
+            return;
+        }
+
+        _editingQuickReplyId = reply.Id;
+        NewQuickReplyLabel = reply.Label;
+        NewQuickReplyText = reply.Components.Count == 0
+            ? string.Empty
+            : string.Join(string.Empty, reply.Components.Select(component => component.Kind == ReplyComponentKinds.Text
+                ? component.Text ?? string.Empty
+                : TokenOf(component.Kind)));
+
+        OnPropertyChanged(nameof(IsEditingQuickReply));
+        OnPropertyChanged(nameof(QuickReplySubmitText));
+    }
+
+    /// <summary>放弃这次修改（输入框清空、回到"新增"）。</summary>
+    [RelayCommand]
+    private void CancelEditQuickReply()
+    {
+        _editingQuickReplyId = null;
+        NewQuickReplyLabel = string.Empty;
+        NewQuickReplyText = string.Empty;
+
+        OnPropertyChanged(nameof(IsEditingQuickReply));
+        OnPropertyChanged(nameof(QuickReplySubmitText));
+    }
+
+    /// <summary>把占位符插进内容那一栏（光标位置不好取，统一追加到末尾）。</summary>
+    [RelayCommand]
+    private void InsertQuickReplyToken(string? token)
+    {
+        if (string.IsNullOrEmpty(token))
+        {
+            return;
+        }
+
+        NewQuickReplyText = (NewQuickReplyText ?? string.Empty) + token;
+    }
+
+    /// <summary>那一行提示：能写哪些占位符。</summary>
+    public string ReplyPlaceholderHint => ReplyPlaceholders.Hint;
+
+    /// <summary>占位符按钮（一个按钮一个 token）。</summary>
+    public IReadOnlyList<ReplyPlaceholderButton> ReplyPlaceholderButtons { get; } =
+        ReplyPlaceholders.All.Select(item => new ReplyPlaceholderButton(item.Token, item.Token)).ToList();
+
+    private static string TokenOf(string kind)
+        => ReplyPlaceholders.All.FirstOrDefault(item => item.Kind == kind).Token ?? string.Empty;
+
+    /// <summary>正文里只有占位符时，按钮上也看得懂（例如「{教室}收到」）。</summary>
+    private static string LabelFallback(string text)
+        => text.Replace("{教室}", "教室", StringComparison.Ordinal)
+            .Replace("{老师}", "老师", StringComparison.Ordinal)
+            .Replace("{时间}", "时间", StringComparison.Ordinal)
+            .Replace("{原话}", "原话", StringComparison.Ordinal);
+
     [RelayCommand]
     private void AddQuickReply()
     {
-        var text = NewQuickReplyText.Trim();
+        var text = (NewQuickReplyText ?? string.Empty).Trim();
 
         if (text.Length == 0)
         {
             AddLog("回复", "快捷回复的内容不能为空。");
             return;
+        }
+
+        var label = (NewQuickReplyLabel ?? string.Empty).Trim();
+
+        // 改的是已有的那一条：就地替换，不占新的位置
+        if (_editingQuickReplyId is not null)
+        {
+            var existing = _replySettings.QuickReplies.FirstOrDefault(item => item.Id == _editingQuickReplyId);
+
+            if (existing is null)
+            {
+                // 编辑期间那条被删掉了：退回"新增"，别让用户的字白打
+                _editingQuickReplyId = null;
+            }
+            else
+            {
+                existing.Label = label.Length > 0 ? label : LabelFallback(text);
+                existing.Components = [MessageComponent.Of(ReplyComponentKinds.Text, text)];
+
+                _replySettings.Normalized();
+                LocalSettings.SaveReply(_replySettings);
+
+                CancelEditQuickReply();
+                RefreshQuickReplies();
+                AddLog("回复", $"快捷回复已改：{existing.Label}");
+                return;
+            }
         }
 
         if (_replySettings.QuickReplies.Count >= ClassroomReplySettings.MaxQuickReplies)
@@ -145,8 +282,7 @@ public partial class ClassroomViewModel
             return;
         }
 
-        var label = NewQuickReplyLabel.Trim();
-        _replySettings.QuickReplies.Add(QuickReply.Of(label.Length > 0 ? label : text, text));
+        _replySettings.QuickReplies.Add(QuickReply.Of(label.Length > 0 ? label : LabelFallback(text), text));
 
         _replySettings.Normalized();
         LocalSettings.SaveReply(_replySettings);
@@ -168,6 +304,11 @@ public partial class ClassroomViewModel
         _replySettings.QuickReplies.RemoveAll(item => item.Id == reply.Id);
         LocalSettings.SaveReply(_replySettings);
 
+        if (_editingQuickReplyId == reply.Id)
+        {
+            CancelEditQuickReply();
+        }
+
         RefreshQuickReplies();
     }
 
@@ -185,6 +326,7 @@ public partial class ClassroomViewModel
     {
         OnPropertyChanged(nameof(ReplyQuickReplies));
         OnPropertyChanged(nameof(ReplyQuickReplyRows));
+        OnPropertyChanged(nameof(ReplyAcknowledgePreview));
         OnPropertyChanged(nameof(HasQuickReplies));
         OnPropertyChanged(nameof(ShowQuickReplies));
         OnPropertyChanged(nameof(HasReplyPanel));
@@ -564,4 +706,7 @@ public partial class ClassroomViewModel
 
         public string Summary => Reply.Summary;
     }
+
+    /// <summary>设置页里那颗「插入占位符」的按钮：点一下把 token 追加进内容那一栏。</summary>
+    public sealed record ReplyPlaceholderButton(string Token, string Label);
 }

@@ -325,6 +325,9 @@ internal static class Program
 
         // ---------- 3v. 手机端不检测代理 ----------
         AssertMobileProxyPolicy();
+
+        // ---------- 3w. 回复模板里的占位符 ----------
+        AssertReplyPlaceholders();
         AssertShoutTargetCard();
         await AssertVoiceTimerResetsAsync();
 
@@ -4839,6 +4842,58 @@ internal static class Program
     /// 更糟的是它可能让一次"检查更新"先卡几秒。所以手机端一律直连，
     /// 选项里也不该出现"跟随系统代理"。
     /// </summary>
+    /// <summary>
+    /// 回复模板里的占位符：`{教室}` / `{老师}` / `{时间}` / `{原话}`。
+    ///
+    /// 这是"快捷回复可以自定义"的全部机制：设置界面只有一行输入框，
+    /// 而回复要带上教室名与时刻，所以模板里写占位符、发送时才换。
+    /// 错法都很安静 —— 换错了只是"三年二班"变成"教室"，认不出的占位符
+    /// 要是被悄悄删掉，用户只会看到一句被吃掉一半的话。
+    /// </summary>
+    private static void AssertReplyPlaceholders()
+    {
+        var at = new DateTimeOffset(2026, 10, 23, 14, 5, 0, TimeSpan.FromHours(8));
+        var context = new ReplyContext("三年二班", "数学张老师", "请把作业收上来", at);
+
+        Check("回复占位符：{教室} 换成教室名",
+            ReplyPlaceholders.Expand("{教室}知道了", context) == "三年二班知道了",
+            ReplyPlaceholders.Expand("{教室}知道了", context));
+
+        Check("回复占位符：{老师} / {时间} / {原话} 都换得对",
+            ReplyPlaceholders.Expand("{时间}{老师}收到，关于「{原话}」", context)
+                == "14:05数学张老师收到，关于「请把作业收上来」",
+            ReplyPlaceholders.Expand("{时间}{老师}收到，关于「{原话}」", context));
+
+        Check("回复占位符：英文别名也认（手改 json 时两种写法都自然）",
+            ReplyPlaceholders.Expand("{classroom}-{teacher}-{time}", context) == "三年二班-数学张老师-14:05",
+            ReplyPlaceholders.Expand("{classroom}-{teacher}-{time}", context));
+
+        Check("回复占位符：认不出来的占位符原样留着（不静默吃掉）",
+            ReplyPlaceholders.Expand("{未知}收到", context) == "{未知}收到",
+            ReplyPlaceholders.Expand("{未知}收到", context));
+
+        // 快捷回复与「知道了」走同一条路：文字组件里的占位符也要展开
+        var quick = QuickReply.Of("到了", "{教室}，人齐了");
+        Check("回复占位符：快捷回复里的占位符会被展开",
+            ReplyComposer.Compose(quick, context) == "三年二班，人齐了",
+            ReplyComposer.Compose(quick, context));
+
+        var settings = new ClassroomReplySettings { AcknowledgeTemplate = "{时间}{教室}收到了" };
+        Check("回复占位符：「知道了」用的是设置里那一行模板",
+            ReplyComposer.ComposeAcknowledge(settings, context) == "14:05三年二班收到了",
+            ReplyComposer.ComposeAcknowledge(settings, context));
+
+        var legacy = new ClassroomReplySettings { AcknowledgeTemplate = string.Empty };
+        Check("回复占位符：模板留空时退回组件那份（旧配置照旧能用）",
+            ReplyComposer.ComposeAcknowledge(legacy, context) == "三年二班知道了",
+            ReplyComposer.ComposeAcknowledge(legacy, context));
+
+        Check("回复占位符：设置界面会把能用的几个都说出来",
+            ReplyPlaceholders.Hint.Contains("{教室}", StringComparison.Ordinal)
+            && ReplyPlaceholders.Hint.Contains("{原话}", StringComparison.Ordinal)
+            && ReplyPlaceholders.All.Count == 4,
+            ReplyPlaceholders.Hint);
+    }
     private static void AssertMobileProxyPolicy()
     {
         // 这一条按**当前平台**断言：桌面（跑自检的就是桌面）保留三档，手机上只有两档。
@@ -5031,9 +5086,21 @@ internal static class Program
             ReplyComposer.Compose(new List<MessageComponent>(), context) == string.Empty,
             "返回空串");
 
-        Check("回复拼装：「知道了」的组件也被清空时兜一句「知道了」",
-            ReplyComposer.ComposeAcknowledge(new ClassroomReplySettings { AcknowledgeComponents = [] }, context) == "知道了",
-            ReplyComposer.ComposeAcknowledge(new ClassroomReplySettings { AcknowledgeComponents = [] }, context));
+        // 「知道了」现在有两个来源：设置里那一行模板（优先）与组件那份（旧配置）。
+        // 只有**两者都空**时才该兜出默认的「知道了」—— 组件空、模板有字时按模板走。
+        Check("回复拼装：「知道了」的模板与组件都清空时兜一句「知道了」",
+            ReplyComposer.ComposeAcknowledge(
+                new ClassroomReplySettings { AcknowledgeComponents = [], AcknowledgeTemplate = string.Empty },
+                context) == "知道了",
+            ReplyComposer.ComposeAcknowledge(
+                new ClassroomReplySettings { AcknowledgeComponents = [], AcknowledgeTemplate = string.Empty },
+                context));
+
+        Check("回复拼装：模板清空但组件还在时，按组件拼（旧配置不用改就能用）",
+            ReplyComposer.ComposeAcknowledge(
+                new ClassroomReplySettings { AcknowledgeTemplate = string.Empty },
+                context) == "三年二班知道了",
+            ReplyComposer.ComposeAcknowledge(new ClassroomReplySettings { AcknowledgeTemplate = string.Empty }, context));
 
         var teacherComponent = ReplyComposer.Compose(
             [MessageComponent.Of(ReplyComponentKinds.Teacher)],
@@ -5924,12 +5991,17 @@ internal static class Program
             return Task.FromResult(false);
         });
 
-        // 入队后立刻问位置：第二条前面有 1 条（第一条在发），第三条前面有 2 条
+        // 入队后立刻问位置。
+        //
+        // 这里刻意**不**钉死"1 和 2"：第二条前面有几条取决于第一条是已经开跑
+        // （不在队列里了 → 0 条）还是仍在等（1 条），那是一个真实的时序差异，
+        // 钉死它等于让自检随机红一次。要钉的是"问得准"这件事本身：
+        // 第三条永远比第二条多一条，且第二条前面只可能有第一条（0 或 1）。
         var secondAheadWhileQueued = queue.PositionOf(secondTicket);
         var thirdAheadWhileQueued = queue.PositionOf(thirdTicket);
 
         Check("排队位置问得准（前面还有几个）",
-            secondAheadWhileQueued == 1 && thirdAheadWhileQueued == 2,
+            secondAheadWhileQueued is 0 or 1 && thirdAheadWhileQueued == secondAheadWhileQueued + 1,
             $"第二条前面 {secondAheadWhileQueued} 条，第三条前面 {thirdAheadWhileQueued} 条");
 
         // 放行第一条，等队列跑完

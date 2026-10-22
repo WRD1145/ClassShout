@@ -118,6 +118,15 @@ public sealed class ClassroomReplySettings
         MessageComponent.Of(ReplyComponentKinds.Text, "知道了"),
     ];
 
+    /// <summary>
+    /// 「知道了」按钮发出去的那句话（设置界面里直接改的那一行，支持占位符）。
+    ///
+    /// 与 <see cref="AcknowledgeComponents"/> 并存是有意的：组件那份是 1.15.0 起的
+    /// 存法，而设置界面只有一行输入框 —— 空着时退回组件，填了就按这一行算。
+    /// 这样旧配置照旧能用，用户改了也不会"改了没反应"。
+    /// </summary>
+    public string AcknowledgeTemplate { get; set; } = "{教室}知道了";
+
     /// <summary>是否允许文字回复（教室里现打一句话）。</summary>
     public bool AllowText { get; set; } = true;
 
@@ -166,6 +175,10 @@ public sealed class ClassroomReplySettings
             ];
         }
 
+        // 那一行模板可能是 null（手改过的 json），也可能被清成了空白 ——
+        // 空白就退回组件，别让「知道了」发出去是一条空消息。
+        AcknowledgeTemplate = AcknowledgeTemplate is null ? "{教室}知道了" : AcknowledgeTemplate.Trim();
+
         QuickReplies = QuickReplies
             .Where(reply => !string.IsNullOrWhiteSpace(reply.Label) || reply.Components.Count > 0)
             .Take(MaxQuickReplies)
@@ -180,6 +193,60 @@ public sealed class ClassroomReplySettings
         }
 
         return this;
+    }
+}
+
+/// <summary>
+/// 回复模板里的占位符。
+///
+/// 设置界面只有一行输入框，塞不进"组件编辑器"那套 UI；而回复又确实需要
+/// 教室名、老师、时间这些活的东西（"三年二班收到"、"张老师，我们这节有实验"）。
+/// 折中的做法就是**在文字里写占位符**：
+///
+///   `{教室}知道了`      → 三年二班知道了
+///   `{时间}收到`        → 14:05 收到
+///   `{原话}` 之类       → 原喊话的内容
+///
+/// 英文别名一并认（`{classroom}` 等）：文件是 JSON，手改的时候两种写法都自然。
+/// 认不出来的 `{...}` **原样留着** —— 静默删掉的话，用户只会看到一句被吃了一半的话，
+/// 却不知道该改哪儿。
+/// </summary>
+public static class ReplyPlaceholders
+{
+    /// <summary>占位符 → 它取的是哪一项。</summary>
+    public static IReadOnlyList<(string Token, string Kind, string Hint)> All { get; } =
+    [
+        ("{教室}", ReplyComponentKinds.Classroom, "教室名，例如「三年二班」"),
+        ("{老师}", ReplyComponentKinds.Teacher, "老师的称呼，例如「数学张老师」"),
+        ("{时间}", ReplyComponentKinds.Time, "回复的时刻，形如 14:05"),
+        ("{原话}", ReplyComponentKinds.Original, "被回复的那条喊话"),
+    ];
+
+    /// <summary>设置界面那一行提示（几个占位符连着说）。</summary>
+    public static string Hint => string.Join("、", All.Select(item => item.Token))
+                                 + "；写 `{教室}知道了` 就得到「三年二班知道了」。";
+
+    /// <summary>把模板里的占位符换成实际内容。</summary>
+    public static string Expand(string? template, ReplyContext context)
+    {
+        if (string.IsNullOrEmpty(template))
+        {
+            return string.Empty;
+        }
+
+        var text = template;
+
+        // 长的一个先换：`{教室}` 与 `{classroom}` 不冲突，这里只是习惯
+        text = text.Replace("{教室}", context.Classroom, StringComparison.Ordinal)
+            .Replace("{classroom}", context.Classroom, StringComparison.OrdinalIgnoreCase)
+            .Replace("{老师}", context.Teacher, StringComparison.Ordinal)
+            .Replace("{teacher}", context.Teacher, StringComparison.OrdinalIgnoreCase)
+            .Replace("{时间}", context.At.ToString("HH:mm"), StringComparison.Ordinal)
+            .Replace("{time}", context.At.ToString("HH:mm"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{原话}", context.OriginalText, StringComparison.Ordinal)
+            .Replace("{original}", context.OriginalText, StringComparison.OrdinalIgnoreCase);
+
+        return text.Trim();
     }
 }
 
@@ -214,7 +281,11 @@ public static class ReplyComposer
                 ReplyComponentKinds.Teacher => context.Teacher,
                 ReplyComponentKinds.Time => context.At.ToString("HH:mm"),
                 ReplyComponentKinds.Original => context.OriginalText,
-                _ => component.Text ?? string.Empty,
+
+                // 「文字」组件里可能写了占位符（设置界面就是这么用的），
+                // 所以这里也要展开一遍 —— 否则界面上写 `{教室}知道了`，
+                // 发出去的就是带花括号的那一串。
+                _ => ReplyPlaceholders.Expand(component.Text, context),
             });
         }
 
@@ -224,7 +295,13 @@ public static class ReplyComposer
     /// <summary>「知道了」那条回复。</summary>
     public static string ComposeAcknowledge(ClassroomReplySettings settings, ReplyContext context)
     {
-        var text = Compose(settings.AcknowledgeComponents, context);
+        // 设置界面里改的是 AcknowledgeTemplate（一行文字 + 占位符），
+        // 组件那份留着给旧配置与"没动过"的情况用。
+        var template = (settings.AcknowledgeTemplate ?? string.Empty).Trim();
+
+        var text = template.Length > 0
+            ? ReplyPlaceholders.Expand(template, context)
+            : Compose(settings.AcknowledgeComponents, context);
 
         // 拼出来是空的时候兜一句：教室里点了按钮，老师那边不该收到一条空白回复
         return text.Length == 0 ? "知道了" : text;
