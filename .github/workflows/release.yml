@@ -78,7 +78,14 @@ jobs:
           fi
 
           tag="v$version"
-          notes="artifacts/notes-$tag.md"
+
+          # 发布说明先找 .github/releases/（这里的东西会进仓库，CI 读得到），
+          # 再退回 artifacts/（本地 release.ps1 用 -NotesFile 指的那份；它被 .gitignore 挡着，
+          # CI 上看不到 —— 所以想在自动发布里带上说明，就得放进 .github/releases/）。
+          notes=".github/releases/notes-$tag.md"
+          if [ ! -f "$notes" ]; then
+            notes="artifacts/notes-$tag.md"
+          fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
