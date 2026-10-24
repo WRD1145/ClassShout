@@ -1,0 +1,267 @@
+# 合并到 main 就自动打包并发布。
+#
+# 触发条件与行为：
+#   · push 到 main（也就是合并 PR）→ 读 Directory.Build.props 里的 <Version>；
+#     如果标签 v<版本> 已经存在，**什么都不做**（版本没升就等于没有新东西要发）；
+#     没有这个标签才打包、建发行版、上传附件。
+#   · 也可以在 Actions 页面手动点一下（workflow_dispatch）：可以只打包不发布（dry_run），
+#     用来验证"这台机器上能不能打出来"，不会产生任何发行版。
+#
+# 为什么整套打包都在一个 Windows job 里跑：`scripts/pack.ps1` 本来就在开发机上
+# 一次产出 Windows（三个应用）+ Linux（服务器、教室端）+ Android APK，并且已经在
+# 本地反复验证过。CI 复用它，比在 yml 里再抄一遍发布参数靠谱 —— 两边一旦分叉，
+# 就会出现"本地能发、CI 发出来的少了点什么"。
+#
+# 平台说明（重要）：
+#   · Windows / Linux / Android —— 这一条流水线完整产出，和手动 release.ps1 的附件一致。
+#   · macOS —— 只**构建**（教师端桌面头能发布成 osx-arm64），产物是未签名、未打 .app
+#     的裸目录，所以只作为 Actions 附件供有 Mac 的人试，不进发行版；教室端在 macOS 上
+#     的播放与朗读还没有对应实现（用的是 Linux 的 aplay/spd-say 那套）。
+#   · iOS —— 目前**没有** iOS 头项目，仓库里也没有可发布的东西；要它得先加一个
+#     Avalonia.iOS 头、配 Apple 开发者证书与描述文件，那是移植工作，不是 CI 配置。
+
+name: 自动发布
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 只打包、不创建发行版（验证流水线用）
+        type: boolean
+        default: true
+      version:
+        description: 手动指定版本（例如 1.18.1），留空则读 Directory.Build.props
+        type: string
+        required: false
+
+# 同一时间只跑一条：两次合并挨得太近时，后一条排队而不是并行去建发行版
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------- 1. 版本判定：这个版本发过了吗 ----------
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
+      notes_file: ${{ steps.read.outputs.notes_file }}
+      should_release: ${{ steps.check.outputs.should_release }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 读版本号
+        id: read
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ github.event.inputs.version }}"
+          if [ -z "$version" ]; then
+            version=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props | head -1)
+          fi
+          # 容错：允许带 v 前缀
+          version="${version#v}"
+
+          if [ -z "$version" ]; then
+            echo "读不出 <Version>：Directory.Build.props 里那一行是不是被改坏了？" >&2
+            exit 1
+          fi
+
+          tag="v$version"
+          notes="artifacts/notes-$tag.md"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -f "$notes" ]; then
+            echo "notes_file=$notes" >> "$GITHUB_OUTPUT"
+          else
+            echo "notes_file=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "版本：$version（标签 $tag）"
+
+      - name: 这个标签已经发过了吗
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.read.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "标签 $TAG 已有发行版：这次没有新版本要发，跳过打包。"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$TAG 还没有发行版，开始打包。"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------- 2. 打包：Windows + Linux + Android（复用 scripts/pack.ps1） ----------
+  pack:
+    needs: version
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Android 那一支要 JDK 17+ 与 Android SDK；GitHub 的 windows 镜像自带这两样，
+      # 这里只是把缺的 workload 装上。
+      - name: 装 Android workload
+        shell: pwsh
+        run: |
+          dotnet workload install android --skip-sign-check
+          dotnet --info
+
+      # android 的 TFM 与 JDK 版本对不上时会抛一句很难懂的错，先把环境打出来
+      - name: 打印环境
+        shell: pwsh
+        run: |
+          Write-Host "JAVA_HOME=$env:JAVA_HOME"
+          Write-Host "ANDROID_HOME=$env:ANDROID_HOME"
+          java -version
+          dotnet --list-sdks
+
+      # 打包脚本自己会：依赖框架发布 + 把私有运行时摆进 runtime\ + 生成 zip/tar.gz
+      # + 算 SHA256SUMS。CI 不重复这些细节。
+      - name: 打包（Windows / Linux / Android）
+        shell: pwsh
+        env:
+          MSBUILDDISABLENODEREUSE: '1'
+        run: |
+          ./scripts/pack.ps1 -Configuration Release -IncludeLinuxServer
+
+      - name: 看看打出来了什么
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/release | Format-Table Name, @{n='MB'; e={[math]::Round($_.Length/1MB,1)}}
+          if (-not (Test-Path dist/release/SHA256SUMS.txt)) { throw '没有生成 SHA256SUMS.txt' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/release/*
+          if-no-files-found: error
+
+  # ---------- 3. macOS：只构建，不进发行版 ----------
+  pack-macos:
+    needs: version
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    # 这一支是"能编出来"而不是"能直接用"：产物未签名、没打 .app、也没人在 Mac 上跑过。
+    # 失败不该拦着 Windows/Linux/Android 的发布。
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 发布教师端桌面头（osx-arm64，未签名）
+        run: |
+          dotnet publish src/ClassShout.Teacher.Desktop/ClassShout.Teacher.Desktop.csproj \
+            -c Release -r osx-arm64 -f net10.0 --self-contained=false \
+            -o "dist/macos/ClassShout.Teacher"
+
+      - name: 打包成 zip（说明里写清是试验产物）
+        run: |
+          cd dist/macos
+          cat > 说明.txt <<'EOF'
+          这是 ClassShout 教师端的 macOS 试验产物（osx-arm64）：**未签名、未打 .app 包**。
+
+          要试的话：
+            1. 解压后给可执行文件执行权：chmod +x ClassShout.Teacher.Desktop
+            2. 需要 .NET 10 运行时（这一份是依赖框架的发布物）
+            3. 第一次打开会被 Gatekeeper 拦下：系统设置 → 隐私与安全性 → 仍要打开
+
+          教室端在 macOS 上的播放与朗读还没有对应实现，所以没有教室端的 macOS 包。
+          EOF
+          zip -r "ClassShout.Teacher-macos-arm64-unsigned.zip" ClassShout.Teacher 说明.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-unsigned
+          path: dist/macos/*.zip
+          if-no-files-found: warn
+
+  # ---------- 4. 建发行版 ----------
+  release:
+    needs: [version, pack]
+    if: needs.version.outputs.should_release == 'true' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: assets
+
+      - name: 核对附件
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l assets
+          cd assets
+          sha256sum -c SHA256SUMS.txt
+          # 少一个附件就等于发了个半成品：这里显式点名要哪几个
+          for f in ClassShout.Classroom-win-x64.zip ClassShout.Classroom-linux-x64.tar.gz \
+                   ClassShout.RelayServer-win-x64.zip ClassShout.RelayServer-linux-x64.tar.gz \
+                   ClassShout.Teacher-win-x64.zip SHA256SUMS.txt; do
+            [ -f "$f" ] || { echo "缺少附件：$f" >&2; exit 1; }
+          done
+          ls classshout-teacher-*.apk >/dev/null || { echo '缺少 APK' >&2; exit 1; }
+
+      - name: 建标签并发布
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+          NOTES_FILE: ${{ needs.version.outputs.notes_file }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
+            echo "用仓库里的发布说明：$NOTES_FILE"
+            notes_args=(--notes-file "$NOTES_FILE")
+          else
+            echo "仓库里没有 $TAG 的发布说明文件，用一段自动生成的。"
+            cat > /tmp/notes.md <<EOF
+          自动发布：$TAG
+
+          合并到 main 后由 GitHub Actions 自动打包并发布。附件与手动 release.ps1 的产物一致：
+          Windows（教室端 / 教师端 / 服务器）、Linux（教室端 / 服务器）、Android APK。
+
+          发布说明没有写在仓库里（artifacts/notes-$TAG.md），所以这里只有这段占位文字。
+          EOF
+            notes_args=(--notes-file /tmp/notes.md)
+          fi
+
+          gh release create "$TAG" assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ClassShout $TAG" \
+            "${notes_args[@]}"
