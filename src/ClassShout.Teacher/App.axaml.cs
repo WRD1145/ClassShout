@@ -22,7 +22,12 @@ public partial class App : Application
     {
         // 恢复用户选过的主题色（个性化）。必须在创建视图之前：
         // 控件主题靠 DynamicResource 读这些色角色，晚了就缓存成旧配色了。
-        ClassShout.Design.Theming.Md3Appearance.Apply(this, LocalSettings.LoadAppearance().SeedColor);
+        var appearance = LocalSettings.LoadAppearance().Normalized();
+
+        ClassShout.Design.Theming.Md3Appearance.Apply(this, appearance.SeedColor);
+
+        // 明暗要在第一个窗口出现之前定下来，否则会先闪一下亮色。
+        ClassShout.Design.Theming.Md3Appearance.ApplyThemeMode(this, appearance.Theme);
 
         _viewModel = new TeacherShellViewModel();
 

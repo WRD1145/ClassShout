@@ -23,11 +23,21 @@ public partial class SettingsWindow : Window
 
         // 把界面状态与已保存的设置对齐，再接上回调 ——
         // 顺序反了的话，初始化赋值本身会被当成"用户改了颜色"而触发一次多余的保存。
+        var savedAppearance = LocalSettings.LoadAppearance().Normalized();
+
         var theme = this.FindControl<ThemePicker>("Appearance");
         if (theme is not null)
         {
-            theme.SelectedSeedHex = LocalSettings.LoadAppearance().SeedColor;
+            theme.SelectedSeedHex = savedAppearance.SeedColor;
             theme.SelectionChanged += OnAppearanceChanged;
+        }
+
+        // 明暗：先对齐已保存的那一档，再接回调（顺序反了会白存一次、还可能白闪一下）
+        var mode = this.FindControl<ThemeModePicker>("AppearanceMode");
+        if (mode is not null)
+        {
+            mode.SelectedMode = savedAppearance.Theme;
+            mode.ModeChanged += OnAppearanceModeChanged;
         }
 
         var about = this.FindControl<AboutPanel>("About");
@@ -100,6 +110,28 @@ public partial class SettingsWindow : Window
     /// 顺序是"先存后应用"：万一应用这一步出问题，磁盘上的设置仍与界面上选中的一致，
     /// 重启后不会出现"显示的是新颜色、实际用的是旧颜色"这种对不上的状态。
     /// </summary>
+    /// <summary>
+    /// 明暗改了：存下来、立刻生效。
+    ///
+    /// 立刻生效很重要 —— 选「深色」时界面若等到下次启动才变，
+    /// 用户只会以为这个选项坏了，然后再点两次别的档位。
+    /// </summary>
+    private void OnAppearanceModeChanged(object? sender, ClassShout.Core.Remote.ThemeMode mode)
+    {
+        var settings = LocalSettings.LoadAppearance();
+        settings.Theme = mode;
+
+        if (!LocalSettings.SaveAppearance(settings))
+        {
+            (sender as ThemeModePicker)?.ShowPersistenceFailure("明暗设置没能写入本机，重启后会恢复原样。");
+        }
+
+        if (Application.Current is { } app)
+        {
+            Md3Appearance.ApplyThemeMode(app, mode);
+        }
+    }
+
     private void OnAppearanceChanged(object? sender, string? seedHex)
     {
         var settings = LocalSettings.LoadAppearance();

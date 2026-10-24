@@ -328,6 +328,9 @@ internal static class Program
 
         // ---------- 3w. 回复模板里的占位符 ----------
         AssertReplyPlaceholders();
+
+        // ---------- 3x. 明暗三档 ----------
+        AssertThemeModes();
         AssertShoutTargetCard();
         await AssertVoiceTimerResetsAsync();
 
@@ -4850,6 +4853,55 @@ internal static class Program
     /// 错法都很安静 —— 换错了只是"三年二班"变成"教室"，认不出的占位符
     /// 要是被悄悄删掉，用户只会看到一句被吃掉一半的话。
     /// </summary>
+    /// <summary>
+    /// 明暗三档：跟随系统 / 浅色 / 深色。
+    ///
+    /// 这里钉的是"档位 → Avalonia 主题"的映射。错了的表现很安静：
+    /// 选「深色」界面不变、或者选「跟随系统」却一直是浅色（Default 被写成了 Light），
+    /// 而那时界面上没有任何异常可看。
+    /// </summary>
+    private static void AssertThemeModes()
+    {
+        Check("明暗：跟随系统对应 ThemeVariant.Default（不是写死 Light）",
+            ClassShout.Design.Theming.Md3Appearance.ToThemeVariant(ThemeMode.System)
+                == Avalonia.Styling.ThemeVariant.Default,
+            Middle(ThemeMode.System));
+
+        Check("明暗：浅色 / 深色各对应自己的变体",
+            ClassShout.Design.Theming.Md3Appearance.ToThemeVariant(ThemeMode.Light) == Avalonia.Styling.ThemeVariant.Light
+            && ClassShout.Design.Theming.Md3Appearance.ToThemeVariant(ThemeMode.Dark) == Avalonia.Styling.ThemeVariant.Dark,
+            Middle(ThemeMode.Light) + " / " + Middle(ThemeMode.Dark));
+
+        // 三档循环：界面上那颗"切换"按钮靠它，循环里漏一档就会卡住
+        var cycle = new List<ThemeMode>();
+        var cursor = ThemeMode.System;
+        for (var i = 0; i < 3; i++)
+        {
+            cursor = ThemeModeMapping.Next(cursor);
+            cycle.Add(cursor);
+        }
+
+        Check("明暗：三档循环一圈回到起点，且三档都出现过",
+            cursor == ThemeMode.System && cycle.Distinct().Count() == 3,
+            string.Join(" → ", cycle));
+
+        Check("明暗：手改坏的值（3、-1）会被收成「跟随系统」",
+            new AppearanceSettings { Theme = (ThemeMode)3 }.Normalized().Theme == ThemeMode.System
+            && new AppearanceSettings { Theme = (ThemeMode)(-1) }.Normalized().Theme == ThemeMode.System,
+            "两个越界值都归零");
+
+        Check("明暗：默认是跟随系统（不再像旧版那样写死浅色）",
+            new AppearanceSettings().Theme == ThemeMode.System,
+            Middle(new AppearanceSettings().Theme));
+
+        Check("明暗：种子色与明暗分开存，改一个不影响另一个",
+            new AppearanceSettings { SeedColor = "  #112233 ", Theme = ThemeMode.Dark }.Normalized()
+                is { SeedColor: "#112233", Theme: ThemeMode.Dark },
+            "#112233 / 深色");
+    }
+
+    /// <summary>取显示名，给断言输出用（不直接打印枚举值）。</summary>
+    private static string Middle(ThemeMode mode) => ThemeModeMapping.Label(mode);
     private static void AssertReplyPlaceholders()
     {
         var at = new DateTimeOffset(2026, 10, 23, 14, 5, 0, TimeSpan.FromHours(8));
@@ -6671,3 +6723,4 @@ internal sealed record ClassroomRosterPutResult(
 
 /// <summary>班主任给自己管的班授权某位老师的返回：<c>{ok, already, message}</c>。</summary>
 internal sealed record HeadTeacherGrantResult(bool Ok, bool Already, string? Message, string? Error = null);
+

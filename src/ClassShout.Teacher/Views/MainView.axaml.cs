@@ -23,11 +23,21 @@ public partial class MainView : UserControl
 
         // 先对齐界面状态，再接回调 —— 反过来的话，初始化赋值会被当成"用户改了颜色"，
         // 白白触发一次保存。
+        var savedAppearance = LocalSettings.LoadAppearance().Normalized();
+
         var theme = this.FindControl<ThemePicker>("Appearance");
         if (theme is not null)
         {
-            theme.SelectedSeedHex = LocalSettings.LoadAppearance().SeedColor;
+            theme.SelectedSeedHex = savedAppearance.SeedColor;
             theme.SelectionChanged += OnAppearanceChanged;
+        }
+
+        // 明暗：先对齐已保存的档位，再接回调（顺序反了会白存一次）
+        var appearanceMode = this.FindControl<ThemeModePicker>("AppearanceMode");
+        if (appearanceMode is not null)
+        {
+            appearanceMode.SelectedMode = savedAppearance.Theme;
+            appearanceMode.ModeChanged += OnAppearanceModeChanged;
         }
 
         var about = this.FindControl<AboutPanel>("About");
@@ -302,6 +312,28 @@ public partial class MainView : UserControl
     /// 重启后不会出现"界面显示新颜色、实际用旧颜色"的错位。
     /// 这套顺序与教室端的设置窗口一致，两端的表现应当完全一样。
     /// </summary>
+    /// <summary>
+    /// 明暗改了：存下来、立刻生效。
+    ///
+    /// 立刻生效很重要 —— 选「深色」若等下次启动才变，用户只会以为这个选项坏了。
+    /// 教师端在手机上用时，白天强光 / 晚上宿舍是两种场景，切得比桌面更频繁。
+    /// </summary>
+    private void OnAppearanceModeChanged(object? sender, ClassShout.Core.Remote.ThemeMode mode)
+    {
+        var settings = LocalSettings.LoadAppearance();
+        settings.Theme = mode;
+
+        if (!LocalSettings.SaveAppearance(settings))
+        {
+            (sender as ThemeModePicker)?.ShowPersistenceFailure("明暗设置没能写入本机，重启后会恢复原样。");
+        }
+
+        if (Application.Current is { } app)
+        {
+            Md3Appearance.ApplyThemeMode(app, mode);
+        }
+    }
+
     private void OnAppearanceChanged(object? sender, string? seedHex)
     {
         var settings = LocalSettings.LoadAppearance();

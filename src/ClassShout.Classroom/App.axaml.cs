@@ -21,7 +21,13 @@ public partial class App : Application
         // 恢复用户选过的主题色。必须早于任何窗口的创建：
         // 换色是往 Application.Resources 里换一块资源字典，而控件一旦构造完就把
         // 一部分颜色值缓存下来了；能提前就提前，免得界面出现"一半新一半旧"。
-        ClassShout.Design.Theming.Md3Appearance.Apply(this, LocalSettings.LoadAppearance().SeedColor);
+        var appearance = LocalSettings.LoadAppearance().Normalized();
+
+        ClassShout.Design.Theming.Md3Appearance.Apply(this, appearance.SeedColor);
+
+        // 明暗同样要在第一个窗口出现之前定下来：晚一步就会先闪一下亮色。
+        // 「跟随系统」交给 Avalonia 的 ThemeVariant.Default，系统换主题时它自己广播。
+        ClassShout.Design.Theming.Md3Appearance.ApplyThemeMode(this, appearance.Theme);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

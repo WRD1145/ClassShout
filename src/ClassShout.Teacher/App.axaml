@@ -1,13 +1,12 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:fa="using:FluentAvalonia.Styling"
-             x:Class="ClassShout.Teacher.App"
-             RequestedThemeVariant="Light">
+             x:Class="ClassShout.Teacher.App">
 
   <Application.Styles>
     <!--
       与教室端保持同一套主题组合：Fluent 底座在前，Md3 主题在后。
-      教师端在手机上使用，强光下浅色更清晰，所以默认亮色。
+      明暗由教师端「设备 → 个性化」决定，默认跟随系统。
     -->
     <fa:FluentAvaloniaTheme PreferSystemTheme="False" />
     <StyleInclude Source="avares://ClassShout.Design/Md3Theme.axaml" />

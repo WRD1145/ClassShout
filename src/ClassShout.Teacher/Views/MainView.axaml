@@ -1730,7 +1730,11 @@
             -->
             <md3:Md3Card Classes="outlined" CardPadding="14">
               <!-- 名字不叫 Theme：Avalonia 的 StyledElement.Theme 会与 x:Name 撞名 -->
-              <md3:ThemePicker x:Name="Appearance" />
+              <StackPanel Spacing="14">
+                <!-- 明暗：跟随系统 / 浅色 / 深色。与主题色是两件事，所以两个控件分开 -->
+                <md3:ThemeModePicker x:Name="AppearanceMode" />
+                <md3:ThemePicker x:Name="Appearance" />
+              </StackPanel>
             </md3:Md3Card>
 
             <!--

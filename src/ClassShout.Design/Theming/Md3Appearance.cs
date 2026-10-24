@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 using Avalonia.Styling;
+using ClassShout.Core.Remote;
 
 namespace ClassShout.Design.Theming;
 
@@ -83,6 +84,33 @@ public static class Md3Appearance
         return true;
     }
 
+    /// <summary>
+    /// 应用明暗（跟随系统 / 浅色 / 深色）。
+    ///
+    /// 交给 Avalonia 的 <see cref="Application.RequestedThemeVariant"/>：写
+    /// <c>ThemeVariant.Default</c> 就是"跟随系统"，系统切换时 Avalonia 自己会广播
+    /// ActualThemeVariantChanged，所有 DynamicResource 跟着重算 —— 不需要我们轮询系统主题。
+    ///
+    /// 注意不要动 <c>FluentAvaloniaTheme.PreferSystemTheme</c>：它开着的时候自己也会去读
+    /// 系统主题，与我们这一档打架（表现是"选了浅色，系统深色时又变回去"）。
+    /// </summary>
+    /// <param name="application">目标应用。</param>
+    /// <param name="mode">三档之一。</param>
+    public static void ApplyThemeMode(Application application, ThemeMode mode)
+        => application.RequestedThemeVariant = ToThemeVariant(mode);
+
+    /// <summary>
+    /// 三档对应的 <see cref="ThemeVariant"/>。
+    ///
+    /// 单独一个方法是为了能被自检直接断言 —— 这一步错了的表现是"选深色没反应"，
+    /// 而那时界面上看不出任何异常。
+    /// </summary>
+    public static ThemeVariant ToThemeVariant(ThemeMode mode) => mode switch
+    {
+        ThemeMode.Light => ThemeVariant.Light,
+        ThemeMode.Dark => ThemeVariant.Dark,
+        _ => ThemeVariant.Default,
+    };
     /// <summary>
     /// 色角色转成资源项。
     ///

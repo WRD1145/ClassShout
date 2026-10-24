@@ -798,7 +798,11 @@
             名字刻意不叫 Theme：Avalonia 的 StyledElement 上已经有一个 Theme 属性
             （给 ControlTheme 用的），x:Name 取同名会撞出 CS0108 警告。
           -->
-          <md3:ThemePicker x:Name="Appearance" />
+          <StackPanel Spacing="14">
+            <!-- 明暗：跟随系统 / 浅色 / 深色。与主题色是两件事，所以两个控件分开 -->
+            <md3:ThemeModePicker x:Name="AppearanceMode" />
+            <md3:ThemePicker x:Name="Appearance" />
+          </StackPanel>
         </md3:Md3Card>
 
         <!--
