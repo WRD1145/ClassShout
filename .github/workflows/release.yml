@@ -109,7 +109,9 @@ jobs:
   # ---------- 2. 打包：Windows + Linux + Android（复用 scripts/pack.ps1） ----------
   pack:
     needs: version
-    if: needs.version.outputs.should_release == 'true'
+    # dry_run 时即使这个版本已经发过也照跑 —— 手动点是用来验证流水线的，
+    # 不该因为"标签已存在"就什么都不做。
+    if: needs.version.outputs.should_release == 'true' || github.event.inputs.dry_run == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
 
@@ -162,7 +164,7 @@ jobs:
   # ---------- 3. macOS：只构建，不进发行版 ----------
   pack-macos:
     needs: version
-    if: needs.version.outputs.should_release == 'true'
+    if: needs.version.outputs.should_release == 'true' || github.event.inputs.dry_run == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
     # 这一支是"能编出来"而不是"能直接用"：产物未签名、没打 .app、也没人在 Mac 上跑过。
