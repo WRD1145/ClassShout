@@ -527,20 +527,35 @@ $LaunchHint
         if ($Gzip) {
             # 可执行位：Windows 打的 tar 不保留 Unix 权限位，解压端要自己 chmod。
             # 这里至少让 run.sh 的意图写清楚（部署文档里有 chmod +x 那一步）。
-            & tar -czf $TargetPath -C (Split-Path $staging -Parent) $RootName
+            #
+            # **显式用 System32 里的 tar**，不靠 PATH：runner 上排在前面的是 Git 附带的
+            # GNU tar，它压出来只有几百 KB 的残包（却照样返回 0）。本机 PATH 里那份是
+            # Windows 自带的 bsdtar，所以这个错本地永远复现不出来。
+            $tarExe = if ($IsWindows) { Join-Path $env:SystemRoot 'System32\tar.exe' } else { 'tar' }
+
+            if (-not (Test-Path $tarExe)) {
+                throw "找不到 tar：$tarExe（Windows 10 起自带 tar.exe）"
+            }
+
+            & $tarExe -czf $TargetPath -C (Split-Path $staging -Parent) $RootName
         }
         else {
-            # Windows 的 zip 用 Compress-Archive，不调 tar。
-            #
-            # 原来这里调的是 `tar -a -c -f`（bsdtar 按扩展名选 zip）。本机没问题，
-            # 但 runner 上 PATH 里的 `tar` 是 Git 附带的 GNU tar，它不认
-            # "-a + .zip" 这个组合，于是 zip 根本没生成、打包直接抛"失败" ——
-            # 与内容无关，纯粹取决于哪一份 tar 排在前面。
+            # Windows 的 zip 用 Compress-Archive（同样是"不依赖 PATH 里是哪一份工具"）。
+            Remove-Item $TargetPath -Force -ErrorAction SilentlyContinue
             Compress-Archive -Path $staging -DestinationPath $TargetPath -CompressionLevel Optimal -Force
         }
 
         if (-not (Test-Path $TargetPath)) {
             throw "打包 $RootName 失败"
+        }
+
+        # 残包检查：体积不到源目录的 5% 一定是压错了（runner 上真的出现过一次，
+        # 只压进去说明文件和 run.sh，却仍然是"成功"）。靠"文件存在"发现不了。
+        $sourceSize = (Get-ChildItem $staging -Recurse -File | Measure-Object -Property Length -Sum).Sum
+        $archiveSize = (Get-Item $TargetPath).Length
+
+        if ($sourceSize -gt 10MB -and $archiveSize -lt ($sourceSize * 0.05)) {
+            throw ("打包 $RootName 失败：压缩包只有 {0:N2} MB，而源目录有 {1:N1} MB" -f ($archiveSize / 1MB), ($sourceSize / 1MB))
         }
 
         Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
