@@ -530,10 +530,16 @@ $LaunchHint
             & tar -czf $TargetPath -C (Split-Path $staging -Parent) $RootName
         }
         else {
-            & tar -a -c -f $TargetPath -C (Split-Path $staging -Parent) $RootName
+            # Windows 的 zip 用 Compress-Archive，不调 tar。
+            #
+            # 原来这里调的是 `tar -a -c -f`（bsdtar 按扩展名选 zip）。本机没问题，
+            # 但 runner 上 PATH 里的 `tar` 是 Git 附带的 GNU tar，它不认
+            # "-a + .zip" 这个组合，于是 zip 根本没生成、打包直接抛"失败" ——
+            # 与内容无关，纯粹取决于哪一份 tar 排在前面。
+            Compress-Archive -Path $staging -DestinationPath $TargetPath -CompressionLevel Optimal -Force
         }
 
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $TargetPath)) {
+        if (-not (Test-Path $TargetPath)) {
             throw "打包 $RootName 失败"
         }
 
