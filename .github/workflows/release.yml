@@ -225,17 +225,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 不能叫 assets/ —— 仓库里本来就有一个 assets/（放应用图标的），
+      # 下载到同名目录会把四个图标混进附件里一起发出去。
       - uses: actions/download-artifact@v4
         with:
           name: release-assets
-          path: assets
+          path: release-assets
 
       - name: 核对附件
         shell: bash
         run: |
           set -euo pipefail
-          ls -l assets
-          cd assets
+          ls -l release-assets
+          cd release-assets
           sha256sum -c SHA256SUMS.txt
           # 少一个附件就等于发了个半成品：这里显式点名要哪几个
           for f in ClassShout.Classroom-win-x64.zip ClassShout.Classroom-linux-x64.tar.gz \
@@ -270,7 +272,7 @@ jobs:
             notes_args=(--notes-file /tmp/notes.md)
           fi
 
-          gh release create "$TAG" assets/* \
+          gh release create "$TAG" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "ClassShout $TAG" \
             "${notes_args[@]}"
