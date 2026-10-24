@@ -212,6 +212,46 @@ try {
             throw "私有运行时没生成 host\fxr（$Rid）：启动时宿主会找不到 .NET。"
         }
     }
+    # 打 .tar.gz 一律在进程里做，不调外部 tar。
+    #
+    # 起因：CI 上 `tar -czf` 把 106 MB 的服务器目录压成了几百 KB 的包，却仍然返回 0；
+    # 改成 $env:SystemRoot\System32\tar.exe 之后结果一样。既然外部工具在 runner 上
+    # 不可信，就用自己的实现：System.Formats.Tar 写 tar、GZipStream 压 gz，
+    # 结果只取决于我们的代码与文件本身。
+    function New-TarGz {
+        param([string]$SourceDir, [string]$TargetPath)
+
+        Remove-Item $TargetPath -Force -ErrorAction SilentlyContinue
+
+        $tarTemp = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N') + '.tar')
+
+        try {
+            # includeBaseDirectory = true：包内顶层就是源目录名，解压出来是"一个文件夹"
+            [System.Formats.Tar.TarFile]::CreateFromDirectory($SourceDir, $tarTemp, $true)
+
+            $tarIn = [System.IO.File]::OpenRead($tarTemp)
+            $tarOut = [System.IO.File]::Create($TargetPath)
+
+            try {
+                $gzipStream = [System.IO.Compression.GZipStream]::new(
+                    $tarOut, [System.IO.Compression.CompressionLevel]::Optimal)
+
+                try {
+                    $tarIn.CopyTo($gzipStream)
+                }
+                finally {
+                    $gzipStream.Dispose()
+                }
+            }
+            finally {
+                $tarOut.Dispose()
+                $tarIn.Dispose()
+            }
+        }
+        finally {
+            Remove-Item $tarTemp -Force -ErrorAction SilentlyContinue
+        }
+    }
     # ---------- Windows ----------
     # 发布物本身一律是"依赖框架"的（程序文件因此能直接待在解压根目录里），
     # 运行时另用 Install-PrivateRuntime 摆进 runtime\：
@@ -531,13 +571,10 @@ $LaunchHint
             # **显式用 System32 里的 tar**，不靠 PATH：runner 上排在前面的是 Git 附带的
             # GNU tar，它压出来只有几百 KB 的残包（却照样返回 0）。本机 PATH 里那份是
             # Windows 自带的 bsdtar，所以这个错本地永远复现不出来。
-            $tarExe = if ($IsWindows) { Join-Path $env:SystemRoot 'System32\tar.exe' } else { 'tar' }
-
-            if (-not (Test-Path $tarExe)) {
-                throw "找不到 tar：$tarExe（Windows 10 起自带 tar.exe）"
-            }
-
-            & $tarExe -czf $TargetPath -C (Split-Path $staging -Parent) $RootName
+            # 打 tar.gz 在进程里做（见文件前面的 New-TarGz）：
+            # CI 上 `tar -czf` 压出来的包只有几百 KB 却返回 0，换 System32 的 tar 也一样，
+            # 所以不再依赖任何外部 tar。
+            New-TarGz -SourceDir $staging -TargetPath $TargetPath
         }
         else {
             # Windows 的 zip 用 Compress-Archive（同样是"不依赖 PATH 里是哪一份工具"）。
