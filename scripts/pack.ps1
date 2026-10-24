@@ -91,10 +91,21 @@ try {
     # 这三样正好在 NuGet 的运行时包里（runtimes\<rid>\lib\<tfm>\），
     # 于是"用运行时包拼一份私有 .NET"既有正确元数据，又不用本机装同版本运行时。
 
+    # NuGet 的包目录不一定是 %USERPROFILE%\.nuget\packages（CI 上常被指到别处），
+    # 所以每次都问 dotnet 要一次 —— 猜路径的话，第一次在干净机器上打包就会找不到运行时包。
+    function Get-NuGetPackagesRoot {
+        $line = (& dotnet nuget locals global-packages --list 2>$null | Select-Object -First 1)
+        if ($line -match 'global-packages:\s*(.+)$') {
+            return $Matches[1].Trim()
+        }
+
+        return Join-Path $env:USERPROFILE '.nuget\packages'
+    }
+
     function Find-RuntimePack {
         param([string]$FxName, [string]$Rid, [int]$Major, [int]$Minor)
 
-        $base = Join-Path $env:USERPROFILE (".nuget\packages\" + $FxName.ToLowerInvariant() + ".runtime.$Rid")
+        $base = Join-Path (Get-NuGetPackagesRoot) ($FxName.ToLowerInvariant() + ".runtime.$Rid")
         if (-not (Test-Path $base)) { return $null }
 
         Get-ChildItem $base -Directory |
@@ -105,7 +116,7 @@ try {
     }
 
     function Install-PrivateRuntime {
-        param([string]$AppDir, [string]$Rid)
+        param([string]$AppDir, [string]$Rid, [string]$Project)
 
         $rcFile = Get-ChildItem $AppDir -Filter '*.runtimeconfig.json' -File | Select-Object -First 1
         if (-not $rcFile) { throw "找不到 runtimeconfig.json：$AppDir" }
@@ -118,6 +129,17 @@ try {
         if ($wanted.Count -eq 0) {
             Write-Host '    这次发布没有声明框架（自包含？），跳过 runtime\ 组装' -ForegroundColor DarkGray
             return
+        }
+
+        # 运行时包只有**自包含**发布才会被下载；而这里发的是依赖框架的发布物，
+        # 干净机器上那份包压根不在缓存里（CI 上就是这么挂的）。
+        # 于是显式 restore 一次，把运行时包拉下来 —— 这一步只写缓存，不改发布物。
+        if ($Project) {
+            Write-Host '    正在取运行时包（restore）…'
+            & dotnet restore $Project -r $Rid -p:SelfContained=true --nologo -v q
+            if ($LASTEXITCODE -ne 0) {
+                throw "取运行时包失败（restore 退出码 $LASTEXITCODE）：$Project / $Rid"
+            }
         }
 
         $runtimeDir = Join-Path $AppDir 'runtime'
@@ -242,7 +264,7 @@ try {
 
         # 运行时单独摆进 runtime\（-FrameworkDependent 时不带，要求目标机装 .NET）
         if (-not $FrameworkDependent) {
-            Install-PrivateRuntime -AppDir $out -Rid $Runtime
+            Install-PrivateRuntime -AppDir $out -Rid $Runtime -Project $item.Project
         }
 
         # Web SDK 会带出 web.config 这类只对 IIS 有意义的文件，独立运行时用不到
@@ -278,7 +300,7 @@ try {
         }
 
         if (-not $FrameworkDependent) {
-            Install-PrivateRuntime -AppDir $serverLinuxOut -Rid 'linux-x64'
+            Install-PrivateRuntime -AppDir $serverLinuxOut -Rid 'linux-x64' -Project 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj'
         }
 
         # Web SDK 会带出几个只对 IIS 有意义的文件，独立运行时用不到，清掉免得干扰部署
@@ -300,7 +322,7 @@ try {
         }
 
         if (-not $FrameworkDependent) {
-            Install-PrivateRuntime -AppDir $classroomLinuxOut -Rid 'linux-x64'
+            Install-PrivateRuntime -AppDir $classroomLinuxOut -Rid 'linux-x64' -Project 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'
         }
 
         Get-ChildItem $classroomLinuxOut -File |
