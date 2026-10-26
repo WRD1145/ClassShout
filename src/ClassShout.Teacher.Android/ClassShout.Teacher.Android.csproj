@@ -27,7 +27,7 @@
       现在直接跟着产品版本走（$(Version)）：手动维护它只会和真正的版本号越差越远 ——
       1.3.0 这个值就是这么留下来的。
     -->
-    <ApplicationVersion>13</ApplicationVersion>
+    <ApplicationVersion>14</ApplicationVersion>
     <ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
 

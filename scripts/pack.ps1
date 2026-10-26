@@ -522,18 +522,58 @@ exec "./$LaunchName" "`$@"
 @echo off
 rem ClassShout $LaunchName
 rem
-rem 主程序就在这一层，运行时在同级的 runtime\ 下（私有 .NET，不需要另装）。
-rem DOTNET_ROOT 必须先设好，否则宿主会去找系统里装的那份。
+rem The program sits in this folder; the runtime is in runtime\ next to it (private .NET,
+rem nothing has to be installed). DOTNET_ROOT must be set before the host starts,
+rem otherwise it looks for a system-wide .NET.
+rem
+rem OS check: .NET no longer supports Windows 7 / 8.1. On those systems the host dies
+rem with "The procedure entry point ... could not be located", which explains nothing.
+rem So stop here and say so. ASCII only: cmd.exe parses this file in the ANSI code page,
+rem so anything non-ASCII would turn into mojibake (or even break parsing).
+for /f "tokens=4,5 delims=. " %%a in ('ver') do (
+  set "WINMAJOR=%%a"
+  set "WINMINOR=%%b"
+)
+if not defined WINMAJOR goto :run
+if %WINMAJOR% LSS 10 goto :oldwindows
+
+:run
 cd /d "%~dp0"
 set DOTNET_ROOT=%~dp0runtime
 set CLASSSHOUT_LOG_DIR=%~dp0logs
 start "" "%~dp0$LaunchName" %*
+exit /b 0
+
+:oldwindows
+echo.
+echo   ClassShout needs Windows 10 version 1607 or later.
+echo.
+echo   This machine reports Windows %WINMAJOR%.%WINMINOR%. .NET 10 cannot run on it,
+echo   so the program cannot start here.
+echo.
+echo   Options:
+echo     - put Windows 10/11 on this PC, or use a small x64 Linux box
+echo     - the Linux classroom build needs no .NET either
+echo.
+echo   See the readme (.txt) in this folder for details.
+pause
+exit /b 1
 "@
 
             $launcher = Join-Path $staging "$LaunchName 启动.cmd"
         }
 
-        [System.IO.File]::WriteAllText($launcher, ($script -replace "`r`n", "`n"), (New-Object System.Text.UTF8Encoding($false)))
+        # 换行符要分开处理：
+        #   · run.sh 用 LF（Linux 上 CRLF 会让 /bin/sh 报 "$'\r': command not found"）；
+        #   · .cmd 必须用 CRLF —— cmd.exe 对 LF 换行的手册式宽容只覆盖简单语句，
+        #     遇到标签、for、括号块就会错位（这个启动脚本里三样都有）。
+        # 早期版本统一压成 LF，结果中文环境下双击 .cmd 直接报一堆
+        # "'…' is not recognized"，程序根本没起来。
+        $lineEnding = if ($Gzip) { "`n" } else { "`r`n" }
+        $launcherText = $script -replace "`r`n", "`n"
+        $launcherText = $launcherText -replace "`n", $lineEnding
+
+        [System.IO.File]::WriteAllText($launcher, $launcherText, (New-Object System.Text.UTF8Encoding($false)))
 
         $readme = @"
 ClassShout · $LaunchName
@@ -557,10 +597,12 @@ $('=' * 60)
 $LaunchHint
 "@
 
+        # 这份说明带 BOM：老系统的记事本不认"无 BOM 的 UTF-8"，打开是一片乱码 ——
+        # 而它恰恰是给旧机器上的人看的那一份。
         [System.IO.File]::WriteAllText(
             (Join-Path $staging '使用说明.txt'),
             ($readme -replace "`r`n", "`r`n"),
-            (New-Object System.Text.UTF8Encoding($false)))
+            (New-Object System.Text.UTF8Encoding($true)))
 
         Remove-Item $TargetPath -Force -ErrorAction SilentlyContinue
 
