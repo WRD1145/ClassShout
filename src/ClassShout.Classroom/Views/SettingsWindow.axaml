@@ -345,6 +345,22 @@
                       Command="{Binding DisconnectRelayCommand}" />
             </Grid>
 
+            <!--
+              启动时自动连接：第一次连成功之后自动打开（教室里那台电脑每天开机，
+              没人会去点「连接服务器」，而它一旦没连上，那节课的喊话就安静地送不到）。
+              手动点「断开」不会关掉它：那只是这一次不想连。
+            -->
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="bodyMedium" Text="启动时自动连接" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Md3.OnSurfaceVariant}"
+                           Text="第一次连上之后自动打开；手动「断开」只影响这一次，想彻底不连就关掉这里" />
+              </StackPanel>
+              <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                            IsChecked="{Binding RelayAutoConnect}" />
+            </Grid>
+
             <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsRelayBusy}" />
 
             <Border IsVisible="{Binding HasRelayError}"

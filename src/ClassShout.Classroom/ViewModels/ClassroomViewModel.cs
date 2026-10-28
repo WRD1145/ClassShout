@@ -2064,6 +2064,18 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             _relay.StartPolling();
             IsRelayConnected = true;
 
+            // 第一次连上之后，这台机器以后每次启动都自己连（除非有人在设置里关掉）。
+            // 写在这里而不是"注册成功"那里：注册成功但轮询没起来等于没连上，
+            // 那种半成功状态不该让教室以后自动进入同一个坑。
+            if (!_relaySettings.AutoConnect)
+            {
+                _relaySettings.AutoConnect = true;
+                LocalSettings.SaveClassroom(_relaySettings);
+
+                OnPropertyChanged(nameof(RelayAutoConnect));
+                AddLog("服务器", "已记住：以后每次启动自动连接服务器（可在设置里关掉）。");
+            }
+
             if (_relay.WasNewlyRegistered)
             {
                 AddLog("服务器", $"本教室已注册。UUID：{RelayUuid}");
@@ -2080,6 +2092,55 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         {
             IsRelayBusy = false;
         }
+    }
+
+    /// <summary>启动时自动连接服务器（第一次连上之后自动打开）。</summary>
+    public bool RelayAutoConnect
+    {
+        get => _relaySettings.AutoConnect;
+        set
+        {
+            if (_relaySettings.AutoConnect == value)
+            {
+                return;
+            }
+
+            _relaySettings.AutoConnect = value;
+            LocalSettings.SaveClassroom(_relaySettings);
+
+            OnPropertyChanged();
+            AddLog("服务器", value ? "已打开：每次启动自动连接服务器。" : "已关闭：启动时不再自动连接服务器。");
+        }
+    }
+
+    /// <summary>
+    /// 启动时的那次自动连接。
+    ///
+    /// 刻意**不**在构造函数里 await：构造函数跑完界面才画出来，而连接（含注册）
+    /// 要等服务器应答 —— 在构造里等，教室端会白屏几秒，看起来像卡死。
+    /// 所以由 <see cref="BeginAutoConnect"/> 在界面显示之后调用，失败也不弹框：
+    /// 错误落在日志与「跨局域网喊话」那张卡上，和手动连接时一模一样。
+    /// </summary>
+    private bool _autoConnectStarted;
+
+    /// <summary>界面起来之后调用：如果之前连成功过、配置也齐，就自己连一次。</summary>
+    public void BeginAutoConnect()
+    {
+        // 从没配好过时不该猜地址、也不该弹提示：设置页那张卡本来就写着"未配置"
+        if (!ClassroomRelaySettings.ShouldAutoConnect(
+                _relaySettings, _relay.IsConnected, _autoConnectStarted))
+        {
+            return;
+        }
+
+        _autoConnectStarted = true;
+
+        RelayServerUrl = _relaySettings.ServerUrl;
+
+        AddLog("服务器", $"启动自动连接：{_relaySettings.ServerUrl}");
+
+        // 不在 UI 线程上阻塞：交给命令本身（它内部 await，失败会把原因写进日志与卡片）
+        _ = ConnectRelayCommand.ExecuteAsync(null);
     }
 
     [RelayCommand(CanExecute = nameof(CanDisconnectRelay))]

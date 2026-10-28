@@ -331,6 +331,9 @@ internal static class Program
 
         // ---------- 3x. 明暗三档 ----------
         AssertThemeModes();
+
+        // ---------- 3y. 启动时自动连接服务器 ----------
+        AssertAutoConnectPolicy();
         AssertShoutTargetCard();
         await AssertVoiceTimerResetsAsync();
 
@@ -4860,6 +4863,61 @@ internal static class Program
     /// 选「深色」界面不变、或者选「跟随系统」却一直是浅色（Default 被写成了 Light），
     /// 而那时界面上没有任何异常可看。
     /// </summary>
+    /// <summary>
+    /// 「启动时自动连接」的判断。
+    ///
+    /// 这条规则错一次，教室里那台电脑的表现就会是两种很糟的样子之一：
+    /// 开机后安静地不连（老师的喊话送不到，教室里没有任何提示），
+    /// 或者用户刚点了「断开」它又自己连回去（像是不听话）。
+    /// </summary>
+    private static void AssertAutoConnectPolicy()
+    {
+        var configured = new ClassroomRelaySettings
+        {
+            AutoConnect = true,
+            ServerUrl = "https://relay.example.com",
+            Uuid = "0c4b1e18-1111-4222-8333-444455556666",
+        };
+
+        Check("自动连接：配好过、开着、还没连 → 应该连",
+            ClassroomRelaySettings.ShouldAutoConnect(configured, isConnected: false, alreadyTried: false),
+            "连");
+
+        Check("自动连接：没打开这一项时不连",
+            !ClassroomRelaySettings.ShouldAutoConnect(
+                new ClassroomRelaySettings { ServerUrl = configured.ServerUrl, Uuid = configured.Uuid },
+                isConnected: false,
+                alreadyTried: false),
+            "不连（默认关闭）");
+
+        Check("自动连接：已经连着就不必再连一次",
+            !ClassroomRelaySettings.ShouldAutoConnect(configured, isConnected: true, alreadyTried: false),
+            "不连");
+
+        Check("自动连接：这次启动已经试过就不再重试（失败也不打转）",
+            !ClassroomRelaySettings.ShouldAutoConnect(configured, isConnected: false, alreadyTried: true),
+            "不连");
+
+        Check("自动连接：没有地址或没有 UUID 时不猜（从没配好过）",
+            !ClassroomRelaySettings.ShouldAutoConnect(
+                new ClassroomRelaySettings { AutoConnect = true, Uuid = configured.Uuid },
+                isConnected: false,
+                alreadyTried: false)
+            && !ClassroomRelaySettings.ShouldAutoConnect(
+                new ClassroomRelaySettings { AutoConnect = true, ServerUrl = configured.ServerUrl },
+                isConnected: false,
+                alreadyTried: false),
+            "两种情况都不连");
+
+        // 落盘往返：这是"下次启动还记得"的唯一依据
+        var roundTrip = new ClassroomRelaySettings { AutoConnect = true, ServerUrl = "http://127.0.0.1:8080" };
+        var text = System.Text.Json.JsonSerializer.Serialize(roundTrip);
+        var back = System.Text.Json.JsonSerializer.Deserialize<ClassroomRelaySettings>(text)!;
+
+        Check("自动连接：这一项会写进 classroom.json 并读得回来",
+            back.AutoConnect && text.Contains("\"AutoConnect\":true", StringComparison.Ordinal),
+            text.Length > 0 ? "已写入 AutoConnect" : string.Empty);
+    }
     private static void AssertThemeModes()
     {
         Check("明暗：跟随系统对应 ThemeVariant.Default（不是写死 Light）",

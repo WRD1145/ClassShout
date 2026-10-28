@@ -63,6 +63,10 @@ public partial class App : Application
             var window = new MainWindow { DataContext = _viewModel };
             desktop.MainWindow = window;
 
+            // 自动连接放在窗口出来之后：连服务器要等应答，卡在构造里会让教室端白屏几秒。
+            // 失败不弹框 —— 原因落在日志与「跨局域网喊话」那张卡上，与手动连接一致。
+            window.Opened += (_, _) => _viewModel.BeginAutoConnect();
+
             // 关闭窗口 → 缩到托盘继续接收喊话。装不上就维持"关闭即退出"，
             // 总好过一个关不掉的窗口。
             _tray = TrayPresence.TryInstall(window, desktop);

@@ -25,6 +25,18 @@ public sealed class ClassroomRelaySettings
     public string ClassroomName { get; set; } = "教室";
 
     /// <summary>
+    /// 启动时自动连接服务器。
+    ///
+    /// **第一次连接成功之后自动打开**，之后就一直是"开机就连"，直到有人在设置里关掉它。
+    /// 理由是这间教室的使用场景：教室里那台电脑每天开机、没人会去点「连接服务器」，
+    /// 而它一旦没连上，老师那节课的喊话就安静地送不到 —— 而教室里没有任何提示。
+    ///
+    /// 手动点「断开」不会关掉这个开关：那只是这一次不想连（检修网络之类），
+    /// 下次开机照旧自己连上。想彻底不连，去设置里关。
+    /// </summary>
+    public bool AutoConnect { get; set; }
+
+    /// <summary>
     /// 允许"证书有问题也继续连"（自签证书的服务器用）。
     ///
     /// 与教师端同一个开关、同一份含义（见 <see cref="TlsPolicy"/>）：
@@ -37,6 +49,23 @@ public sealed class ClassroomRelaySettings
     [JsonIgnore]
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ServerUrl) && !string.IsNullOrWhiteSpace(Uuid);
 
+    /// <summary>
+    /// 启动时该不该自动连一次。
+    ///
+    /// 抽成静态方法是为了能被自检直接断言：这条判断错一次，要么教室里那台电脑
+    /// 开机后安静地不连（老师的喊话送不到、教室没有任何提示），要么在用户刚点了
+    /// 「断开」之后又自己连回去（像是不听话）。
+    /// </summary>
+    /// <param name="settings">本机保存的联网配置。</param>
+    /// <param name="isConnected">此刻是否已经连着。</param>
+    /// <param name="alreadyTried">这次启动是否已经试过（避免重试风暴）。</param>
+    public static bool ShouldAutoConnect(
+        ClassroomRelaySettings settings, bool isConnected, bool alreadyTried)
+        => !alreadyTried
+           && settings.AutoConnect
+           && !isConnected
+           && !string.IsNullOrWhiteSpace(settings.ServerUrl)
+           && !string.IsNullOrWhiteSpace(settings.Uuid);
     /// <summary>确保有 UUID；没有就生成一个。</summary>
     public string EnsureUuid()
     {
