@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    安装 / 更新程序（Windows）。
+
+    为什么自己写一个而不是用 Inno Setup：这个程序只有两件事要说清楚 ——
+      · 解到哪（默认 %LOCALAPPDATA%\ClassShout\<应用>，**不需要管理员**）；
+      · 升级时**保留** logs\ 与设置（设置本来就在 %LOCALAPPDATA%\ClassShout\ 下）。
+    Inno 能做的更多（服务、语言包、注册表），但它在 CI 上要靠一个额外安装的外部
+    编译器；而这个程序是普通 .NET 项目，和仓库里其它工具同一条构建链、同一套发布
+    参数，出问题能直接在这里跑起来查。
+
+    它自己也是**自包含单文件**：安装时目标机还没有 .NET，装完才有那一份。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <AssemblyName>ClassShout.Setup</AssemblyName>
+    <RootNamespace>ClassShout.Setup</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      待安装的那份程序（平铺的自包含发布物，zip）。
+
+      由 scripts\pack.ps1 通过 -p:PayloadZip=... 传进来：
+        · 平铺 = hostfxr / coreclr 就在 exe 旁边，双击就跑，不需要 DOTNET_ROOT；
+        · 便携版才把运行时收进 runtime\（那一版靠启动脚本设好变量）。
+    -->
+    <EmbeddedResource Include="$(PayloadZip)" Condition="'$(PayloadZip)' != ''" LogicalName="payload.zip" />
+    <EmbeddedResource Include="$(PayloadInfo)" Condition="'$(PayloadInfo)' != ''" LogicalName="payload-info.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="app.manifest" />
+  </ItemGroup>
+
+</Project>

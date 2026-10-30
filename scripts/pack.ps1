@@ -49,6 +49,10 @@ param(
 
     [switch]$IncludeLinuxServer,
 
+    # 额外产出 Windows 的安装 / 更新程序（exe）：便携版 zip 与安装版是两种目录布局，
+    # 安装版平铺（不需要 DOTNET_ROOT，双击快捷方式就能跑），详见 tools\ClassShout.Setup。
+    [switch]$Installer,
+
     [string]$OutputRoot = 'dist'
 )
 
@@ -668,6 +672,120 @@ $LaunchHint
             -LaunchName 'ClassShout.Classroom' `
             -LaunchHint '教室端（Linux）：解压后 chmod +x ClassShout.Classroom 与 run.sh（用 run.sh 启动）；朗读需要有 spd-say 或 espeak-ng。' `
             -Gzip
+    }
+
+    # ---------- Windows 安装 / 更新程序（-Installer） ----------
+    #
+    # 便携版 zip 与安装版是**两种目录布局**，这不是重复劳动：
+    #   · 便携版把运行时收进 runtime\，靠启动脚本设 DOTNET_ROOT —— 干净，
+    #     但"必须先双击启动脚本"这件事对值日生不友好（也确实踩过：直接双击 exe 报装 .NET）；
+    #   · 安装版**平铺**（hostfxr / coreclr 就在 exe 旁边），快捷方式指向 exe 就能跑，
+    #     不需要任何环境变量。所以安装包里的 payload 是另一次"自包含发布"，
+    #     而不是把便携版解开再搬家。
+    if ($Installer) {
+        Write-Host ''
+        Write-Host '[安装包] 生成 Windows 安装 / 更新程序' -ForegroundColor Yellow
+
+        $setupOut = Join-Path $OutputRoot 'setup'
+        New-Item -ItemType Directory -Force -Path $setupOut | Out-Null
+
+        $setupApps = @(
+            @{
+                Id = 'classroom'
+                Title = 'ClassShout 教室端'
+                Folder = 'Classroom'
+                Exe = 'ClassShout.Classroom.exe'
+                Project = 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'
+                Framework = 'net10.0-windows'
+                Asset = 'ClassShout.Classroom-win-x64-setup.exe'
+            },
+            @{
+                Id = 'teacher'
+                Title = 'ClassShout 教师端'
+                Folder = 'Teacher'
+                Exe = 'ClassShout.Teacher.Desktop.exe'
+                Project = 'src\ClassShout.Teacher.Desktop\ClassShout.Teacher.Desktop.csproj'
+                Framework = 'net10.0'
+                Asset = 'ClassShout.Teacher-win-x64-setup.exe'
+            }
+        )
+
+        foreach ($app in $setupApps) {
+            Write-Host "  正在打 $($app.Title)…"
+
+            # 1) 平铺的自包含发布物 → 这次安装要装的东西
+            $payloadDir = Join-Path $setupOut "$($app.Id)-payload"
+            Remove-Item $payloadDir -Recurse -Force -ErrorAction SilentlyContinue
+
+            & dotnet publish $app.Project -c $Configuration -r $Runtime -f $app.Framework `
+                --self-contained=true -p:DebugType=none -o $payloadDir --nologo -v q
+
+            if ($LASTEXITCODE -ne 0) {
+                throw "$($app.Title) 的安装包内容发布失败（退出码 $LASTEXITCODE）"
+            }
+
+            Get-ChildItem $payloadDir -File |
+                Where-Object { $_.Extension -in '.config', '.pdb' } |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+
+            # 2) 压成一个 zip 内嵌进安装程序。
+            #    顶层不带目录：解开时直接落在安装目录里。
+            $payloadZip = Join-Path $setupOut "$($app.Id)-payload.zip"
+            Remove-Item $payloadZip -Force -ErrorAction SilentlyContinue
+
+            [System.IO.Compression.ZipFile]::CreateFromDirectory(
+                $payloadDir, $payloadZip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+
+            # 3) 让安装程序知道自己装的是什么（应用名、exe、目录、版本）
+            $infoPath = Join-Path $setupOut "$($app.Id)-payload-info.json"
+            $info = [ordered]@{
+                appId = $app.Id
+                title = $app.Title
+                exe = $app.Exe
+                folder = $app.Folder
+                version = $version
+            } | ConvertTo-Json
+
+            [System.IO.File]::WriteAllText($infoPath, $info, (New-Object System.Text.UTF8Encoding($false)))
+
+            # 4) 编出安装程序（单文件自包含，内嵌上面那个 zip）
+            $setupPublish = Join-Path $setupOut "$($app.Id)-exe"
+            Remove-Item $setupPublish -Recurse -Force -ErrorAction SilentlyContinue
+
+            # 路径必须是**绝对**的：EmbeddedResource 的相对路径按项目目录解析，
+            # 于是 dist\setup\x.zip 会变成 tools\ClassShout.Setup\dist\setup\x.zip。
+            $payloadZipFull = (Resolve-Path $payloadZip).Path
+            $infoPathFull = (Resolve-Path $infoPath).Path
+
+            & dotnet publish 'tools\ClassShout.Setup\ClassShout.Setup.csproj' -c $Configuration `
+                -p:PayloadZip="$payloadZipFull" -p:PayloadInfo="$infoPathFull" `
+                -o $setupPublish --nologo -v q
+
+            if ($LASTEXITCODE -ne 0) {
+                throw "$($app.Title) 的安装程序编译失败（退出码 $LASTEXITCODE）"
+            }
+
+            $setupExe = Join-Path $setupPublish 'ClassShout.Setup.exe'
+
+            if (-not (Test-Path $setupExe)) {
+                throw "没有产出安装程序：$setupExe"
+            }
+
+            # 安装程序自己也是自包含单文件，但体积对不上说明 payload 没进去
+            $setupSize = (Get-Item $setupExe).Length
+            $payloadSize = (Get-Item $payloadZip).Length
+
+            if ($setupSize -lt $payloadSize) {
+                throw ("安装程序比它要装的包还小（{0:N1} MB < {1:N1} MB）—— payload 没嵌进去" -f ($setupSize / 1MB), ($payloadSize / 1MB))
+            }
+
+            Copy-Item $setupExe (Join-Path $releaseOut $app.Asset) -Force
+
+            Write-Host ("    {0,-44} {1,8:N1} MB" -f $app.Asset, ($setupSize / 1MB))
+
+            Remove-Item $payloadDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item $setupPublish -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 
     # APK 的文件名本来就是最终附件名（含版本号），直接沿用

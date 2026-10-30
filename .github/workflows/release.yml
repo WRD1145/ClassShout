@@ -154,7 +154,9 @@ jobs:
         env:
           MSBUILDDISABLENODEREUSE: '1'
         run: |
-          ./scripts/pack.ps1 -Configuration Release -IncludeLinuxServer
+          # -Installer：额外产出两个安装/更新程序（exe）。它们与便携版 zip 是两种目录布局，
+          # 安装版平铺（双击快捷方式就能跑，不需要 DOTNET_ROOT）。
+          ./scripts/pack.ps1 -Configuration Release -IncludeLinuxServer -Installer
 
       - name: 看看打出来了什么
         shell: pwsh
@@ -242,7 +244,9 @@ jobs:
           # 少一个附件就等于发了个半成品：这里显式点名要哪几个
           for f in ClassShout.Classroom-win-x64.zip ClassShout.Classroom-linux-x64.tar.gz \
                    ClassShout.RelayServer-win-x64.zip ClassShout.RelayServer-linux-x64.tar.gz \
-                   ClassShout.Teacher-win-x64.zip SHA256SUMS.txt; do
+                   ClassShout.Teacher-win-x64.zip \
+                   ClassShout.Classroom-win-x64-setup.exe ClassShout.Teacher-win-x64-setup.exe \
+                   SHA256SUMS.txt; do
             [ -f "$f" ] || { echo "缺少附件：$f" >&2; exit 1; }
           done
           ls classshout-teacher-*.apk >/dev/null || { echo '缺少 APK' >&2; exit 1; }

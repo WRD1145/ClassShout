@@ -2126,16 +2126,20 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// <summary>界面起来之后调用：如果之前连成功过、配置也齐，就自己连一次。</summary>
     public void BeginAutoConnect()
     {
-        // 从没配好过时不该猜地址、也不该弹提示：设置页那张卡本来就写着"未配置"
+        // 从没配好过时不该猜地址、也不该弹提示：设置页那张卡本来就写着"未配置"。
+        //
+        // 注意这里用 IsRelayConnected 而不是 _relay.IsConnected：启动时 _relay 还是 null
+        // （它只在 ConnectRelayAsync 里创建），直接解引用会在窗口刚显示时抛空引用 ——
+        // 那一版真的这么崩过，而且崩在 UI 事件里，日志只看得到"启动失败"。
         if (!ClassroomRelaySettings.ShouldAutoConnect(
-                _relaySettings, _relay.IsConnected, _autoConnectStarted))
+                _relaySettings, IsRelayConnected, _autoConnectStarted))
         {
             return;
         }
 
         _autoConnectStarted = true;
 
-        RelayServerUrl = _relaySettings.ServerUrl;
+        RelayServerUrl = _relaySettings.ServerUrl ?? string.Empty;
 
         AddLog("服务器", $"启动自动连接：{_relaySettings.ServerUrl}");
 
