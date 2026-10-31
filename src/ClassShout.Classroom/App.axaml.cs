@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using ClassShout.Classroom.Services;
 using ClassShout.Classroom.ViewModels;
@@ -66,6 +67,32 @@ public partial class App : Application
             // 自动连接放在窗口出来之后：连服务器要等应答，卡在构造里会让教室端白屏几秒。
             // 失败不弹框 —— 原因落在日志与「跨局域网喊话」那张卡上，与手动连接一致。
             window.Opened += (_, _) => _viewModel.BeginAutoConnect();
+
+            // 收到"窗口式"喊话时，如果窗口正缩在托盘里（或最小化），把它唤出来。
+            //
+            // 视图模型不知道 Window 与托盘的存在，所以由这里注入。判定放在这里而不是
+            // 视图模型里：只有窗口层知道"现在到底看不看得见"。
+            _viewModel.RequestStageVisible = () =>
+            {
+                if (window.IsVisible && window.WindowState != WindowState.Minimized)
+                {
+                    return false;
+                }
+
+                if (_tray is not null)
+                {
+                    // 走托盘那条路：它会先把最小化还原再显示，否则唤回来还是个最小化的窗口
+                    _tray.Restore();
+                }
+                else
+                {
+                    window.WindowState = WindowState.Normal;
+                    window.Show();
+                    window.Activate();
+                }
+
+                return true;
+            };
 
             // 关闭窗口 → 缩到托盘继续接收喊话。装不上就维持"关闭即退出"，
             // 总好过一个关不掉的窗口。

@@ -1107,6 +1107,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         _textHiddenInPopup = plan.IsPopup;
         Stage = plan.IsPopup ? ClassroomStage.Idle : ClassroomStage.SpeakingText;
 
+        // 窗口式喊话必须真的被看见：主窗口可能正缩在托盘里
+        EnsureStageVisible(plan);
+
         NotifyOnScreen(sourceName, message.Text, ShoutNoticeKind.Text, plan);
 
         // 在界面完成本轮渲染后再发上屏回执，不能把网络接收当成显示完成。
@@ -1375,6 +1378,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         _textHiddenInPopup = plan.IsPopup;
         Stage = plan.IsPopup ? ClassroomStage.Idle : ClassroomStage.ShowingImage;
+
+        // 图片也是画在主窗口上的，同样要保证窗口是开着的
+        EnsureStageVisible(plan);
 
         NotifyOnScreen(
             sourceName,
@@ -1868,6 +1874,37 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>组装当前运行态，既用于握手回包，也用于主动推送。</summary>
+    /// <summary>
+    /// 把主窗口唤出来（窗口被关到托盘、或最小化时）。
+    ///
+    /// 返回 true 表示"确实是被藏起来了、刚刚才把它叫回来" —— 用来记一行日志。
+    /// 实现由窗口层（App）注入：视图模型不该知道 Window 与托盘的存在，
+    /// 而"窗口藏没藏"只有它知道。
+    /// </summary>
+    public Func<bool>? RequestStageVisible { get; set; }
+
+    /// <summary>
+    /// 收到一条"窗口式"喊话时，确保它真的会被看见。
+    ///
+    /// 为什么需要这一步：窗口模式下内容是画在**主窗口**的大字区里的。而教室里那台电脑
+    /// 常常被点过 ×（缩到托盘）或者最小化 —— 那时喊话照样"显示"了，只是一点都看不见：
+    /// 教师端收到的是成功回执，教室里安安静静。这比彻底失败更糟，因为它看起来是好的。
+    /// 弹窗模式不受影响（它在自己那层窗口里）。
+    /// </summary>
+    private void EnsureStageVisible(in ShoutDisplayPlan plan)
+    {
+        if (plan.IsPopup || RequestStageVisible is null)
+        {
+            return;
+        }
+
+        if (RequestStageVisible())
+        {
+            AddLog("系统", "主窗口原本是关着的，已把它唤出来显示这条喊话。");
+        }
+    }
+
+
     private StatusMessage BuildStatus() => new()
     {
         State = Stage.ToString().ToLowerInvariant(),
