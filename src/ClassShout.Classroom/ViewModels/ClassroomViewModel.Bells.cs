@@ -53,6 +53,8 @@ public partial class ClassroomViewModel
         BellStatus = LocalSettings.SaveBells(settings)
             ? "铃声已保存到本机。无效时刻会被禁用；周几为 1–127 位掩码。"
             : "铃声保存失败，重启后会丢失，请检查配置目录权限。";
+        Bells.Clear();
+        foreach (var bell in settings.Bells) Bells.Add(bell);
         AddLog("铃声", BellStatus);
     }
 

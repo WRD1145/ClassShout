@@ -379,7 +379,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task SendAudioStartAsync(AudioFormat format, CancellationToken cancellationToken = default)
+    public async Task SendAudioStartAsync(AudioFormat format, CancellationToken cancellationToken = default, string? messageId = null)
     {
         if (_token is null)
         {
@@ -391,7 +391,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         // 发出去之后才记"会话已开"，与局域网那条链路同样的道理：
         // 先记后发的话，一旦这次 POST 失败，通道就以为会话开着，
         // 后面攒下来的裸 PCM 会被发到一个从没收到过 audioStart 的教室。
-        var audioId = MessageIds.New();
+        var audioId = messageId ?? MessageIds.New();
         var accepted = await PostAsync(
             Url(string.Format(RelayPaths.TeacherAudioStart, _token)),
             JsonContent.Create(new AudioStartRequest(format.SampleRate, format.Channels, format.BitsPerSample, audioId), options: JsonOptions),

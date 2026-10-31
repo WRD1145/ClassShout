@@ -5538,8 +5538,14 @@ internal static class Program
     {
         ClassShout.Teacher.Services.TeacherPlatform.RegisterAudioRecorder(() => new FakeAudioRecorder());
 
+        // 计时验收也走实际可用的传输，不能把界面的连接标志当成网络连接。
+        await using var server = new ClassroomServer(46002);
+        server.Start();
+        await using var channel = new ShoutChannel();
+        await channel.ConnectAsync(new IPEndPoint(IPAddress.Loopback, 46002), "计时验收");
+
         var voice = new ClassShout.Teacher.ViewModels.VoiceShoutViewModel(
-            new ClassShout.Teacher.Services.ShoutTransportRouter())
+            new ClassShout.Teacher.Services.ShoutTransportRouter { Active = channel })
         {
             IsConnected = true,
         };
@@ -6866,6 +6872,26 @@ internal static class Program
             Check("实际教室端：时间线含发出、送达、上屏", receipt.Timeline.Count == 3,
                 string.Join(" → ", receipt.Timeline.Select(item => item.Stage)));
         }
+        var completed = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+        client.ControlReceived += message =>
+        {
+            if (message is StatusMessage { MessageId: { } messageId, DeliveryStage: { } stage }
+                && stage is DeliveryStages.Completed or DeliveryStages.Failed)
+                completed[messageId] = stage;
+        };
+        var first = MessageIds.New();
+        var second = MessageIds.New();
+        await client.SendTextAsync(new TextShoutMessage { Id = first, Text = "第一条排队朗读验收，请稍后。", Speak = true, Interrupt = false });
+        await client.SendTextAsync(new TextShoutMessage { Id = second, Text = "第二条排队朗读验收。", Speak = true, Interrupt = false });
+        await WaitUntilAsync(() => completed.ContainsKey(first) && completed.ContainsKey(second), TimeSpan.FromSeconds(45));
+        Check("实际教室端：排队第一条按原消息 ID 报告朗读完成", completed.GetValueOrDefault(first) == DeliveryStages.Completed, completed.GetValueOrDefault(first) ?? "未上报");
+        Check("实际教室端：排队第二条按原消息 ID 报告朗读完成", completed.GetValueOrDefault(second) == DeliveryStages.Completed, completed.GetValueOrDefault(second) ?? "未上报");
+        var audioId = MessageIds.New();
+        await client.SendAudioStartAsync(audioId, AudioFormat.Default);
+        await client.SendAudioAsync(new byte[AudioFormat.Default.BytesForDuration(300)]);
+        await client.SendAudioEndAsync(audioId);
+        await WaitUntilAsync(() => completed.ContainsKey(audioId), TimeSpan.FromSeconds(15));
+        Check("实际教室端：语音播放结束按原消息 ID 上报", completed.GetValueOrDefault(audioId) == DeliveryStages.Completed, completed.GetValueOrDefault(audioId) ?? "未上报");
         var router = new ShoutTransportRouter();
         string? failure = null;
         router.DeliveryFailed += (_, reason) => failure = reason;

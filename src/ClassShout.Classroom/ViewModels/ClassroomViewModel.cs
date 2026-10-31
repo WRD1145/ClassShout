@@ -1000,7 +1000,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
 
         session.TextShoutReceived += (_, message) => OnTextShout(session, message);
-        session.AudioStarted += (_, message) => OnAudioStarted(session, message);
+        session.PrepareAudioAsync = message => OnAudioStartedAsync(session, message);
         session.ImageStarted += (_, message) => OnImageStarted(session, message);
         session.ImageChunkReceived += (_, payload) => OnImageChunk(LanOwnerKey(session), payload);
         session.ImageEnded += (_, message) => OnImageEnded(session, message);
@@ -1094,7 +1094,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         // 原来这里不停播放器，而语音那条路径会停朗读 —— 方向是单边的，
         // 于是语音播放期间来的文字喊话会和音响里的声音叠在一起响，
         // 教室里听着就是两个人在同时说话。
-        _speech.Stop();
+        if (message.Interrupt) CancelSpeechQueue();
         StopAudioPlayback();
 
         CurrentSpeaker = sourceName;
@@ -1114,7 +1114,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         {
             if (ticket == _presentationTicket)
                 _ = ReportDeliveryAsync(message.Id, countKey, DeliveryStages.Displayed);
-            else
+            else if (!plan.Speak)
                 _ = ReportDeliveryAsync(message.Id, countKey, DeliveryStages.Failed, "显示前已被下一条喊话替换。");
         }, Avalonia.Threading.DispatcherPriority.Background);
 
@@ -1363,7 +1363,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         var ticket = ++_presentationTicket;
 
         // 一次只出一路内容：图片来了就把正在读的、正在放的都停下来
-        _speech.Stop();
+        CancelSpeechQueue();
         StopAudioPlayback();
 
         CurrentImage?.Dispose();
@@ -1400,24 +1400,22 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     private async Task SpeakAsync(TextShoutMessage message, long ticket, ShoutDisplayPlan plan, string? receiptSession = null)
     {
+        var cancellation = _speechReceiptCancellation.Token;
+        var entered = false;
         try
         {
-            if (message.Interrupt)
-            {
-                // 新内容打断旧的，符合"喊话"的直觉：后说的覆盖先说的
-                _speech.Stop();
-            }
+            await _speechReceiptGate.WaitAsync(cancellation).ConfigureAwait(false);
+            entered = true;
+            cancellation.ThrowIfCancellationRequested();
 
             var options = new SpeechRequestOptions(
                 message.Rate != 0 ? message.Rate : Rate,
                 message.Volume is > 0 and <= 100 ? message.Volume : Volume,
                 message.VoiceName ?? SelectedVoice);
 
-            await _speech.SpeakAsync(message.Text, options).ConfigureAwait(false);
-
-            await ReportDeliveryAsync(message.Id, receiptSession,
-                ticket == _presentationTicket ? DeliveryStages.Completed : DeliveryStages.Failed,
-                ticket == _presentationTicket ? null : "朗读已被后续喊话中断。");
+            await _speech.SpeakAsync(message.Text, options, cancellation).ConfigureAwait(false);
+            cancellation.ThrowIfCancellationRequested();
+            await ReportDeliveryAsync(message.Id, receiptSession, DeliveryStages.Completed);
 
             await PostAsync(() =>
             {
@@ -1454,18 +1452,23 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                 OnPropertyChanged(nameof(SpeechEngineStatus));
             });
         }
+        catch (OperationCanceledException)
+        {
+            await ReportDeliveryAsync(message.Id, receiptSession, DeliveryStages.Failed, "朗读已取消或被新喊话打断。");
+        }
         catch (Exception ex)
         {
             Post(() => AddLog("系统", $"朗读失败：{ex.Message}"));
             await ReportDeliveryAsync(message.Id, receiptSession, DeliveryStages.Failed, $"朗读失败：{ex.Message}");
         }
+        finally { if (entered) _speechReceiptGate.Release(); }
     }
 
-    private void OnAudioStarted(TeacherSession session, AudioStartMessage message)
+    private Task OnAudioStartedAsync(TeacherSession session, AudioStartMessage message)
     {
         // 计数不在这里做：必须在"确认要播"之后（见 PresentAudioStart）。
         // 静音期间先加一，教师列表就会显示"喊过 N 次"，而教室里一次都没响过。
-        Post(() =>
+        return PostAsync(() =>
         {
             // 语音这条消息也带着 ID（发送时刻），回复要对得上它
             CurrentMessageId = message.Id;
@@ -1525,7 +1528,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         }
 
         // 一次只出一路声音：语音优先，打断正在进行的朗读
-        _speech.Stop();
+        CancelSpeechQueue();
         _player.Stop();
 
         lock (_audioStateLock)
@@ -1557,6 +1560,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             }
 
             AddLog("语音", $"无法开始播放：{startError}");
+            _ = ReportDeliveryAsync(_audioReceiptId, countKey, DeliveryStages.Failed, $"无法开始播放：{startError}");
             return;
         }
 
@@ -1628,18 +1632,26 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         var receiptId = _audioReceiptId;
         var receiptSession = _audioReceiptSession;
         var receiptTicket = _presentationTicket;
-        await _player.CompleteAsync().ConfigureAwait(false);
-        await ReportDeliveryAsync(receiptId, receiptSession,
-            receiptTicket == _presentationTicket ? DeliveryStages.Completed : DeliveryStages.Failed,
-            receiptTicket == _presentationTicket ? null : "语音播放已被中断。");
+        try
+        {
+            await _player.CompleteAsync().ConfigureAwait(false);
+            await ReportDeliveryAsync(receiptId, receiptSession,
+                receiptTicket == _presentationTicket ? DeliveryStages.Completed : DeliveryStages.Failed,
+                receiptTicket == _presentationTicket ? null : "语音播放已被中断。");
+        }
+        catch (Exception ex)
+        {
+            await ReportDeliveryAsync(receiptId, receiptSession, DeliveryStages.Failed, $"语音播放失败：{ex.Message}");
+        }
 
         lock (_audioStateLock)
         {
-            _audioOwner = null;
+            if (_audioReceiptId == receiptId) _audioOwner = null;
         }
 
         await PostAsync(() =>
         {
+            if (receiptTicket != _presentationTicket) return;
             if (Stage == ClassroomStage.PlayingAudio)
             {
                 Stage = ClassroomStage.Idle;
@@ -1793,7 +1805,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     private void StopEverything(string reason)
     {
-        _speech.Stop();
+        CancelSpeechQueue();
         _player.Stop();
 
         lock (_audioStateLock)
@@ -2961,6 +2973,8 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         _ciScheduleTimer?.Stop();
         _ciScheduleDisposed = true;
         _ciScheduleHttp.Dispose();
+        _speechReceiptCancellation.Cancel();
+        _speechReceiptCancellation.Dispose();
         _bellPlayer.Dispose();
         // 这几样刻意放在任何 await 之前。
         //

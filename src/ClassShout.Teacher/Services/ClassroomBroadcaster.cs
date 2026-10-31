@@ -141,9 +141,15 @@ public sealed class ClassroomBroadcaster
                 continue;
             }
 
-            await client.SendAudioStartAsync(format, cancellationToken).ConfigureAwait(false);
-            if (client.AudioMessageId is { } audioId)
-                Sending?.Invoke(new TextShoutMessage { Id = audioId, Text = $"{target.Name}：语音喊话" });
+            var audioId = MessageIds.New();
+            Sending?.Invoke(new TextShoutMessage { Id = audioId, Text = $"{target.Name}：语音喊话", Speak = true });
+            try { await client.SendAudioStartAsync(format, cancellationToken, audioId).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                SendFailed?.Invoke(audioId, $"语音发送失败：{ex.Message}");
+                failed.Add($"{target.Name}（语音发送失败）");
+                continue;
+            }
             sessions.Add(new RelayVoiceSession(target, client));
         }
 
@@ -159,7 +165,7 @@ public sealed class ClassroomBroadcaster
         // 每个目标独立标识，不能让甲班上屏覆盖乙班离线的结果。
         message = (TextShoutMessage)ShoutCodec.Decode(ShoutCodec.Encode(message))!;
         message.Id = MessageIds.New();
-        Sending?.Invoke(new TextShoutMessage { Id = message.Id, Text = $"{target.Name}：{message.Text}" });
+        Sending?.Invoke(new TextShoutMessage { Id = message.Id, Text = $"{target.Name}：{message.Text}", Speak = message.Speak });
         var client = await EnsureBoundAsync(target, teacherName, cancellationToken).ConfigureAwait(false);
 
         if (client is null)

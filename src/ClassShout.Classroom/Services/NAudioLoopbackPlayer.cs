@@ -17,11 +17,14 @@ public sealed class NAudioLoopbackPlayer : IAudioPlayer
 
     private WaveOutEvent? _output;
     private BufferedWaveProvider? _buffer;
+    private readonly Lock _stateLock = new();
 
     public bool IsPlaying => _output?.PlaybackState == PlaybackState.Playing;
 
     public void Start(AudioFormat format)
     {
+        lock (_stateLock)
+        {
         Stop();
 
         // 格式来自网络对端，必须先确认它合法。
@@ -43,6 +46,7 @@ public sealed class NAudioLoopbackPlayer : IAudioPlayer
         _output = new WaveOutEvent { DesiredLatency = 120 };
         _output.Init(_buffer);
         _output.Play();
+        }
     }
 
     public void Write(ReadOnlySpan<byte> pcm)
@@ -82,14 +86,24 @@ public sealed class NAudioLoopbackPlayer : IAudioPlayer
         var deadline = DateTime.UtcNow + DrainTimeout;
         while (buffer.BufferedBytes > 0 && DateTime.UtcNow < deadline)
         {
+            if (!ReferenceEquals(buffer, _buffer)) throw new OperationCanceledException("语音播放已被中断。");
             await Task.Delay(40).ConfigureAwait(false);
         }
-
-        Stop();
+        // 缓冲排空后再等待设备延迟；旧任务不得停止已经开始的下一路声音。
+        await Task.Delay(120).ConfigureAwait(false);
+        lock (_stateLock)
+        {
+            if (!ReferenceEquals(buffer, _buffer)) throw new OperationCanceledException("语音播放已被中断。");
+            var unfinished = buffer.BufferedBytes > 0;
+            Stop();
+            if (unfinished) throw new TimeoutException("音频设备未在规定时间内播放完缓冲。");
+        }
     }
 
     public void Stop()
     {
+        lock (_stateLock)
+        {
         try
         {
             _output?.Stop();
@@ -102,6 +116,7 @@ public sealed class NAudioLoopbackPlayer : IAudioPlayer
         _output?.Dispose();
         _output = null;
         _buffer = null;
+        }
     }
 
     public void Dispose() => Stop();

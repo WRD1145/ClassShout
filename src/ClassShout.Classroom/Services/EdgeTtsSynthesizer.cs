@@ -72,6 +72,7 @@ public sealed class EdgeTtsSynthesizer : ISpeechSynthesizer
         // 那样每次朗读都要多等一个网络往返的超时，而用户已经明确说了不用在线语音。
         if (Engine != SpeechEngine.Edge)
         {
+            if (!ClassroomPlatform.HasSystemSpeech) throw new InvalidOperationException("本机没有可用的系统朗读引擎。");
             LastEngineText = "系统语音";
             await _systemVoice.SpeakAsync(text, options, cancellationToken).ConfigureAwait(false);
             return;
@@ -93,6 +94,7 @@ public sealed class EdgeTtsSynthesizer : ISpeechSynthesizer
         catch (Exception ex) when (ex is InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
             LastEngineText = "朗读失败（系统语音也不可用）";
+            throw new InvalidOperationException("在线语音失败，系统朗读也不可用。", ex);
         }
     }
 

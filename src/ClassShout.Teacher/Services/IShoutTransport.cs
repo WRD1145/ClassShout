@@ -40,7 +40,7 @@ public interface IShoutTransport
         ReadOnlyMemory<byte> image,
         CancellationToken cancellationToken = default);
 
-    Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default);
+    Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default, string? messageId = null);
 
     Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken cancellationToken = default);
 
@@ -82,8 +82,8 @@ public sealed class RelayShoutTransport : IShoutTransport
         CancellationToken cancellationToken = default)
         => _client.SendImageAsync(message, image, cancellationToken);
 
-    public Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)
-        => _client.SendAudioStartAsync(format, cancellationToken);
+    public Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default, string? messageId = null)
+        => _client.SendAudioStartAsync(format, cancellationToken, messageId);
 
     public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken cancellationToken = default)
     {
@@ -140,7 +140,7 @@ public sealed class ShoutTransportRouter : IShoutTransport
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(message.Id)) message.Id = MessageIds.New();
-        TextSending?.Invoke(new TextShoutMessage { Id = message.Id, Text = "图片：" + message.Text });
+        TextSending?.Invoke(new TextShoutMessage { Id = message.Id, Text = "图片：" + message.Text, Speak = message.Speak && !string.IsNullOrWhiteSpace(message.Text) });
         try
         {
             var ok = Active is { } active && await active.SendImageAsync(message, image, cancellationToken);
@@ -154,12 +154,20 @@ public sealed class ShoutTransportRouter : IShoutTransport
         }
     }
 
-    public async Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)
+    public async Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default, string? messageId = null)
     {
-        if (Active is not { } active) return;
-        await active.BeginAudioAsync(format, cancellationToken);
-        if (active.AudioMessageId is { } id)
-            TextSending?.Invoke(new TextShoutMessage { Id = id, Text = "语音喊话" });
+        var id = messageId ?? MessageIds.New();
+        TextSending?.Invoke(new TextShoutMessage { Id = id, Text = "语音喊话", Speak = true });
+        try
+        {
+            if (Active is not { IsConnected: true } active) throw new IOException("教室已离线。");
+            await active.BeginAudioAsync(format, cancellationToken, id);
+        }
+        catch (Exception ex)
+        {
+            DeliveryFailed?.Invoke(id, $"语音发送失败：{ex.Message}");
+            throw;
+        }
     }
 
     public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken cancellationToken = default)

@@ -112,7 +112,7 @@ public sealed class ShoutChannel : IShoutTransport, IAsyncDisposable
     }
 
     /// <summary>开始一次语音喊话。</summary>
-    public async Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)
+    public async Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default, string? messageId = null)
     {
         if (!_client.IsConnected)
         {
@@ -127,7 +127,7 @@ public sealed class ShoutChannel : IShoutTransport, IAsyncDisposable
         // 没有格式说明的对端，结尾还会补一个教室端不认识的 audioEnd。
         // 而且这个脏状态没有任何地方会清，只能靠断开重连。
         // 语音这条消息的 id 同样是**发送时刻**：教室端回复时要靠它对上"回的哪一句语音"。
-        var id = MessageIds.New();
+        var id = messageId ?? MessageIds.New();
         await _client.SendAudioStartAsync(id, format, cancellationToken).ConfigureAwait(false);
 
         // 走到这里才说明教室端确实进入了播放状态

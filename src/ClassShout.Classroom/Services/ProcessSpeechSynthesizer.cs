@@ -66,10 +66,9 @@ public sealed class ProcessSpeechSynthesizer : ISpeechSynthesizer
         SpeechRequestOptions options,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(text) || !FindBackend(out var command))
-        {
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(text)) return;
+        if (!FindBackend(out var command)) throw new InvalidOperationException("本机没有可用的命令行朗读工具。");
+        cancellationToken.ThrowIfCancellationRequested();
 
         var arguments = command == "spd-say"
             ? $"-w -r {Math.Clamp(options.Rate * 10, -100, 100)} {Quote(text)}"
@@ -87,10 +86,7 @@ public sealed class ProcessSpeechSynthesizer : ISpeechSynthesizer
         try
         {
             using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return;
-            }
+            if (process is null) throw new InvalidOperationException("系统朗读进程启动失败。");
 
             lock (_lock)
             {
@@ -98,12 +94,15 @@ public sealed class ProcessSpeechSynthesizer : ISpeechSynthesizer
                 Backend = command;
             }
 
+            using var cancellation = cancellationToken.Register(Stop);
+            var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var error = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException
-                                      or System.ComponentModel.Win32Exception)
-        {
-            // 被停止或命令不可执行
+            await output.ConfigureAwait(false);
+            var errorText = await error.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException($"系统朗读失败（退出码 {process.ExitCode}）：{errorText.Trim()}");
         }
         finally
         {

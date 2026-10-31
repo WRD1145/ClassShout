@@ -6,6 +6,18 @@ public partial class ClassroomViewModel
 {
     private string _audioReceiptId = string.Empty;
     private string? _audioReceiptSession;
+    private readonly SemaphoreSlim _speechReceiptGate = new(1, 1);
+    private CancellationTokenSource _speechReceiptCancellation = new();
+
+    /// <summary>只在明确打断时取消整批朗读；界面换了内容不代表上一条朗读失败。</summary>
+    private void CancelSpeechQueue()
+    {
+        var previous = _speechReceiptCancellation;
+        _speechReceiptCancellation = new CancellationTokenSource();
+        previous.Cancel();
+        previous.Dispose();
+        _speech.Stop();
+    }
     private async Task ReportDeliveryAsync(string id, string? sessionId, string stage, string? detail = null)
     {
         if (string.IsNullOrWhiteSpace(id)) return;

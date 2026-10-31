@@ -37,6 +37,9 @@ public sealed class TeacherSession
     /// <summary>语音流开始。</summary>
     public event EventHandler<AudioStartMessage>? AudioStarted;
 
+    /// <summary>等待播放器准备好再接收 PCM，避免后续帧越过 UI 初始化。</summary>
+    public Func<AudioStartMessage, Task>? PrepareAudioAsync { get; set; }
+
     /// <summary>收到一段 PCM。</summary>
     public event EventHandler<ReadOnlyMemory<byte>>? AudioChunkReceived;
 
@@ -89,7 +92,7 @@ public sealed class TeacherSession
                 switch (frame.Value.Kind)
                 {
                     case FrameKind.Control:
-                        HandleControl(frame.Value.Payload);
+                        await HandleControlAsync(frame.Value.Payload).ConfigureAwait(false);
                         break;
 
                     case FrameKind.Audio:
@@ -119,7 +122,7 @@ public sealed class TeacherSession
         }
     }
 
-    private void HandleControl(byte[] payload)
+    private async Task HandleControlAsync(byte[] payload)
     {
         var message = ShoutCodec.Decode(payload);
         if (message is null)
@@ -159,6 +162,7 @@ public sealed class TeacherSession
                 break;
 
             case AudioStartMessage start:
+                if (PrepareAudioAsync is { } prepare) await prepare(start).ConfigureAwait(false);
                 AudioStarted?.Invoke(this, start);
                 break;
 

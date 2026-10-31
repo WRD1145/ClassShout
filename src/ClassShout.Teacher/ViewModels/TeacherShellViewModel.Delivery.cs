@@ -12,9 +12,11 @@ public sealed class DeliveryItem : ObservableObject
         Receipt = new DeliveryReceipt { Id = message.Id };
         Receipt.Apply(new DeliveryEvent("sent", DateTimeOffset.UtcNow));
         Text = message.Text;
+        RequiresCompletion = message.Speak;
     }
     public DeliveryReceipt Receipt { get; }
     public string Text { get; }
+    public bool RequiresCompletion { get; }
     public string Status => Receipt.Stage switch
     {
         DeliveryStages.Delivered => "✓ 教室已送达",
@@ -58,8 +60,15 @@ public partial class TeacherShellViewModel
         await Task.Delay(TimeSpan.FromSeconds(45));
         Post(() =>
         {
-            if (item.Receipt.Stage is "sent" or DeliveryStages.Delivered)
-                item.Apply(new DeliveryEvent(DeliveryStages.Failed, DateTimeOffset.UtcNow, "教室端未上报执行结果（等待 45 秒）。"));
+            if (item.Receipt.Stage == "sent" || (!item.RequiresCompletion && item.Receipt.Stage == DeliveryStages.Delivered))
+                item.Apply(new DeliveryEvent(DeliveryStages.Failed, DateTimeOffset.UtcNow, "教室端未上报送达或上屏结果（等待 45 秒）。"));
+        });
+        if (!item.RequiresCompletion) return;
+        await Task.Delay(TimeSpan.FromSeconds(555));
+        Post(() =>
+        {
+            if (item.Receipt.Stage is DeliveryStages.Delivered or DeliveryStages.Displayed)
+                item.Apply(new DeliveryEvent(DeliveryStages.Failed, DateTimeOffset.UtcNow, "教室端未上报朗读完成（等待 10 分钟）。"));
         });
     }
 
