@@ -1618,6 +1618,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherText, "token"), (string token, Te
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.TextShout,
+        Id = request.Id,
         From = FromOf(binding),
         Text = request.Text,
         Rate = request.Rate,
@@ -1650,6 +1651,7 @@ app.MapPost(RelayPaths.Route(RelayPaths.TeacherAudioStart, "token"), (string tok
     hub.Publish(MessageHub.ClassroomKey(binding.ClassroomUuid), new RelayEnvelope
     {
         Kind = RelayKinds.AudioStart,
+        Id = request.Id,
         From = FromOf(binding),
         SampleRate = request.SampleRate,
         Channels = request.Channels,
@@ -1936,6 +1938,10 @@ app.MapPost(RelayPaths.Route(RelayPaths.ClassroomStatus), (
         Muted = request.Muted,
         Volume = request.Volume,
         State = request.State,
+        Id = request.MessageId,
+        DeliveryStage = request.DeliveryStage,
+        DeliveryDetail = request.DeliveryDetail,
+        DeliveryAt = request.DeliveryAt,
     });
 
     return Results.Ok(new { ok = true });

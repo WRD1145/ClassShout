@@ -65,6 +65,9 @@ public sealed class ClassroomBroadcaster
 
     /// <summary>发给某一间的过程中要记的日志（绑定失败、重试等）。</summary>
     public event Action<string>? Log;
+    public event Action<TextShoutMessage>? Sending;
+    public event Action<RelayEnvelope>? ReceiptReceived;
+    public event Action<string, string>? SendFailed;
 
     /// <summary>串行发给每一间，逐个返回结果。</summary>
     /// <param name="targets">目标教室。</param>
@@ -139,6 +142,8 @@ public sealed class ClassroomBroadcaster
             }
 
             await client.SendAudioStartAsync(format, cancellationToken).ConfigureAwait(false);
+            if (client.AudioMessageId is { } audioId)
+                Sending?.Invoke(new TextShoutMessage { Id = audioId, Text = $"{target.Name}：语音喊话" });
             sessions.Add(new RelayVoiceSession(target, client));
         }
 
@@ -151,10 +156,15 @@ public sealed class ClassroomBroadcaster
         string teacherName,
         CancellationToken cancellationToken)
     {
+        // 每个目标独立标识，不能让甲班上屏覆盖乙班离线的结果。
+        message = (TextShoutMessage)ShoutCodec.Decode(ShoutCodec.Encode(message))!;
+        message.Id = MessageIds.New();
+        Sending?.Invoke(new TextShoutMessage { Id = message.Id, Text = $"{target.Name}：{message.Text}" });
         var client = await EnsureBoundAsync(target, teacherName, cancellationToken).ConfigureAwait(false);
 
         if (client is null)
         {
+            SendFailed?.Invoke(message.Id, $"无法绑定教室「{target.Name}」，请检查授权与服务器连接。");
             return new BroadcastResult(target, false, $"无法绑定教室「{target.Name}」。");
         }
 
@@ -167,7 +177,7 @@ public sealed class ClassroomBroadcaster
                 message.FontSize,
                 message.HoldMs,
                 message.Speak,
-                cancellationToken).ConfigureAwait(false))
+                cancellationToken, message.Id).ConfigureAwait(false))
         {
             return new BroadcastResult(target, true, null);
         }
@@ -181,6 +191,7 @@ public sealed class ClassroomBroadcaster
         var retry = await EnsureBoundAsync(target, teacherName, cancellationToken).ConfigureAwait(false);
         if (retry is null)
         {
+            SendFailed?.Invoke(message.Id, $"重新绑定教室「{target.Name}」失败。");
             return new BroadcastResult(target, false, $"重新绑定教室「{target.Name}」失败。");
         }
 
@@ -193,7 +204,9 @@ public sealed class ClassroomBroadcaster
             message.FontSize,
             message.HoldMs,
             message.Speak,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, message.Id).ConfigureAwait(false);
+
+        if (!ok) SendFailed?.Invoke(message.Id, $"教室「{target.Name}」离线或服务器拒绝。");
 
         return ok
             ? new BroadcastResult(target, true, null)
@@ -225,6 +238,8 @@ public sealed class ClassroomBroadcaster
         }
 
         _clients[target.Uuid] = client;
+        client.EventReceived += envelope => ReceiptReceived?.Invoke(envelope);
+        client.StartPolling();
         return client;
     }
 

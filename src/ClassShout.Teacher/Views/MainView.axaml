@@ -888,6 +888,21 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <ItemsControl ItemsSource="{Binding Deliveries}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:DeliveryItem">
+                  <md3:Md3Card Classes="outlined" Margin="0,4">
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                      <Expander Header="{Binding Status}">
+                        <TextBlock Text="{Binding Timeline}" TextWrapping="Wrap" />
+                      </Expander>
+                    </StackPanel>
+                  </md3:Md3Card>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
             <!-- 定时通知：把当前这条排到某个时间自动发出去。
                  可靠性边界写在卡片上，而不是只写在文档里 ——
                  老师会照着界面上的字去预期行为。 -->
@@ -1221,6 +1236,15 @@
             <Button Classes="text" HorizontalAlignment="Center" Content="放弃本次录音"
                     IsVisible="{Binding Voice.IsRecording}"
                     Command="{Binding Voice.CancelCommand}" />
+            <ContentControl Content="{Binding LatestDelivery}" MaxWidth="360">
+              <ContentControl.ContentTemplate>
+                <DataTemplate x:DataType="vm:DeliveryItem">
+                  <Expander Header="{Binding Status}">
+                    <TextBlock Text="{Binding Timeline}" TextWrapping="Wrap" />
+                  </Expander>
+                </DataTemplate>
+              </ContentControl.ContentTemplate>
+            </ContentControl>
           </StackPanel>
         </Grid>
 

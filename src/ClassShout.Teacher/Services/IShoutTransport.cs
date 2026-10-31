@@ -16,6 +16,7 @@ public interface IShoutTransport
 {
     /// <summary>当前是否可用（已连上教室或已绑定服务器）。</summary>
     bool IsConnected { get; }
+    string? AudioMessageId => null;
 
     /// <summary>
     /// 发一条文字喊话。
@@ -55,6 +56,7 @@ public interface IShoutTransport
 /// </remarks>
 public sealed class RelayShoutTransport : IShoutTransport
 {
+    public string? AudioMessageId => _client.AudioMessageId;
     private readonly TeacherRelayClient _client;
 
     public RelayShoutTransport(TeacherRelayClient client) => _client = client;
@@ -71,7 +73,8 @@ public sealed class RelayShoutTransport : IShoutTransport
             message.FontSize,
             message.HoldMs,
             message.Speak,
-            cancellationToken);
+            cancellationToken,
+            message.Id);
 
     public Task<bool> SendImageAsync(
         ImageStartMessage message,
@@ -107,24 +110,57 @@ public sealed class RelayShoutTransport : IShoutTransport
 /// </summary>
 public sealed class ShoutTransportRouter : IShoutTransport
 {
+    public event Action<TextShoutMessage>? TextSending;
+    public event Action<string, string>? DeliveryFailed;
     /// <summary>当前生效的链路；为 null 时所有发送都被丢弃。</summary>
     public IShoutTransport? Active { get; set; }
 
     public bool IsConnected => Active?.IsConnected ?? false;
 
-    public Task<bool> SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default)
-        => Active?.SendTextAsync(message, cancellationToken)
-           ?? Task.FromResult(false);
+    public async Task<bool> SendTextAsync(TextShoutMessage message, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(message.Id)) message.Id = MessageIds.New();
+        TextSending?.Invoke(message);
+        try
+        {
+            var ok = Active is { } active && await active.SendTextAsync(message, cancellationToken);
+            if (!ok) DeliveryFailed?.Invoke(message.Id, "教室离线或服务器拒绝发送，请检查连接与授权。");
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            DeliveryFailed?.Invoke(message.Id, $"发送失败：{ex.Message}");
+            throw;
+        }
+    }
 
-    public Task<bool> SendImageAsync(
+    public async Task<bool> SendImageAsync(
         ImageStartMessage message,
         ReadOnlyMemory<byte> image,
         CancellationToken cancellationToken = default)
-        => Active?.SendImageAsync(message, image, cancellationToken)
-           ?? Task.FromResult(false);
+    {
+        if (string.IsNullOrWhiteSpace(message.Id)) message.Id = MessageIds.New();
+        TextSending?.Invoke(new TextShoutMessage { Id = message.Id, Text = "图片：" + message.Text });
+        try
+        {
+            var ok = Active is { } active && await active.SendImageAsync(message, image, cancellationToken);
+            if (!ok) DeliveryFailed?.Invoke(message.Id, "图片发送失败：教室离线或服务器拒绝。");
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            DeliveryFailed?.Invoke(message.Id, $"图片发送失败：{ex.Message}");
+            throw;
+        }
+    }
 
-    public Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)
-        => Active?.BeginAudioAsync(format, cancellationToken) ?? Task.CompletedTask;
+    public async Task BeginAudioAsync(AudioFormat format, CancellationToken cancellationToken = default)
+    {
+        if (Active is not { } active) return;
+        await active.BeginAudioAsync(format, cancellationToken);
+        if (active.AudioMessageId is { } id)
+            TextSending?.Invoke(new TextShoutMessage { Id = id, Text = "语音喊话" });
+    }
 
     public Task SendAudioAsync(ReadOnlyMemory<byte> pcm, CancellationToken cancellationToken = default)
         => Active?.SendAudioAsync(pcm, cancellationToken) ?? Task.CompletedTask;

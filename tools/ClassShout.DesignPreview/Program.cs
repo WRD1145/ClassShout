@@ -8,6 +8,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using ClassShout.Classroom.Services;
 using ClassShout.Core.Remote;
+using ClassShout.Core.Protocol;
 using ClassShout.Classroom.ViewModels;
 using ClassShout.Design.Controls;
 using ClassShout.Design.Theming;
@@ -1013,6 +1014,17 @@ internal static class Program
             new("teacher",
                 () => new TeacherView { DataContext = new TeacherShellViewModel() }, 430, 900,
                 isDark => isDark ? Combine(CommonDark, TeacherExtraDark) : Combine(CommonLight, TeacherExtraLight)),
+
+            new("teacher-delivery",
+                () =>
+                {
+                    var vm = new TeacherShellViewModel { ActivePage = TeacherPage.Text };
+                    var row = new DeliveryItem(new TextShoutMessage { Id = "预览消息", Text = "请各组交作业。" });
+                    row.Apply(new DeliveryEvent(DeliveryStages.Delivered, DateTimeOffset.Now));
+                    row.Apply(new DeliveryEvent(DeliveryStages.Displayed, DateTimeOffset.Now));
+                    vm.Deliveries.Add(row);
+                    return new TeacherView { DataContext = vm };
+                }, 430, 2200, _ => null),
 
             // 教师端「设备」页里的「已保存的教室」：三间，其中一间标成"使用中"。
             //

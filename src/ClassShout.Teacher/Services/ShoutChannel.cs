@@ -15,6 +15,7 @@ public sealed class ShoutChannel : IShoutTransport, IAsyncDisposable
 {
     private readonly TeacherClient _client = new();
     private string? _audioSessionId;
+    public string? AudioMessageId => _audioSessionId;
 
     public ShoutChannel()
     {

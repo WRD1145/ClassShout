@@ -271,6 +271,11 @@ public sealed class ReplyMessage : ShoutMessage
 /// <summary>教室端状态上报，用于教师端显示“正在朗读 / 队列长度”等。</summary>
 public sealed class StatusMessage : ShoutMessage
 {
+    /// <summary>执行回执对应的消息；为空时仍为普通设备状态。</summary>
+    public string? MessageId { get; set; }
+    public string? DeliveryStage { get; set; }
+    public string? DeliveryDetail { get; set; }
+    public DateTimeOffset? DeliveryAt { get; set; }
     public const string TypeName = "status";
     public override string Type => TypeName;
 

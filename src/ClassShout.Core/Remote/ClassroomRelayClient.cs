@@ -302,7 +302,8 @@ public sealed class ClassroomRelayClient : IAsyncDisposable
     }
 
     /// <summary>上报本教室的静音与音量，服务器会转发给已绑定的教师端。</summary>
-    public async Task ReportStatusAsync(bool muted, int volume, string state, CancellationToken cancellationToken = default)
+    public async Task ReportStatusAsync(bool muted, int volume, string state, CancellationToken cancellationToken = default,
+        string? messageId = null, string? deliveryStage = null, string? deliveryDetail = null, DateTimeOffset? deliveryAt = null)
     {
         if (_token is null)
         {
@@ -314,15 +315,19 @@ public sealed class ClassroomRelayClient : IAsyncDisposable
             var url = Url(string.Format(RelayPaths.ClassroomStatus, Uri.EscapeDataString(_settings.Uuid)));
             using var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
-                Content = JsonContent.Create(new ClassroomStatusRequest(muted, volume, state), options: JsonOptions),
+                Content = JsonContent.Create(new ClassroomStatusRequest(muted, volume, state,
+                    messageId, deliveryStage, deliveryDetail, deliveryAt), options: JsonOptions),
             };
             request.Headers.TryAddWithoutValidation(RelayPaths.TokenHeader, _token);
 
             using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (deliveryStage is not null && !response.IsSuccessStatusCode)
+                Log?.Invoke($"消息 {messageId} 的回执上报被服务器拒绝：HTTP {(int)response.StatusCode}。");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             // 状态上报失败不影响主流程，下一次状态变化会再报
+            if (deliveryStage is not null) Log?.Invoke($"消息 {messageId} 的回执上报失败：{ex.Message}");
         }
     }
 

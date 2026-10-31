@@ -57,7 +57,9 @@ internal static class Program
 
     private static async Task<int> RunAsync(string[] args)
     {
+        if (args.Contains("--live-receipt")) return await AssertLiveReceiptAsync();
         AssertLocalBells();
+        AssertDeliveryState();
 
         // 中继链路测试需要先自行启动中继服务器；不在这里拉进程，
         // 否则端口、启动时序、清理这些噪音会淹没"协议是否跑通"这个真正的问题。
@@ -6739,6 +6741,70 @@ internal static class Program
         settings.Normalized();
         Check("本地铃声：重复标识修复", second.Id != bell.Id, "去重避免漏响");
         Check("本地铃声：音量与周几归一化", second.Volume == 100 && second.DaysOfWeek == 127, "限制有效范围");
+    }
+
+    private static void AssertDeliveryState()
+    {
+        var receipt = new DeliveryReceipt { Id = "回执测试" };
+        var now = DateTimeOffset.UtcNow;
+        receipt.Apply(new DeliveryEvent("sent", now));
+        receipt.Apply(new DeliveryEvent(DeliveryStages.Delivered, now.AddSeconds(1)));
+        Check("回执：ACK 推进为教室已送达", receipt.Stage == DeliveryStages.Delivered, receipt.Stage);
+        receipt.Apply(new DeliveryEvent(DeliveryStages.Displayed, now.AddSeconds(2)));
+        Check("回执：渲染完成推进为已上屏", receipt.Stage == DeliveryStages.Displayed, receipt.Stage);
+        Check("回执：重复 ACK 不新增节点", !receipt.Apply(new DeliveryEvent(DeliveryStages.Delivered, now.AddSeconds(3)))
+            && receipt.Timeline.Count == 3, $"共 {receipt.Timeline.Count} 个节点");
+        receipt.Apply(new DeliveryEvent(DeliveryStages.Completed, now.AddSeconds(4)));
+        Check("回执：播放完成推进为已朗读完", receipt.Stage == DeliveryStages.Completed, receipt.Stage);
+        receipt.Apply(new DeliveryEvent(DeliveryStages.Failed, now.AddSeconds(5), "教室端播放设备不可用"));
+        Check("回执：执行失败带原因", receipt.Stage == DeliveryStages.Failed && receipt.Failure == "教室端播放设备不可用", receipt.Failure ?? "无原因");
+        var encoded = ShoutCodec.Encode(new StatusMessage { MessageId = receipt.Id, DeliveryStage = DeliveryStages.Displayed, DeliveryAt = now });
+        var decoded = ShoutCodec.Decode(encoded) as StatusMessage;
+        Check("回执：status 编解码保留消息关联", decoded?.MessageId == receipt.Id && decoded.DeliveryStage == DeliveryStages.Displayed
+            && decoded.DeliveryAt == now, decoded?.MessageId ?? "无消息标识");
+    }
+
+    /// <summary>连接实际运行的教室端，验证网络 ACK 与界面渲染回执，不使用模拟呈现器。</summary>
+    private static async Task<int> AssertLiveReceiptAsync()
+    {
+        await using var client = new TeacherClient();
+        var id = MessageIds.New();
+        var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var displayed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var receipt = new DeliveryReceipt { Id = id };
+        receipt.Apply(new DeliveryEvent("sent", DateTimeOffset.UtcNow));
+        client.ControlReceived += message =>
+        {
+            lock (receipt)
+            {
+                if (message is AckMessage { Ok: true } confirmation && confirmation.Id == id)
+                {
+                    receipt.Apply(new DeliveryEvent(DeliveryStages.Delivered, DateTimeOffset.UtcNow));
+                    ack.TrySetResult();
+                }
+                if (message is StatusMessage status && status.MessageId == id && status.DeliveryStage is { } stage)
+                {
+                    receipt.Apply(new DeliveryEvent(stage, status.DeliveryAt ?? DateTimeOffset.UtcNow, status.DeliveryDetail));
+                    if (stage == DeliveryStages.Displayed) displayed.TrySetResult();
+                }
+            }
+        };
+        await client.ConnectAsync(new IPEndPoint(IPAddress.Loopback, ShoutProtocol.DefaultTcpPort), "回执验收教师端");
+        await client.SendTextAsync(new TextShoutMessage { Id = id, Text = "送达回执实际运行验收", Speak = false, HoldMs = 3000 });
+        await Task.WhenAll(ack.Task, displayed.Task).WaitAsync(TimeSpan.FromSeconds(15));
+        lock (receipt)
+        {
+            Check("实际教室端：收到 ACK 与已上屏两次上报", ack.Task.IsCompleted && displayed.Task.IsCompleted, id);
+            Check("实际教室端：状态推进至已上屏", receipt.Stage == DeliveryStages.Displayed, receipt.Stage);
+            Check("实际教室端：时间线含发出、送达、上屏", receipt.Timeline.Count == 3,
+                string.Join(" → ", receipt.Timeline.Select(item => item.Stage)));
+        }
+        var router = new ShoutTransportRouter();
+        string? failure = null;
+        router.DeliveryFailed += (_, reason) => failure = reason;
+        var result = await router.SendTextAsync(new TextShoutMessage { Text = "离线验收" });
+        Check("离线教室：失败并提供原因", !result && !string.IsNullOrWhiteSpace(failure), failure ?? "无原因");
+        return _failed == 0 ? 0 : 1;
     }
 
     private static void Check(string name, bool ok, string detail)

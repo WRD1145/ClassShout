@@ -1055,6 +1055,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private void PresentTextShout(string sourceName, TextShoutMessage message, string? countKey = null)
     {
+        _ = ReportDeliveryAsync(message.Id, countKey, DeliveryStages.Delivered);
         AddLog("文字", $"「{sourceName}」说：{message.Text}");
 
         // 记下"现在可以回哪一条"：教室里那块屏上正显示的就是它，
@@ -1066,6 +1067,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         if (IsMuted)
         {
             AddLog("文字", "已静音，本条不朗读");
+            _ = ReportDeliveryAsync(message.Id, countKey, DeliveryStages.Failed, "教室端已静音，本条未执行。");
             return;
         }
 
@@ -1106,9 +1108,18 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
         NotifyOnScreen(sourceName, message.Text, ShoutNoticeKind.Text, plan);
 
+        // 在界面完成本轮渲染后再发上屏回执，不能把网络接收当成显示完成。
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (ticket == _presentationTicket)
+                _ = ReportDeliveryAsync(message.Id, countKey, DeliveryStages.Displayed);
+            else
+                _ = ReportDeliveryAsync(message.Id, countKey, DeliveryStages.Failed, "显示前已被下一条喊话替换。");
+        }, Avalonia.Threading.DispatcherPriority.Background);
+
         if (plan.Speak)
         {
-            _ = SpeakAsync(message, ticket, plan);
+            _ = SpeakAsync(message, ticket, plan, countKey);
         }
         else
         {
@@ -1311,7 +1322,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             start.FontSize,
             start.HoldMs,
             start.Text,
-            start.Speak));
+            start.Speak, start.Id, session.Id));
     }
 
     /// <summary>
@@ -1328,8 +1339,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         string? fontSize,
         int holdMs,
         string? caption,
-        bool speak)
+        bool speak, string? receiptId = null, string? receiptSession = null)
     {
+        _ = ReportDeliveryAsync(receiptId ?? "", receiptSession, DeliveryStages.Delivered);
         var plan = ShoutDisplayPlan.Resolve(display, fontSize, holdMs, speak, DisplayDefaults);
 
         Bitmap bitmap;
@@ -1343,6 +1355,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             // 解码失败只记日志：教室里那台机器上没人能处理"这张图坏了"这件事，
             // 而弹一个错误框只会盖住正在讲的内容。
             AddLog("图片", $"图片解码失败，已忽略：{ex.Message}");
+            _ = ReportDeliveryAsync(receiptId ?? "", receiptSession, DeliveryStages.Failed, $"图片解码失败：{ex.Message}");
             return;
         }
 
@@ -1369,16 +1382,22 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             plan,
             bitmap);
 
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            _ = ReportDeliveryAsync(receiptId ?? "", receiptSession,
+                ticket == _presentationTicket ? DeliveryStages.Displayed : DeliveryStages.Failed,
+                ticket == _presentationTicket ? null : "图片显示前已被替换。"),
+            Avalonia.Threading.DispatcherPriority.Background);
+
         // 朗读针对的是那句说明文字；没有文字就没什么可读的
         if (plan.Speak && !string.IsNullOrWhiteSpace(caption))
         {
-            _ = SpeakAsync(new TextShoutMessage { Text = caption, Rate = Rate, Volume = Volume }, ticket, plan);
+            _ = SpeakAsync(new TextShoutMessage { Id = receiptId ?? "", Text = caption, Rate = Rate, Volume = Volume }, ticket, plan, receiptSession);
         }
 
         ScheduleTextClear(ticket, plan);
     }
 
-    private async Task SpeakAsync(TextShoutMessage message, long ticket, ShoutDisplayPlan plan)
+    private async Task SpeakAsync(TextShoutMessage message, long ticket, ShoutDisplayPlan plan, string? receiptSession = null)
     {
         try
         {
@@ -1394,6 +1413,10 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
                 message.VoiceName ?? SelectedVoice);
 
             await _speech.SpeakAsync(message.Text, options).ConfigureAwait(false);
+
+            await ReportDeliveryAsync(message.Id, receiptSession,
+                ticket == _presentationTicket ? DeliveryStages.Completed : DeliveryStages.Failed,
+                ticket == _presentationTicket ? null : "朗读已被后续喊话中断。");
 
             await PostAsync(() =>
             {
@@ -1433,6 +1456,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         catch (Exception ex)
         {
             Post(() => AddLog("系统", $"朗读失败：{ex.Message}"));
+            await ReportDeliveryAsync(message.Id, receiptSession, DeliveryStages.Failed, $"朗读失败：{ex.Message}");
         }
     }
 
@@ -1464,12 +1488,16 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// <summary>开始播放一路语音。局域网与中继两条路径共用。</summary>
     private void PresentAudioStart(string ownerKey, string sourceName, AudioFormat format, string? countKey = null)
     {
+        _audioReceiptId = CurrentMessageId;
+        _audioReceiptSession = countKey;
+        _ = ReportDeliveryAsync(_audioReceiptId, countKey, DeliveryStages.Delivered);
         // 格式来自网络对端，先确认它合法再往下走。
         // NAudio 的 WaveFormat 构造函数会校验参数并抛异常，而这里是 UI 线程 ——
         // 对端发一个 Channels = 0 就能把整个教室端进程打掉。
         if (!format.IsSupported)
         {
             AddLog("语音", $"「{sourceName}」的音频格式不受支持（{format}），本次语音已忽略");
+            _ = ReportDeliveryAsync(_audioReceiptId, countKey, DeliveryStages.Failed, "语音格式不受支持。");
             return;
         }
 
@@ -1481,6 +1509,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         if (IsMuted)
         {
             AddLog("语音", "已静音，本条不播放");
+            _ = ReportDeliveryAsync(_audioReceiptId, countKey, DeliveryStages.Failed, "教室端已静音，本条未播放。");
             return;
         }
 
@@ -1595,7 +1624,13 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// <summary>结束当前语音播放。局域网与中继两条路径共用。</summary>
     private async Task EndAudioAsync()
     {
+        var receiptId = _audioReceiptId;
+        var receiptSession = _audioReceiptSession;
+        var receiptTicket = _presentationTicket;
         await _player.CompleteAsync().ConfigureAwait(false);
+        await ReportDeliveryAsync(receiptId, receiptSession,
+            receiptTicket == _presentationTicket ? DeliveryStages.Completed : DeliveryStages.Failed,
+            receiptTicket == _presentationTicket ? null : "语音播放已被中断。");
 
         lock (_audioStateLock)
         {
@@ -2342,7 +2377,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             start.FontSize,
             start.HoldMs,
             start.Text,
-            start.Speak);
+            start.Speak, start.Id);
     }
 
     /// <summary>规范化并校验服务器地址。补全协议头，去掉末尾斜杠。</summary>

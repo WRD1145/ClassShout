@@ -122,6 +122,10 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 多班喊话：选中多个班级时逐个经中继发送，结果回到这里提示。
         _broadcaster = new ClassroomBroadcaster(_http, _relaySettings);
         _broadcaster.Log += message => Post(() => AddLog(message));
+        _broadcaster.Sending += message => Post(() => TrackDelivery(message));
+        _broadcaster.SendFailed += (id, error) => Post(() => ApplyDelivery(id, DeliveryStages.Failed, null, error));
+        _broadcaster.ReceiptReceived += envelope => Post(() =>
+            ApplyDelivery(envelope.Id, envelope.DeliveryStage, envelope.DeliveryAt, envelope.DeliveryDetail));
         Text.Broadcaster = _broadcaster;
         Voice.Broadcaster = _broadcaster;
         Voice.ShoutNameFor = NameFor;
@@ -141,6 +145,8 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         _channel.Log += message => Post(() => AddLog(message));
         _channel.ConnectionChanged += connected => Post(() => OnConnectionChanged(connected));
         _channel.MessageReceived += message => Post(() => HandleControlMessage(message));
+        _transport.TextSending += message => Post(() => TrackDelivery(message));
+        _transport.DeliveryFailed += (id, reason) => Post(() => ApplyDelivery(id, DeliveryStages.Failed, null, reason));
 
         TeacherName = TeacherPlatform.DeviceName;
 
@@ -2633,6 +2639,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         switch (message)
         {
             case StatusMessage status:
+                ApplyDelivery(status.MessageId, status.DeliveryStage, status.DeliveryAt, status.DeliveryDetail);
                 _channel.ApplyStatus(status);
                 IsClassroomMuted = status.Muted;
                 ClassroomName = string.IsNullOrWhiteSpace(status.ClassroomName)
@@ -2641,6 +2648,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
                 break;
 
             case AckMessage ack:
+                ApplyDelivery(ack.Id, ack.Ok ? DeliveryStages.Delivered : DeliveryStages.Failed, null, ack.Detail);
                 AddLog(ack.Ok ? $"教室端已确认：{ack.Detail}" : $"教室端拒绝：{ack.Detail}");
                 break;
 
@@ -3226,6 +3234,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             switch (envelope.Kind)
             {
                 case RelayKinds.Status:
+                    ApplyDelivery(envelope.Id, envelope.DeliveryStage, envelope.DeliveryAt, envelope.DeliveryDetail);
                     IsClassroomMuted = envelope.Muted;
                     break;
 

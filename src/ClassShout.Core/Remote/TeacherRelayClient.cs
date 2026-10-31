@@ -363,7 +363,8 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         string? fontSize = null,
         int holdMs = ShoutHoldDurations.Unspecified,
         bool speak = true,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? messageId = null)
     {
         if (_token is null || string.IsNullOrWhiteSpace(text))
         {
@@ -373,7 +374,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         return await PostAsync(
             Url(string.Format(RelayPaths.TeacherText, _token)),
             JsonContent.Create(
-                new TextShoutRequest(text.Trim(), rate, volume, interrupt, display, fontSize, holdMs, speak),
+                new TextShoutRequest(text.Trim(), rate, volume, interrupt, display, fontSize, holdMs, speak, messageId),
                 options: JsonOptions),
             cancellationToken).ConfigureAwait(false);
     }
@@ -390,13 +391,17 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         // 发出去之后才记"会话已开"，与局域网那条链路同样的道理：
         // 先记后发的话，一旦这次 POST 失败，通道就以为会话开着，
         // 后面攒下来的裸 PCM 会被发到一个从没收到过 audioStart 的教室。
-        await PostAsync(
+        var audioId = MessageIds.New();
+        var accepted = await PostAsync(
             Url(string.Format(RelayPaths.TeacherAudioStart, _token)),
-            JsonContent.Create(new AudioStartRequest(format.SampleRate, format.Channels, format.BitsPerSample), options: JsonOptions),
+            JsonContent.Create(new AudioStartRequest(format.SampleRate, format.Channels, format.BitsPerSample, audioId), options: JsonOptions),
             cancellationToken).ConfigureAwait(false);
-
+        if (!accepted) throw new IOException("服务器拒绝语音开始请求。");
+        AudioMessageId = audioId;
         _audioSessionOpen = true;
     }
+
+    public string? AudioMessageId { get; private set; }
 
     /// <summary>
     /// 送入一段 PCM。会先攒在本地，达到 100 毫秒才真正发出去。

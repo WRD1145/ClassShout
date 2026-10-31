@@ -211,9 +211,10 @@ public sealed record TextShoutRequest(
     string? Display = null,
     string? FontSize = null,
     int HoldMs = ShoutHoldDurations.Unspecified,
-    bool Speak = true);
+    bool Speak = true,
+    string? Id = null);
 
-public sealed record AudioStartRequest(int SampleRate, int Channels, int BitsPerSample);
+public sealed record AudioStartRequest(int SampleRate, int Channels, int BitsPerSample, string? Id = null);
 
 /// <summary>
 /// 管理控制台向**所有在线教室**集体喊话。
@@ -311,7 +312,9 @@ public sealed record ImageStartRequest(
 /// <param name="DataBase64">这一片的字节（base64）。</param>
 public sealed record ImageChunkRequest(string Id, string DataBase64);
 
-public sealed record ClassroomStatusRequest(bool Muted, int Volume, string State);
+public sealed record ClassroomStatusRequest(bool Muted, int Volume, string State,
+    string? MessageId = null, string? DeliveryStage = null, string? DeliveryDetail = null,
+    DateTimeOffset? DeliveryAt = null);
 
 /// <summary>教室端发来的一条回复（教室 → 教师）。</summary>
 /// <param name="Id">这条回复的 ID（发送时间戳）。</param>
@@ -487,6 +490,9 @@ public sealed record AuthResponse(bool Ok, string? Token, UserProfileDto? User, 
 /// </summary>
 public sealed class RelayEnvelope
 {
+    public string? DeliveryStage { get; set; }
+    public string? DeliveryDetail { get; set; }
+    public DateTimeOffset? DeliveryAt { get; set; }
     /// <summary>单调递增序号，客户端据此判断有没有丢事件。</summary>
     public long Sequence { get; set; }
 
