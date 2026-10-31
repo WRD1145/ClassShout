@@ -635,6 +635,24 @@ internal static class Program
         var (bindOk, bindError) = await teacher.BindAsync(uuid, secret, "这个字符串不该被采用");
         Check("正确 UUID + 口令绑定成功", bindOk, bindError ?? $"教室={teacher.BoundClassroomName}");
 
+        var receiverSession = teacher.ExportReceiverSession();
+        Check("前台接收：绑定后可保存原会话与游标", receiverSession is not null && receiverSession.Uuid == uuid,
+            receiverSession is null ? "没有恢复点" : "恢复点包含教室与游标（不输出令牌）");
+        if (receiverSession is not null)
+        {
+            await using (var resumed = new TeacherRelayClient(http, teacherSettings))
+            {
+                resumed.RestoreReceiverSession(receiverSession);
+                Check("前台接收：恢复原会话而不是重新绑定", resumed.IsBound && resumed.ExportReceiverSession() == receiverSession,
+                    "原令牌、教室和游标保持一致");
+            }
+            await using var wrongServer = new TeacherRelayClient(http, new TeacherRelaySettings { ServerUrl = "https://other.invalid" });
+            var rejected = false;
+            try { wrongServer.RestoreReceiverSession(receiverSession); }
+            catch (InvalidDataException) { rejected = true; }
+            Check("前台接收：禁止跨服务器恢复令牌", rejected, "地址不匹配时拒绝恢复");
+        }
+
         // ---------- 3b. 绑定后存下来的那间教室 ----------
         //
         // 老师教好几个班，"切过去就能喊"靠的就是这条记录：教室名、服务器地址、口令。

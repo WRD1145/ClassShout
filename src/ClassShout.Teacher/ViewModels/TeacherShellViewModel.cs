@@ -198,6 +198,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             {
                 AddLog(message);
                 ShowSnackbar(message);
+                TeacherPlatform.Notify("定时喊话", message);
             }
         });
 
@@ -2321,6 +2322,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand(CanExecute = nameof(CanLogout))]
     private async Task LogoutAsync()
     {
+        TeacherPlatform.StopRelayReceiver();
         IsAccountBusy = true;
 
         try
@@ -3065,7 +3067,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         LocalSettings.SaveTeacher(_relaySettings);
         RefreshSavedClassrooms();
 
-        _relay.StartPolling();
+        if (!TeacherPlatform.HostRelayReceiver(_relay)) _relay.StartPolling();
 
         // 绑定成功后顺手问一次"我到底有哪些班、现在哪几间在线" ——
         // 「可发送班级」那份列表就是它回来的 JSON，多绑几个班时才有得可选。
@@ -3183,6 +3185,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     private async Task TearDownRelayAsync()
     {
+        TeacherPlatform.StopRelayReceiver();
         if (_relay is not null)
         {
             await _relay.DisposeAsync().ConfigureAwait(true);
@@ -3234,6 +3237,8 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
             switch (envelope.Kind)
             {
                 case RelayKinds.Status:
+                    if (envelope.State == "scheduledShout")
+                        TeacherPlatform.Notify("定时喊话", envelope.Text ?? "定时任务已处理。");
                     ApplyDelivery(envelope.Id, envelope.DeliveryStage, envelope.DeliveryAt, envelope.DeliveryDetail);
                     IsClassroomMuted = envelope.Muted;
                     break;
@@ -3346,6 +3351,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        TeacherPlatform.StopRelayReceiver();
         _snackbarCts?.Cancel();
         _snackbarCts?.Dispose();
 

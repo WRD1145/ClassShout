@@ -42,6 +42,8 @@
     -->
     <PublishTrimmed>false</PublishTrimmed>
     <RunAOTCompilation>false</RunAOTCompilation>
+    <!-- 增量 Release 构建的 JNI 注册优化曾导致真机启动找不到 n_onCreate；使用稳定的动态注册。 -->
+    <AndroidEnableMarshalMethods>false</AndroidEnableMarshalMethods>
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
     <AndroidLinkMode>None</AndroidLinkMode>
   </PropertyGroup>

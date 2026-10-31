@@ -624,7 +624,22 @@ public sealed class TeacherRelayClient : IAsyncDisposable
     // ======================== 接收 ========================
 
     /// <summary>启动长轮询接收教室端状态。绑定成功后调用。</summary>
-    public void StartPolling()
+    /// <summary>导出供 Android 前台服务恢复的会话，令牌只保存在应用私有目录。</summary>
+    public TeacherReceiverSession? ExportReceiverSession()
+        => _token is null || BoundUuid is null ? null : new(ServerUrl, _token, BoundUuid, BoundClassroomName, _since);
+
+    public void RestoreReceiverSession(TeacherReceiverSession session)
+    {
+        if (_pollLoop is not null || _token is not null) throw new InvalidOperationException("不能覆盖正在使用的接收会话。");
+        if (!string.Equals(ServerUrl.TrimEnd('/'), session.ServerUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("恢复的接收会话与服务器地址不匹配。");
+        _token = session.Token;
+        BoundUuid = session.Uuid;
+        BoundClassroomName = session.ClassroomName;
+        StartPolling(session.Since);
+    }
+
+    public void StartPolling(long since = 0)
     {
         if (_pollLoop is not null || _token is null)
         {
@@ -632,7 +647,7 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         }
 
         _cts = new CancellationTokenSource();
-        _since = 0;
+        _since = since;
 
         _pollLoop = Task.Run(() => PollLoopAsync(_cts.Token));
         _audioFlusher = Task.Run(() => AudioFlushLoopAsync(_cts.Token));

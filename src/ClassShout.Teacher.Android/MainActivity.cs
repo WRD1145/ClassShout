@@ -62,6 +62,7 @@ public class MainActivity : AvaloniaMainActivity<App>
         // 收到教室回复时的系统通知（渠道 + Android 13 的通知权限），
         // 以及语音回复的播放（AudioTrack）
         AndroidNotifier.Register(this);
+        ClassroomReceiverService.Register(this);
 
         return base.CustomizeAppBuilder(builder);
     }

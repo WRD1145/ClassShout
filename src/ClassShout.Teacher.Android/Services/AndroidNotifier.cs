@@ -19,7 +19,7 @@ namespace ClassShout.Teacher.Android.Services;
 /// </summary>
 public static class AndroidNotifier
 {
-    private const string ChannelId = "classshout.replies";
+    internal const string ChannelId = "classshout.replies";
     private const int NotificationId = 4201;
 
     /// <summary>注册到平台层。调用方是 MainActivity（它才有 Context）。</summary>
@@ -27,7 +27,8 @@ public static class AndroidNotifier
     {
         EnsureChannel(context);
 
-        TeacherPlatform.RegisterNotifier((title, body) => Show(context, title, body));
+        var appContext = context.ApplicationContext ?? context;
+        TeacherPlatform.RegisterNotifier((title, body) => Show(appContext, title, body));
         TeacherPlatform.RegisterWavPlayer(PlayWav);
 
         // Android 13+：申请通知权限。拒绝了也不影响应用内提示，所以不阻塞启动。
@@ -45,7 +46,7 @@ public static class AndroidNotifier
     /// <summary>权限申请码。与 MainActivity 里麦克风那个错开。</summary>
     public const int NotificationPermissionRequestCode = 1003;
 
-    private static void EnsureChannel(Context context)
+    internal static void EnsureChannel(Context context)
     {
         if (!OperatingSystem.IsAndroidVersionAtLeast(26))
         {
@@ -73,7 +74,7 @@ public static class AndroidNotifier
         }
     }
 
-    private static void Show(Context context, string title, string body)
+    internal static void Show(Context context, string title, string body)
     {
         try
         {
@@ -125,16 +126,18 @@ public static class AndroidNotifier
             throw new NotSupportedException("这段音频不是可识别的 WAV。");
         }
 
+        using var attributesBuilder = new AudioAttributes.Builder();
+        attributesBuilder.SetUsage(AudioUsageKind.Media);
+        attributesBuilder.SetContentType(AudioContentType.Speech);
+        using var attributes = attributesBuilder.Build() ?? throw new InvalidOperationException("无法创建音频属性。");
+        using var formatBuilder = new global::Android.Media.AudioFormat.Builder();
+        formatBuilder.SetEncoding(global::Android.Media.Encoding.Pcm16bit);
+        formatBuilder.SetSampleRate(format.SampleRate);
+        formatBuilder.SetChannelMask(format.Channels == 1 ? ChannelOut.Mono : ChannelOut.Stereo);
+        using var audioFormat = formatBuilder.Build() ?? throw new InvalidOperationException("无法创建播放格式。");
         var track = new AudioTrack.Builder()
-            .SetAudioAttributes(new AudioAttributes.Builder()
-                .SetUsage(AudioUsageKind.Media)
-                .SetContentType(AudioContentType.Speech)
-                .Build())
-            .SetAudioFormat(new global::Android.Media.AudioFormat.Builder()
-                .SetEncoding(global::Android.Media.Encoding.Pcm16bit)
-                .SetSampleRate(format.SampleRate)
-                .SetChannelMask(format.Channels == 1 ? ChannelOut.Mono : ChannelOut.Stereo)
-                .Build())
+            .SetAudioAttributes(attributes)
+            .SetAudioFormat(audioFormat)
             .SetTransferMode(AudioTrackMode.Static)
             .SetBufferSizeInBytes(pcm.Length)
             .Build();

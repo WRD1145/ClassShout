@@ -11,6 +11,15 @@ namespace ClassShout.Teacher.Services;
 /// </summary>
 public static class TeacherPlatform
 {
+    private static Func<ClassShout.Core.Remote.TeacherRelayClient, bool>? _relayReceiver;
+    private static Action? _stopRelayReceiver;
+    public static void RegisterRelayReceiver(Func<ClassShout.Core.Remote.TeacherRelayClient, bool> start, Action stop)
+    {
+        _relayReceiver = start;
+        _stopRelayReceiver = stop;
+    }
+    public static bool HostRelayReceiver(ClassShout.Core.Remote.TeacherRelayClient client) => _relayReceiver?.Invoke(client) ?? false;
+    public static void StopRelayReceiver() => _stopRelayReceiver?.Invoke();
     private static Func<IAudioRecorder>? _recorderFactory;
 
     /// <summary>本机名称，用于在教室端显示"谁在喊话"。</summary>

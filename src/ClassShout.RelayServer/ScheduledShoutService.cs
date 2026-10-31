@@ -168,6 +168,16 @@ public sealed class ScheduledShoutService : BackgroundService
         }
 
         _store.Complete(item, status, error, results);
+        // 只通知任务所属教师的会话，不能把某位老师的任务结果广播给全班任课老师。
+        var receivers = item.TargetUuids.SelectMany(uuid => _sessions.TeacherTokensOf(uuid))
+            .Distinct(StringComparer.Ordinal)
+            .Where(token => _sessions.TryGetTeacher(token, out var binding) && binding.UserId == item.OwnerUserId)
+            .ToList();
+        _hub.PublishToTeachers(receivers, new RelayEnvelope
+        {
+            Kind = RelayKinds.Status, State = "scheduledShout", Id = item.Id,
+            Text = error ?? $"定时喊话已发出：{sent} 间教室。", Reason = status,
+        });
 
         _logger.LogInformation("服务器定时 #{Id}（{Kind}）已处理：发出 {Sent} 间，离线 {Offline} 间",
             item.Id, item.Kind, sent, offline);
