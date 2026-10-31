@@ -950,6 +950,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     /// <summary>启动监听。端口被占用时抛 <see cref="System.Net.Sockets.SocketException"/>。</summary>
     public void Start()
     {
+        StartBells();
         _server.ClassroomName = ClassroomName;
         _server.Start();
         IsServerRunning = true;
@@ -2917,6 +2918,8 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _bellTimer?.Stop();
+        _bellPlayer.Dispose();
         // 这几样刻意放在任何 await 之前。
         //
         // 退出路径上的调用方是有界等待的（见 App 的 ShutdownRequested），

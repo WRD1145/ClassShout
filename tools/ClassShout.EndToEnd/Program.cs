@@ -57,6 +57,7 @@ internal static class Program
 
     private static async Task<int> RunAsync(string[] args)
     {
+        AssertLocalBells();
 
         // 中继链路测试需要先自行启动中继服务器；不在这里拉进程，
         // 否则端口、启动时序、清理这些噪音会淹没"协议是否跑通"这个真正的问题。
@@ -5081,13 +5082,13 @@ internal static class Program
                 // 同一个处理器、同一个坏证书，只翻那个开关 —— 结果必须跟着变。
                 // 这正是"改完立刻对下一次连接生效"的实现依据：回调在每次握手时才读开关。
                 TlsPolicy.AllowUntrusted = false;
-                var strict = callback(null, null, null, SslPolicyErrors.RemoteCertificateChainErrors);
+                var strict = callback(new object(), null, null, SslPolicyErrors.RemoteCertificateChainErrors);
 
                 TlsPolicy.AllowUntrusted = true;
-                var loose = callback(null, null, null, SslPolicyErrors.RemoteCertificateChainErrors);
+                var loose = callback(new object(), null, null, SslPolicyErrors.RemoteCertificateChainErrors);
 
                 TlsPolicy.AllowUntrusted = false;
-                var good = callback(null, null, null, SslPolicyErrors.None);
+                var good = callback(new object(), null, null, SslPolicyErrors.None);
 
                 Check("证书策略：同一个处理器里，开关一翻结果就变（不必重启应用）",
                     !strict && loose && good,
@@ -6719,6 +6720,26 @@ internal static class Program
 
     private static string Trim(string text)
         => text.Length <= 90 ? text : text[..90] + "…";
+
+    private static void AssertLocalBells()
+    {
+        var monday = new DateTime(2026, 11, 2, 8, 0, 0);
+        var bell = new BellSchedule { Time = "08:00", DaysOfWeek = 1 };
+        Check("本地铃声：周一时刻匹配", bell.IsDue(monday), "不访问网络");
+        Check("本地铃声：其他日不响", !bell.IsDue(monday.AddDays(1)), "周二不匹配");
+        Check("本地铃声：其他分钟不响", !bell.IsDue(monday.AddMinutes(1)), "08:01 不匹配");
+        bell.Enabled = false;
+        Check("本地铃声：禁用不响", !bell.IsDue(monday), "开关关闭");
+        bell.Enabled = true;
+        bell.Time = "25:00";
+        var settings = new BellSettings { Bells = [bell] }.Normalized();
+        Check("本地铃声：无效时刻禁用", !settings.Bells[0].Enabled, "不改成其他时刻");
+        var second = new BellSchedule { Id = bell.Id, Volume = 200, DaysOfWeek = 255 };
+        settings.Bells.Add(second);
+        settings.Normalized();
+        Check("本地铃声：重复标识修复", second.Id != bell.Id, "去重避免漏响");
+        Check("本地铃声：音量与周几归一化", second.Volume == 100 && second.DaysOfWeek == 127, "限制有效范围");
+    }
 
     private static void Check(string name, bool ok, string detail)
     {

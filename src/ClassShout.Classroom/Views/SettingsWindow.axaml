@@ -49,6 +49,37 @@
       <StackPanel Spacing="16">
 
         <md3:Md3Card Classes="outlined">
+          <StackPanel Spacing="10">
+            <TextBlock Classes="cardTitle" Text="铃声" />
+            <TextBlock Text="{Binding BellStatus}" TextWrapping="Wrap" />
+            <TextBlock Text="时刻 HH:mm；周一至周日的位值为 1、2、4、8、16、32、64，相加选择多天（工作日 31，每天 127）。" TextWrapping="Wrap" />
+            <ItemsControl ItemsSource="{Binding Bells}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="remote:BellSchedule">
+                  <StackPanel Spacing="6" Margin="0,6">
+                    <CheckBox Content="启用" IsChecked="{Binding Enabled}" />
+                    <TextBox Watermark="铃声名称" Text="{Binding Label}" />
+                    <TextBox Watermark="HH:mm" Text="{Binding Time}" />
+                    <NumericUpDown Minimum="0" Maximum="127" Value="{Binding DaysOfWeek}" />
+                    <TextBlock Text="音量" />
+                    <Slider Minimum="0" Maximum="100" Value="{Binding Volume}" />
+                    <CheckBox Content="开始时显示提醒" IsChecked="{Binding ShowLabel}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <Button Content="试听" Click="OnPreviewBell" />
+                      <Button Content="删除" Click="OnRemoveBell" />
+                    </StackPanel>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="添加铃声" Command="{Binding AddBellCommand}" />
+              <Button Content="保存铃声" Command="{Binding SaveBellsCommand}" />
+            </StackPanel>
+          </StackPanel>
+        </md3:Md3Card>
+
+        <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="12">
             <TextBlock Classes="cardTitle" Text="设置口令" />
 

@@ -232,7 +232,12 @@ public sealed class ClassroomDiscovery
 
                 LogTrace?.Invoke($"收到来自 {result.RemoteEndPoint} 的回应：「{announcement.Name}」，连接地址取 {source}:{announcement.Port}。");
 
-                found[key] = announcement;
+                // 同机多网卡会返回多份回应：一旦收到回环地址就保留它，
+                // 不让随后抵达的虚拟网卡回应覆盖稳定的本机连接路径。
+                if (!found.TryGetValue(key, out var existing)
+                    || !IPAddress.TryParse(existing.Host, out var existingAddress)
+                    || !IPAddress.IsLoopback(existingAddress))
+                    found[key] = announcement;
             }
             catch (OperationCanceledException)
             {

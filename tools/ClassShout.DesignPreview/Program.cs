@@ -1578,6 +1578,15 @@ internal static class Program
                 () => new ClassroomSettings { DataContext = new ClassroomViewModel(), Height = 4300 }, 0, 0,
                 _ => null),
 
+            new("classroom-bells",
+                () =>
+                {
+                    var vm = new ClassroomViewModel();
+                    vm.Bells.Clear();
+                    vm.Bells.Add(new BellSchedule { Label = "上课铃", Time = "08:00" });
+                    return new ClassroomSettings { DataContext = vm, Height = 1050 };
+                }, 0, 0, _ => null),
+
             // 语音转文字卡片展开的样子。
             //
             // 单独来一张的理由和上面的置顶档位一样：开关关着时，那几行输入框

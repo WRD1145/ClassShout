@@ -359,6 +359,13 @@ public static class LocalSettings
     public static ClassroomReplySettings LoadReply()
         => Load("classroom-reply.json", ClassroomReplySettings.WithDefaults);
 
+    /// <summary>教室本地铃声计划，断网仍然可读取。</summary>
+    public static BellSettings LoadBells()
+        => Load("bells.json", static () => new BellSettings()).Normalized();
+
+    public static bool SaveBells(BellSettings settings)
+        => Save("bells.json", settings.Normalized());
+
     public static bool SaveReply(ClassroomReplySettings settings)
         => Save("classroom-reply.json", settings.Normalized());
 

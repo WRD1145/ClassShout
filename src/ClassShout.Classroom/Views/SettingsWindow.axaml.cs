@@ -17,6 +17,17 @@ namespace ClassShout.Classroom.Views;
 /// </summary>
 public partial class SettingsWindow : Window
 {
+    private void OnPreviewBell(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is ViewModels.ClassroomViewModel vm && sender is Control { DataContext: BellSchedule bell })
+            vm.PreviewBellCommand.Execute(bell);
+    }
+
+    private void OnRemoveBell(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is ViewModels.ClassroomViewModel vm && sender is Control { DataContext: BellSchedule bell })
+            vm.RemoveBellCommand.Execute(bell);
+    }
     public SettingsWindow()
     {
         InitializeComponent();
