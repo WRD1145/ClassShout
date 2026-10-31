@@ -58,8 +58,11 @@ internal static class Program
     private static async Task<int> RunAsync(string[] args)
     {
         if (args.Contains("--live-receipt")) return await AssertLiveReceiptAsync();
+        var ciLiveIndex = Array.IndexOf(args, "--live-ci");
+        if (ciLiveIndex >= 0 && ciLiveIndex + 1 < args.Length) return await AssertLiveClassIslandAsync(args[ciLiveIndex + 1]);
         AssertLocalBells();
         AssertDeliveryState();
+        AssertClassIslandSchedule();
 
         // 中继链路测试需要先自行启动中继服务器；不在这里拉进程，
         // 否则端口、启动时序、清理这些噪音会淹没"协议是否跑通"这个真正的问题。
@@ -6780,6 +6783,52 @@ internal static class Program
         var decoded = ShoutCodec.Decode(encoded) as StatusMessage;
         Check("回执：status 编解码保留消息关联", decoded?.MessageId == receipt.Id && decoded.DeliveryStage == DeliveryStages.Displayed
             && decoded.DeliveryAt == now, decoded?.MessageId ?? "无消息标识");
+    }
+
+    private static void AssertClassIslandSchedule()
+    {
+        var schedule = new ClassIslandSchedule
+        {
+            Available = true, Date = new DateOnly(2026, 11, 2),
+            CapturedAt = new DateTimeOffset(2026, 11, 2, 7, 0, 0, TimeSpan.FromHours(8)),
+            Periods = [new(1, TimeSpan.FromHours(8), TimeSpan.FromHours(8.75))],
+        };
+        Check("ClassIsland：上课后偏移使用教室时区", schedule.Resolve(1, false, 5) is { Hour: 8, Minute: 5 } start
+            && start.Offset == TimeSpan.FromHours(8), "08:00 上课后 5 分钟 = 08:05 +08:00");
+        Check("ClassIsland：下课后偏移", schedule.Resolve(1, true, 10) is { Hour: 8, Minute: 55 }, "08:45 下课后 10 分钟 = 08:55");
+        Check("ClassIsland：不存在节次不猜时间", schedule.Resolve(2, true, 0) is null, "第二节不存在");
+        Check("ClassIsland：负偏移被拒绝", schedule.Resolve(1, true, -1) is null, "只支持上课或下课之后");
+        schedule.Periods = [new(1, TimeSpan.FromHours(9), TimeSpan.FromHours(10))];
+        Check("ClassIsland：换课表后按新时间计算", schedule.Resolve(1, false, 0) is { Hour: 9 }, "实时课表从 08:00 改为 09:00");
+        schedule.Available = false;
+        Check("ClassIsland：不可用档案不触发", schedule.Resolve(1, true, 0) is null, "缺少实时课表时不发");
+    }
+
+    private static async Task<int> AssertLiveClassIslandAsync(string settingsPath)
+    {
+        var settings = JsonSerializer.Deserialize<TeacherRelaySettings>(await File.ReadAllTextAsync(settingsPath))
+            ?? throw new InvalidDataException("缺少真实联动验收配置。");
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        var client = new ClassIslandScheduleClient(http, settings);
+        var uuid = settings.LastUuid ?? throw new InvalidDataException("没有指定验收教室。");
+        var schedule = await client.ReadAsync(uuid);
+        Check("真实 ClassIsland：读到绑定教室的当前档案", schedule.Available && schedule.Periods.Count > 0,
+            schedule.Error ?? schedule.PlanName);
+        if (!schedule.Available || schedule.Periods.Count == 0) return 1;
+        var task = new ClassIslandTask
+        {
+            Id = MessageIds.New(), Date = schedule.Date, Period = schedule.Periods[0].Number,
+            Text = "ClassIsland 实时课表本地触发验收", AfterEnd = false, Speak = false,
+        };
+        var error = await client.SendAsync(uuid, task);
+        Check("真实 ClassIsland：下发等待教室本机保存确认", error is null, error ?? "已收到教室保存确认");
+        var updated = await client.ReadAsync(uuid);
+        Check("真实 ClassIsland：教室回报已保存任务", updated.Tasks.Any(item => item.Id == task.Id), task.Summary);
+        var unauthenticated = await new ClassIslandScheduleClient(http, new TeacherRelaySettings { ServerUrl = settings.ServerUrl }).ReadAsync(uuid);
+        Check("ClassIsland：没有账号令牌不能读取教室课表", !unauthenticated.Available && unauthenticated.Error is not null,
+            unauthenticated.Error ?? "未拒绝");
+        await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(settingsPath))!, "created-task.json"), JsonSerializer.Serialize(task));
+        return _failed == 0 ? 0 : 1;
     }
 
     /// <summary>连接实际运行的教室端，验证网络 ACK 与界面渲染回执，不使用模拟呈现器。</summary>

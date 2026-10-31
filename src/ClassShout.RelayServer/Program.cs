@@ -167,6 +167,11 @@ var classroomRosters = app.Services.GetRequiredService<ClassroomRosterStore>();
 var userSessions = app.Services.GetRequiredService<UserSessions>();
 var sessions = app.Services.GetRequiredService<RelaySessions>();
 var hub = app.Services.GetRequiredService<MessageHub>();
+// 课表摘要只作实时读取缓存；真正的定时规则保存在教室本机。
+var classIslandSchedules = new System.Collections.Concurrent.ConcurrentDictionary<string,
+    (ClassIslandSchedule Schedule, DateTimeOffset ReceivedAt)>(StringComparer.OrdinalIgnoreCase);
+var classIslandPending = new System.Collections.Concurrent.ConcurrentDictionary<string,
+    TaskCompletionSource<string?>>(StringComparer.Ordinal);
 
 // 服务器上的定时喊话：由后台调度服务到点发出去
 var schedule = app.Services.GetRequiredService<ScheduledShoutStore>();
@@ -1931,6 +1936,10 @@ app.MapPost(RelayPaths.Route(RelayPaths.ClassroomStatus), (
     }
 
     store.Touch(uuid);
+    if (request.ClassIsland is { } classIsland)
+        classIslandSchedules[uuid] = (classIsland, DateTimeOffset.UtcNow);
+    if (request.ClassIslandTaskAck is { } taskAck && classIslandPending.TryRemove(uuid + ":" + taskAck, out var pendingTask))
+        pendingTask.TrySetResult(request.ClassIslandTaskError);
 
     NotifyTeachers(uuid, new RelayEnvelope
     {
@@ -1942,9 +1951,58 @@ app.MapPost(RelayPaths.Route(RelayPaths.ClassroomStatus), (
         DeliveryStage = request.DeliveryStage,
         DeliveryDetail = request.DeliveryDetail,
         DeliveryAt = request.DeliveryAt,
+        ClassIslandTaskAck = request.ClassIslandTaskAck,
+        ClassIslandTaskError = request.ClassIslandTaskError,
     });
 
     return Results.Ok(new { ok = true });
+});
+
+app.MapGet("/api/auth/classrooms/{uuid}/classisland", (
+    string uuid, [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null) return Results.Unauthorized();
+    if (!ShoutableClassrooms(profile).Any(item => string.Equals(item.Uuid, uuid, StringComparison.OrdinalIgnoreCase)))
+        return Results.Forbid();
+    if (!classIslandSchedules.TryGetValue(uuid, out var snapshot)
+        || DateTimeOffset.UtcNow - snapshot.ReceivedAt > TimeSpan.FromSeconds(20))
+        return Results.Ok(new ClassIslandSchedule { Error = "教室未上报实时课表或课表已过期，请确认教室、ClassIsland 与联动插件正在运行。" });
+    return Results.Ok(snapshot.Schedule);
+});
+
+app.MapPost("/api/auth/classrooms/{uuid}/classisland", async (
+    string uuid, ClassIslandTask task, [FromHeader(Name = RelayPaths.AuthTokenHeader)] string? authToken,
+    CancellationToken cancellationToken) =>
+{
+    var profile = ResolveUser(authToken);
+    if (profile is null) return Results.Unauthorized();
+    if (!ShoutableClassrooms(profile).Any(item => string.Equals(item.Uuid, uuid, StringComparison.OrdinalIgnoreCase)))
+        return Results.Forbid();
+    var classroom = store.Get(uuid);
+    if (classroom is null) return Results.NotFound(new { error = "教室不存在。" });
+    if (DateTimeOffset.UtcNow - classroom.LastSeenAt > TimeSpan.FromSeconds(90))
+        return Results.Conflict(new { error = $"教室离线 {Math.Max(1, (int)(DateTimeOffset.UtcNow - classroom.LastSeenAt).TotalMinutes)} 分钟，不能下发课表任务。" });
+    if (string.IsNullOrWhiteSpace(task.Id) || task.Id.Length > 80 || task.Text is null || task.Text.Length > 500
+        || task.Period is < 1 or > 100 || task.OffsetMinutes is < 0 or > 180)
+        return Results.BadRequest(new { error = "课表任务参数无效。" });
+    var pending = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var key = uuid + ":" + task.Id;
+    if (!classIslandPending.TryAdd(key, pending)) return Results.Conflict(new { error = "同一任务正在下发，请等待教室确认。" });
+    try
+    {
+        hub.Publish(MessageHub.ClassroomKey(uuid), new RelayEnvelope
+        {
+            Kind = RelayKinds.Status, ClassIslandTask = task, From = profile.ShoutNameFor(uuid),
+        });
+        var error = await pending.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+        return error is null ? Results.Ok(new { ok = true }) : Results.BadRequest(new { error });
+    }
+    catch (TimeoutException)
+    {
+        return Results.Json(new { error = "教室未确认本机保存，结果未知。请刷新课表核对任务，避免重复创建。" }, statusCode: 504);
+    }
+    finally { classIslandPending.TryRemove(key, out _); }
 });
 
 /// <summary>

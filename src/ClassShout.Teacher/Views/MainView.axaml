@@ -903,6 +903,38 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
 
+            <md3:Md3Card Classes="outlined">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="cardTitle" Text="按 ClassIsland 课表发送（当天）" />
+                <TextBlock Text="{Binding ClassIslandStatus}" TextWrapping="Wrap" />
+                <Button Content="刷新绑定教室的课表" Command="{Binding RefreshClassIslandCommand}" IsEnabled="{Binding !ClassIslandBusy}" />
+                <ComboBox ItemsSource="{Binding ClassIslandPeriods}" SelectedItem="{Binding SelectedClassIslandPeriod}" HorizontalAlignment="Stretch">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="remote:ClassIslandPeriod"><TextBlock Text="{Binding Label}" /></DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <CheckBox Content="按下课时间（关闭则按上课时间）" IsChecked="{Binding ClassIslandAfterEnd}" />
+                <TextBlock Text="之后多少分钟发送（0 表示到点发送）" />
+                <NumericUpDown Minimum="0" Maximum="180" Value="{Binding ClassIslandOffsetMinutes}" />
+                <Button Content="将当前文字交给教室按课表发送" Command="{Binding ScheduleByClassIslandCommand}" IsEnabled="{Binding !ClassIslandBusy}" />
+                <TextBlock Text="任务保存在绑定教室本机，执行时读取最新课表；ClassIsland 和教室端需保持运行。" TextWrapping="Wrap" />
+                <ItemsControl ItemsSource="{Binding ClassIslandTasks}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="remote:ClassIslandTask">
+                      <StackPanel Spacing="4" Margin="0,6">
+                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding Error}" TextWrapping="Wrap" />
+                        <Button Content="取消任务"
+                          Command="{Binding $parent[UserControl].((vm:TeacherShellViewModel)DataContext).CancelClassIslandTaskCommand}"
+                          CommandParameter="{Binding}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </md3:Md3Card>
+
             <!-- 定时通知：把当前这条排到某个时间自动发出去。
                  可靠性边界写在卡片上，而不是只写在文档里 ——
                  老师会照着界面上的字去预期行为。 -->

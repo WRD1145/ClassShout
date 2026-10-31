@@ -1026,6 +1026,19 @@ internal static class Program
                     return new TeacherView { DataContext = vm };
                 }, 430, 2200, _ => null),
 
+            new("teacher-classisland-schedule",
+                () =>
+                {
+                    var vm = new TeacherShellViewModel { ActivePage = TeacherPage.Text };
+                    vm.Text.Text = "下课后请各组交作业。";
+                    vm.ClassIslandStatus = "三年二班 · 当天课表 · 常规作息（教室实时读取）";
+                    vm.ClassIslandPeriods.Add(new ClassIslandPeriod(1, TimeSpan.FromHours(8), TimeSpan.FromHours(8.75)));
+                    vm.ClassIslandPeriods.Add(new ClassIslandPeriod(2, TimeSpan.FromHours(9), TimeSpan.FromHours(9.75)));
+                    vm.SelectedClassIslandPeriod = vm.ClassIslandPeriods[0];
+                    vm.ClassIslandTasks.Add(new ClassIslandTask { Period = 1, OffsetMinutes = 5, Text = "请各组交作业。" });
+                    return new TeacherView { DataContext = vm };
+                }, 430, 2800, _ => null),
+
             // 教师端「设备」页里的「已保存的教室」：三间，其中一间标成"使用中"。
             //
             // 刻意种了数据再构造：空列表时那一段整个不可见（IsVisible 绑在数量上），

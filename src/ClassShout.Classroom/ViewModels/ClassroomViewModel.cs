@@ -951,6 +951,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     public void Start()
     {
         StartBells();
+        StartClassIslandSchedule();
         _server.ClassroomName = ClassroomName;
         _server.Start();
         IsServerRunning = true;
@@ -2236,6 +2237,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         {
             switch (envelope.Kind)
             {
+                case RelayKinds.Status when envelope.ClassIslandTask is { } ciTask:
+                    _ = AcceptClassIslandTaskAsync(ciTask);
+                    break;
                 case RelayKinds.TextShout:
                     PresentTextShout(envelope.From ?? "教师端", new TextShoutMessage
                     {
@@ -2954,6 +2958,9 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _bellTimer?.Stop();
+        _ciScheduleTimer?.Stop();
+        _ciScheduleDisposed = true;
+        _ciScheduleHttp.Dispose();
         _bellPlayer.Dispose();
         // 这几样刻意放在任何 await 之前。
         //

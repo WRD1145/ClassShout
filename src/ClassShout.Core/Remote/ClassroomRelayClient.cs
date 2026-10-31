@@ -303,7 +303,8 @@ public sealed class ClassroomRelayClient : IAsyncDisposable
 
     /// <summary>上报本教室的静音与音量，服务器会转发给已绑定的教师端。</summary>
     public async Task ReportStatusAsync(bool muted, int volume, string state, CancellationToken cancellationToken = default,
-        string? messageId = null, string? deliveryStage = null, string? deliveryDetail = null, DateTimeOffset? deliveryAt = null)
+        string? messageId = null, string? deliveryStage = null, string? deliveryDetail = null, DateTimeOffset? deliveryAt = null,
+        ClassIslandSchedule? classIsland = null, string? classIslandTaskAck = null, string? classIslandTaskError = null)
     {
         if (_token is null)
         {
@@ -316,7 +317,7 @@ public sealed class ClassroomRelayClient : IAsyncDisposable
             using var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = JsonContent.Create(new ClassroomStatusRequest(muted, volume, state,
-                    messageId, deliveryStage, deliveryDetail, deliveryAt), options: JsonOptions),
+                    messageId, deliveryStage, deliveryDetail, deliveryAt, classIsland, classIslandTaskAck, classIslandTaskError), options: JsonOptions),
             };
             request.Headers.TryAddWithoutValidation(RelayPaths.TokenHeader, _token);
 

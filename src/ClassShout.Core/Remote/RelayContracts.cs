@@ -314,7 +314,8 @@ public sealed record ImageChunkRequest(string Id, string DataBase64);
 
 public sealed record ClassroomStatusRequest(bool Muted, int Volume, string State,
     string? MessageId = null, string? DeliveryStage = null, string? DeliveryDetail = null,
-    DateTimeOffset? DeliveryAt = null);
+    DateTimeOffset? DeliveryAt = null, ClassIslandSchedule? ClassIsland = null,
+    string? ClassIslandTaskAck = null, string? ClassIslandTaskError = null);
 
 /// <summary>教室端发来的一条回复（教室 → 教师）。</summary>
 /// <param name="Id">这条回复的 ID（发送时间戳）。</param>
@@ -490,6 +491,9 @@ public sealed record AuthResponse(bool Ok, string? Token, UserProfileDto? User, 
 /// </summary>
 public sealed class RelayEnvelope
 {
+    public ClassIslandTask? ClassIslandTask { get; set; }
+    public string? ClassIslandTaskAck { get; set; }
+    public string? ClassIslandTaskError { get; set; }
     public string? DeliveryStage { get; set; }
     public string? DeliveryDetail { get; set; }
     public DateTimeOffset? DeliveryAt { get; set; }
