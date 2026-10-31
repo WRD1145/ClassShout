@@ -561,8 +561,11 @@ public sealed class TeacherRelayClient : IAsyncDisposable
         }
     }
 
+    public string? LastSendError { get; private set; }
+
     private async Task<bool> PostAsync(string path, HttpContent? content, CancellationToken cancellationToken)
     {
+        LastSendError = null;
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = content };
@@ -570,15 +573,27 @@ public sealed class TeacherRelayClient : IAsyncDisposable
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
             {
+                LastSendError = "服务器拒绝：会话已失效，请重新绑定教室。";
                 InvalidateBinding("会话已失效，请重新绑定教室。");
                 return false;
             }
 
-            return response.IsSuccessStatusCode;
+            if (response.IsSuccessStatusCode) return true;
+            LastSendError = $"服务器拒绝（HTTP {(int)response.StatusCode}）。";
+            try
+            {
+                using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
+                if (error.RootElement.TryGetProperty("error", out var reason) && reason.ValueKind == JsonValueKind.String)
+                    LastSendError = $"服务器拒绝：{reason.GetString()}";
+            }
+            catch (JsonException) { }
+            Log?.Invoke(LastSendError);
+            return false;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             SetConnected(false);
+            LastSendError = $"连接服务器失败：{ex.Message}";
             Log?.Invoke($"发送失败：{ex.Message}");
             return false;
         }

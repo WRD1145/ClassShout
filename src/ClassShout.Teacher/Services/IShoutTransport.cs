@@ -16,6 +16,7 @@ public interface IShoutTransport
 {
     /// <summary>当前是否可用（已连上教室或已绑定服务器）。</summary>
     bool IsConnected { get; }
+    string? FailureReason => null;
     string? AudioMessageId => null;
 
     /// <summary>
@@ -56,6 +57,7 @@ public interface IShoutTransport
 /// </remarks>
 public sealed class RelayShoutTransport : IShoutTransport
 {
+    public string? FailureReason => _client.LastSendError;
     public string? AudioMessageId => _client.AudioMessageId;
     private readonly TeacherRelayClient _client;
 
@@ -124,7 +126,7 @@ public sealed class ShoutTransportRouter : IShoutTransport
         try
         {
             var ok = Active is { } active && await active.SendTextAsync(message, cancellationToken);
-            if (!ok) DeliveryFailed?.Invoke(message.Id, "教室离线或服务器拒绝发送，请检查连接与授权。");
+            if (!ok) DeliveryFailed?.Invoke(message.Id, Active?.FailureReason ?? "教室离线，当前没有可用连接。");
             return ok;
         }
         catch (Exception ex)
@@ -144,7 +146,7 @@ public sealed class ShoutTransportRouter : IShoutTransport
         try
         {
             var ok = Active is { } active && await active.SendImageAsync(message, image, cancellationToken);
-            if (!ok) DeliveryFailed?.Invoke(message.Id, "图片发送失败：教室离线或服务器拒绝。");
+            if (!ok) DeliveryFailed?.Invoke(message.Id, Active?.FailureReason ?? "图片发送失败：教室离线，当前没有可用连接。");
             return ok;
         }
         catch (Exception ex)

@@ -212,7 +212,7 @@ public sealed class ClassroomBroadcaster
             message.Speak,
             cancellationToken, message.Id).ConfigureAwait(false);
 
-        if (!ok) SendFailed?.Invoke(message.Id, $"教室「{target.Name}」离线或服务器拒绝。");
+        if (!ok) SendFailed?.Invoke(message.Id, retry.LastSendError ?? $"教室「{target.Name}」发送失败，未收到服务器确认。");
 
         return ok
             ? new BroadcastResult(target, true, null)
