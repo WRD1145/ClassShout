@@ -3,12 +3,18 @@
     "path": "ClassShout.slnx",
     "projects": [
       "src\\ClassShout.Core\\ClassShout.Core.csproj",
+      "src\\ClassShout.Plugin.Abstractions\\ClassShout.Plugin.Abstractions.csproj",
       "src\\ClassShout.Design\\ClassShout.Design.csproj",
       "src\\ClassShout.RelayServer\\ClassShout.RelayServer.csproj",
       "src\\ClassShout.Teacher\\ClassShout.Teacher.csproj",
       "src\\ClassShout.Teacher.Desktop\\ClassShout.Teacher.Desktop.csproj",
       "src\\ClassShout.Classroom\\ClassShout.Classroom.csproj",
       "tools\\ClassShout.DesignPreview\\ClassShout.DesignPreview.csproj",
+      "examples\\plugins\\HelloPlugin\\HelloPlugin.csproj",
+      "tools\\ClassShout.PluginFixture.A\\ClassShout.PluginFixture.A.csproj",
+      "tools\\ClassShout.PluginFixture.B\\ClassShout.PluginFixture.B.csproj",
+      "tools\\ClassShout.PluginFixture.DependencyA\\ClassShout.PluginFixture.DependencyA.csproj",
+      "tools\\ClassShout.PluginFixture.DependencyB\\ClassShout.PluginFixture.DependencyB.csproj",
       "tools\\ClassShout.EndToEnd\\ClassShout.EndToEnd.csproj"
     ]
   }

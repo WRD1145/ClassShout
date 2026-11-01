@@ -18,6 +18,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../ClassShout.PluginFixture.A/ClassShout.PluginFixture.A.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../ClassShout.PluginFixture.B/ClassShout.PluginFixture.B.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\ClassShout.Core\ClassShout.Core.csproj" />
     <ProjectReference Include="..\..\src\ClassShout.Classroom\ClassShout.Classroom.csproj" />
     <!-- 发送队列的"先入先出"是核心保证，直接拿来压 -->

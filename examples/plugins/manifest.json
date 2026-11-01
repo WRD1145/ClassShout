@@ -1,0 +1,14 @@
+{
+  "ApiVersion": 1,
+  "Id": "classshout.hello",
+  "Name": "问候示例",
+  "Version": "1.0.0",
+  "Author": "ClassShout",
+  "Description": "启用后向当前教室发送一条纯展示消息，并查询上屏回执后退出。",
+  "EntryPoint": "ClassShout.Examples.HelloPlugin.dll",
+  "EntryType": "ClassShout.Examples.HelloPlugin.PluginModule",
+  "Runner": "assembly",
+  "Arguments": [],
+  "Hosts": ["teacher", "classroom"],
+  "Platforms": ["windows", "linux"]
+}

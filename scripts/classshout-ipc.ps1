@@ -10,7 +10,11 @@ param(
     [Parameter(Mandatory,ParameterSetName='Stop')][switch]$Stop
 )
 $ErrorActionPreference='Stop'
-$settingsFile=if($Role -eq 'Teacher'){'teacher-extensions.json'}else{'extensions.json'}
+$settingsFile=if($Role -eq 'Teacher'){'teacher-ipc.json'}else{'classroom-ipc.json'}
+if(-not (Test-Path -LiteralPath (Join-Path $DataDirectory $settingsFile))){
+    # 兼容尚未迁移的 1.21 及更早版本。
+    $settingsFile=if($Role -eq 'Teacher'){'teacher-extensions.json'}else{'extensions.json'}
+}
 $port=if($Role -eq 'Teacher'){45904}else{45903}
 $settings=Get-Content -LiteralPath (Join-Path $DataDirectory $settingsFile) -Raw | ConvertFrom-Json
 if(-not $settings.IpcEnabled){throw '当前端尚未启用本机 IPC。'}

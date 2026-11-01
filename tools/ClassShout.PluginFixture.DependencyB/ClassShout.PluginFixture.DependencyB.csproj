@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><AssemblyName>ClassShout.PluginFixture.Dependency</AssemblyName><AssemblyVersion>2.0.0.0</AssemblyVersion></PropertyGroup>
+  <ItemGroup><Compile Include="../ClassShout.PluginFixture.Shared/DependencyInfo.cs" Link="DependencyInfo.cs" /></ItemGroup>
+</Project>

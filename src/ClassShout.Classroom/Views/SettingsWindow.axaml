@@ -180,6 +180,21 @@
         </md3:Md3Card>
 
         <md3:Md3Card Classes="outlined">
+          <StackPanel Spacing="8" IsEnabled="{Binding !IsSpeechLocked}">
+            <TextBlock Classes="cardTitle" Text="本机 IPC" />
+            <TextBlock Text="供外部程序调用，独立于插件。配置：classroom-ipc.json；接口文档见文档站「参考 → IPC 接口」。" TextWrapping="Wrap" />
+            <CheckBox Content="启用 HTTP IPC（127.0.0.1:45903，需要令牌）" IsChecked="{Binding IpcEnabled}" />
+            <TextBlock Text="{Binding ExtensionDirectory}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding ExtensionStatus}" TextWrapping="Wrap" />
+            <Button Classes="outlined" Content="保存 IPC 设置" Command="{Binding ApplyExtensionsCommand}" />
+          </StackPanel>
+        </md3:Md3Card>
+
+        <md3:Md3Card Classes="outlined">
+          <md3:PluginManagerPanel />
+        </md3:Md3Card>
+
+        <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="18" IsEnabled="{Binding !IsSpeechLocked}">
             <TextBlock Classes="cardTitle" Text="朗读设置" />
 
@@ -220,14 +235,6 @@
                          Text="在线语音更自然，但需要教室电脑能上外网；连不上时会自动回落到系统语音，不会不发声。" />
             </StackPanel>
 
-            <StackPanel Spacing="6">
-              <TextBlock Classes="bodyMedium" Text="本机 IPC 与插件" />
-              <CheckBox Content="启用本机 HTTP IPC（需要令牌）" IsChecked="{Binding IpcEnabled}" />
-              <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="插件是可信本机程序，默认关闭；在 extensions.json 中配置绝对路径并显式启用。独立进程不是安全沙箱。" />
-              <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="{Binding ExtensionDirectory}" />
-              <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="{Binding ExtensionStatus}" />
-              <Button Content="保存并应用扩展设置" Command="{Binding ApplyExtensionsCommand}" />
-            </StackPanel>
             <StackPanel Spacing="6" IsVisible="{Binding IsHttpEngine}">
               <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="服务接受 JSON：text、voice、rate、format，返回 16 位 PCM WAV。密钥保存在本机配置中。" />
               <TextBox Watermark="HTTP / HTTPS 服务地址" Text="{Binding HttpTtsEndpoint}" />

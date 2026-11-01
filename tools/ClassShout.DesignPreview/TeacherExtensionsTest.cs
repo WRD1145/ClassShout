@@ -67,12 +67,13 @@ internal static partial class Program
             var hidden = http.GetAsync("/v1/receipts/not-found"); Pump(hidden);
             Check("未知回执返回 404", hidden.Result.StatusCode == HttpStatusCode.NotFound);
             hidden.Result.Dispose();
-            var pluginScript = Path.GetFullPath("../../../../../examples/plugins/hello.ps1", AppContext.BaseDirectory);
-            var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe");
-            settings.Plugins.Add(new() { Id = "teacher-hello", Executable = powershell,
-                Arguments = ["-NoProfile", "-File", pluginScript], Enabled = true });
-            LocalSettings.Save("teacher-extensions.json", settings);
-            Pump(shell.ApplyTeacherExtensionsCommand.ExecuteAsync(null));
+            var package = PluginPackage.Read(CreateExamplePluginPackage(), "teacher");
+            Pump(shell.Plugins.InstallAsync(package));
+            Check("插件包安装后默认禁用", !shell.Plugins.Items.Single().Enabled);
+            Pump(shell.Plugins.SetEnabledAsync(package.Manifest.Id, true));
+            var ipcStillReady = http.GetAsync("/v1/status"); Pump(ipcStillReady);
+            Check("插件启用不影响独立 IPC", ipcStillReady.Result.IsSuccessStatusCode);
+            ipcStillReady.Result.Dispose();
             var pluginDeadline = DateTime.UtcNow.AddSeconds(15);
             while (shell.Deliveries.Count < 2 && DateTime.UtcNow < pluginDeadline)
             { Dispatcher.UIThread.RunJobs(); Thread.Sleep(20); }

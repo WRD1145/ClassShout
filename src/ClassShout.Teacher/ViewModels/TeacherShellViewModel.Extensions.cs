@@ -7,23 +7,33 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace ClassShout.Teacher.ViewModels;
 
-public partial class TeacherShellViewModel
+public partial class TeacherShellViewModel : IPluginManagementContext
 {
-    private LocalExtensionSettings _teacherExtensions = LocalSettings.Load("teacher-extensions.json", static () => new LocalExtensionSettings());
+    private LocalIpcSettings _teacherExtensions = SeparatedExtensionSettings.LoadIpc("teacher");
     private LocalIpcServer? _teacherIpc;
-    private readonly List<ProcessPluginHost> _teacherPlugins = [];
+    private PluginManager? _pluginManager;
     private readonly Dictionary<string, (string Id, string Text, bool Speak)> _teacherExtensionIds = [];
     public bool SupportsTeacherExtensions => !OperatingSystem.IsAndroid() && !OperatingSystem.IsIOS();
+    public bool SupportsPlugins => SupportsTeacherExtensions;
+    public bool CanManagePlugins => SupportsPlugins;
+    public PluginManager Plugins => _pluginManager ??= new("teacher", DispatchTeacherExtensionAsync,
+        message => Post(() => AddLog(message)), action => Post(action), () => CanManagePlugins);
     public bool TeacherIpcEnabled { get => _teacherExtensions.IpcEnabled; set { _teacherExtensions.IpcEnabled = value; OnPropertyChanged(); } }
-    public string TeacherExtensionStatus { get; private set; } = "桌面扩展默认关闭；配置文件为 teacher-extensions.json。";
+    public string TeacherExtensionStatus { get; private set; } = "IPC 默认关闭，配置文件为 teacher-ipc.json。";
     public string TeacherExtensionDirectory => LocalSettings.Directory;
 
     public void StartTeacherExtensions()
     {
         if (!SupportsTeacherExtensions) return;
+        StartTeacherIpc();
+        Plugins.StartEnabled();
+    }
+
+    private void StartTeacherIpc()
+    {
         try
         {
-            if (_teacherExtensions.IpcEnabled)
+            if (_teacherExtensions.IpcEnabled && _teacherIpc is null)
             {
                 _teacherIpc = new LocalIpcServer(_teacherExtensions.Token, (m, p, b) => DispatchTeacherExtensionAsync(m, p, b, "ipc:"), 45904);
                 _teacherIpc.Start();
@@ -32,23 +42,6 @@ public partial class TeacherShellViewModel
         }
         catch (Exception ex) when (ex is ArgumentException or System.Net.Sockets.SocketException)
         { _teacherIpc = null; TeacherExtensionStatus = "教师端 IPC 启动失败：令牌无效或端口被占用。"; }
-        var ids = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var plugin in (_teacherExtensions.Plugins ?? []).Take(16))
-        {
-            if (plugin is null || !plugin.Enabled) continue;
-            if (string.IsNullOrWhiteSpace(plugin.Id) || plugin.Id.Length > 64 || !ids.Add(plugin.Id)
-                || plugin.Id.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '-' or '_'))) continue;
-            try
-            {
-                var host = new ProcessPluginHost(plugin, (m, p, b) => DispatchTeacherExtensionAsync(m, p, b, "plugin:" + plugin.Id + ":"),
-                    message => Post(() => AddLog($"插件 {plugin.Id}：{message}")));
-                host.Start();
-                _teacherPlugins.Add(host);
-                AddLog($"教师端插件已启动：{plugin.Id}。");
-            }
-            catch (Exception ex) when (ex is ArgumentException or IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
-            { AddLog($"教师端插件启动失败：{plugin.Id}，请检查清单和可执行路径。"); }
-        }
         OnPropertyChanged(nameof(TeacherExtensionStatus));
         AddLog(TeacherExtensionStatus);
     }
@@ -57,20 +50,22 @@ public partial class TeacherShellViewModel
     private async Task ApplyTeacherExtensionsAsync()
     {
         if (!SupportsTeacherExtensions) return;
-        var enabled = _teacherExtensions.IpcEnabled;
-        _teacherExtensions = LocalSettings.Load("teacher-extensions.json", static () => new LocalExtensionSettings());
-        _teacherExtensions.IpcEnabled = enabled;
-        if (!LocalSettings.Save("teacher-extensions.json", _teacherExtensions))
-        { TeacherExtensionStatus = "教师端扩展配置保存失败。"; OnPropertyChanged(nameof(TeacherExtensionStatus)); return; }
-        await StopTeacherExtensionsAsync();
-        StartTeacherExtensions();
+        if (!LocalSettings.Save(SeparatedExtensionSettings.IpcFile("teacher"), _teacherExtensions))
+        { TeacherExtensionStatus = "教师端 IPC 配置保存失败。"; OnPropertyChanged(nameof(TeacherExtensionStatus)); return; }
+        // IPC 独立应用，不停止或重启任何插件。
+        await StopTeacherIpcAsync();
+        StartTeacherIpc();
+    }
+
+    private async Task StopTeacherIpcAsync()
+    {
+        if (_teacherIpc is { } server) { _teacherIpc = null; await server.DisposeAsync(); }
     }
 
     private async Task StopTeacherExtensionsAsync()
     {
-        if (_teacherIpc is { } server) { _teacherIpc = null; await server.DisposeAsync(); }
-        foreach (var plugin in _teacherPlugins) await plugin.DisposeAsync();
-        _teacherPlugins.Clear();
+        await StopTeacherIpcAsync();
+        if (_pluginManager is not null) await _pluginManager.DisposeAsync();
     }
 
     private async Task<IpcResponse> DispatchTeacherExtensionAsync(string method, string path, string body, string scope)

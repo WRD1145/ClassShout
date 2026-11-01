@@ -1953,13 +1953,17 @@
             </md3:Md3Card>
             <md3:Md3Card Classes="outlined" IsVisible="{Binding SupportsTeacherExtensions}">
               <StackPanel Spacing="8">
-                <TextBlock Text="教师端 IPC 与插件" Classes="bodyMedium" />
+                <TextBlock Text="本机 IPC" Classes="bodyMedium" />
                 <CheckBox Content="启用本机 IPC（端口 45904，需要令牌）" IsChecked="{Binding TeacherIpcEnabled}" />
-                <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="向当前连接的教室发送；插件使用独立进程，配置在 teacher-extensions.json，默认禁用。仅运行可信程序。" />
+                <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="供外部程序向当前连接的教室发送，独立于插件。配置：teacher-ipc.json；接口文档见文档站「参考 → IPC 接口」。" />
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="{Binding TeacherExtensionDirectory}" />
                 <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="{Binding TeacherExtensionStatus}" />
-                <Button Content="保存并应用教师端扩展" Command="{Binding ApplyTeacherExtensionsCommand}" />
+                <Button Classes="outlined" Content="保存 IPC 设置" Command="{Binding ApplyTeacherExtensionsCommand}" />
               </StackPanel>
+            </md3:Md3Card>
+
+            <md3:Md3Card Classes="outlined" IsVisible="{Binding SupportsTeacherExtensions}">
+              <md3:PluginManagerPanel />
             </md3:Md3Card>
             <!--
               「关于」：版本号、运行环境，以及藏在版本号后面的开发者模式。

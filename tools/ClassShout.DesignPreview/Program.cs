@@ -986,6 +986,7 @@ internal static partial class Program
 
         if (args.Contains("--teacher-extension-selftest")) return VerifyTeacherExtensionsRuntime();
         if (args.Contains("--maintenance-selftest")) return VerifyMaintenanceRuntime();
+        if (args.Contains("--plugin-management-selftest")) return VerifyPluginManagementRuntime();
 
         // 字体先验：解析不到就该立刻失败，不必等渲染完再看图猜
         var fontsPassed = VerifyBundledFonts();
@@ -1010,6 +1011,8 @@ internal static partial class Program
 
         var scenes = new Scene[]
         {
+            new("plugin-manager-classroom", () => CreatePluginManagementPreview(false), 620, 1250, _ => null),
+            new("plugin-manager-teacher", () => CreatePluginManagementPreview(true), 430, 1150, _ => null),
             new("maintenance-classroom", () => new ClassShout.Design.Controls.MaintenancePanel { Margin = new Thickness(16), DataContext = new ClassroomViewModel() }, 620, 600, _ => null),
             new("maintenance-teacher", () => new ClassShout.Design.Controls.MaintenancePanel { Margin = new Thickness(16), DataContext = new TeacherShellViewModel() }, 430, 700, _ => null),
             new("design-system",

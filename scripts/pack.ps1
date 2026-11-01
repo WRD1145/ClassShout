@@ -53,6 +53,9 @@ param(
     # 安装版平铺（不需要 DOTNET_ROOT，双击快捷方式就能跑），详见 tools\ClassShout.Setup。
     [switch]$Installer,
 
+    # 正式流水线必须使用固定证书与 keystore，缺失时失败而非生成临时身份。
+    [switch]$RequireSigning,
+
     [string]$OutputRoot = 'dist'
 )
 
@@ -60,9 +63,11 @@ $ErrorActionPreference = 'Stop'
 
 # 以脚本自身位置定位仓库根目录，保证从任何工作目录调用都正确
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'release-signing.ps1')
 Push-Location $repoRoot
 
 try {
+    Initialize-ReleaseSigning -Required:$RequireSigning -SkipAndroid:$SkipAndroid
     # ---------- 读取版本号 ----------
     $propsContent = Get-Content (Join-Path $repoRoot 'Directory.Build.props') -Raw
     $version = if ($propsContent -match '<Version>([^<]+)</Version>') { $Matches[1] } else { '0.0.0' }
@@ -316,6 +321,7 @@ try {
             Where-Object { $_.Extension -in '.config', '.pdb' } |
             Remove-Item -Force -ErrorAction SilentlyContinue
 
+        Sign-ReleaseWindowsFiles -Directory $out
         $size = (Get-ChildItem $out -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB
         Write-Host ("    {0,-12} {1,8:N1} MB（{2} 个文件）" -f $item.Folder, $size, (Get-ChildItem $out -Recurse -File).Count)
     }
@@ -398,7 +404,7 @@ try {
         # 通用包：包含 csproj 里声明的全部 ABI
         Write-Host '  正在打包通用 APK（arm64 + x64）…'
         $universalDir = Join-Path $OutputRoot 'obj\universal'
-        & dotnet publish $androidProject -c $Configuration -o $universalDir --nologo -v q
+        & dotnet publish $androidProject -c $Configuration -o $universalDir @script:AndroidSigningArguments --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "Android 通用包发布失败（退出码 $LASTEXITCODE）"
         }
@@ -409,6 +415,7 @@ try {
         }
 
         $universalTarget = Join-Path $androidOut "classshout-teacher-$version-universal.apk"
+        Assert-ReleaseApkSignature -Path $universalApk.FullName
         Copy-Item $universalApk.FullName $universalTarget
         Remove-Item $universalDir -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -420,15 +427,17 @@ try {
                 Write-Host "  正在打包 $abi…"
                 $abiDir = Join-Path $OutputRoot "obj\$abi"
                 & dotnet publish $androidProject -c $Configuration -o $abiDir `
-                    "-p:AndroidAbi=$abi" --nologo -v q
+                    "-p:AndroidAbi=$abi" @script:AndroidSigningArguments --nologo -v q
 
                 if ($LASTEXITCODE -ne 0) {
+                    if ($RequireSigning) { throw "$abi 正式打包失败，禁止跳过后发布不完整结果。" }
                     Write-Warning "$abi 打包失败，已跳过。"
                     continue
                 }
 
                 $apk = Get-ChildItem $abiDir -Filter '*-Signed.apk' | Select-Object -First 1
                 if ($apk) {
+                    Assert-ReleaseApkSignature -Path $apk.FullName
                     $short = $abi -replace 'android-', ''
                     Copy-Item $apk.FullName (Join-Path $androidOut "classshout-teacher-$version-$short.apk")
                 }
@@ -728,6 +737,7 @@ $LaunchHint
                 Where-Object { $_.Extension -in '.config', '.pdb' } |
                 Remove-Item -Force -ErrorAction SilentlyContinue
 
+            Sign-ReleaseWindowsFiles -Directory $payloadDir
             # 2) 压成一个 zip 内嵌进安装程序。
             #    顶层不带目录：解开时直接落在安装目录里。
             $payloadZip = Join-Path $setupOut "$($app.Id)-payload.zip"
@@ -779,6 +789,7 @@ $LaunchHint
                 throw ("安装程序比它要装的包还小（{0:N1} MB < {1:N1} MB）—— payload 没嵌进去" -f ($setupSize / 1MB), ($payloadSize / 1MB))
             }
 
+            Sign-ReleaseWindowsFiles -Directory $setupPublish
             Copy-Item $setupExe (Join-Path $releaseOut $app.Asset) -Force
 
             Write-Host ("    {0,-44} {1,8:N1} MB" -f $app.Asset, ($setupSize / 1MB))
@@ -817,7 +828,12 @@ $LaunchHint
         (New-Object System.Text.UTF8Encoding($false)))
 
     Write-Host ''
-    Write-Host '可发布资产（dist\release，附件名即文件名）：' -ForegroundColor Green
+    if ($script:ReleaseCertificate) {
+        Write-Host "已签名资产（$releaseOut，附件名即文件名）：" -ForegroundColor Green
+    }
+    else {
+        Write-Host "本地未签名验收资产（$releaseOut；不能作为正式签名版发布）：" -ForegroundColor Yellow
+    }
     Get-ChildItem $releaseOut -File | Sort-Object Name | ForEach-Object {
         Write-Host ("    {0,-46} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB))
     }
@@ -838,5 +854,6 @@ $LaunchHint
     }
 }
 finally {
+    Complete-ReleaseSigning
     Pop-Location
 }

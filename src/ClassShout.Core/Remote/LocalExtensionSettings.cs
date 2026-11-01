@@ -12,6 +12,14 @@ public sealed class LocalExtensionSettings
 
 public sealed class ProcessPluginSettings
 {
+    public string Name { get; set; } = "";
+    public string Version { get; set; } = "";
+    public string Author { get; set; } = "";
+    public string Description { get; set; } = "";
+    public bool ManagedPackage { get; set; }
+    public string Runner { get; set; } = "native";
+    public string EntryPoint { get; set; } = "";
+    public string EntryType { get; set; } = "";
     public string Id { get; set; } = "";
     public string Executable { get; set; } = "";
     public List<string> Arguments { get; set; } = [];

@@ -20,6 +20,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../examples/plugins/HelloPlugin/HelloPlugin.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../ClassShout.PluginFixture.A/ClassShout.PluginFixture.A.csproj" ReferenceOutputAssembly="false" />
     <!-- UseHeadlessDrawing=false 时才会走 Skia 真实渲染，从而能截到像素 -->
     <PackageReference Include="Avalonia.Headless" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Skia" Version="$(AvaloniaVersion)" />

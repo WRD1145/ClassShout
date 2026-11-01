@@ -35,6 +35,10 @@ on:
         description: 手动指定版本（例如 1.18.1），留空则读 Directory.Build.props
         type: string
         required: false
+      allow_unsigned_dry_run:
+        description: 仅在 dry_run 时允许未签名验收包，绝不发布
+        type: boolean
+        default: false
 
 # 同一时间只跑一条：两次合并挨得太近时，后一条排队而不是并行去建发行版
 concurrency:
@@ -125,6 +129,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 准备统一签名材料
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+          ANDROID_SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+        run: |
+          $allowUnsigned = '${{ github.event.inputs.dry_run }}' -eq 'true' -and '${{ github.event.inputs.allow_unsigned_dry_run }}' -eq 'true'
+          ./scripts/prepare-release-signing.ps1 -AllowUnsignedDryRun:$allowUnsigned
+
       - name: 装 .NET 10
         uses: actions/setup-dotnet@v4
         with:
@@ -153,10 +170,15 @@ jobs:
         shell: pwsh
         env:
           MSBUILDDISABLENODEREUSE: '1'
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+          ANDROID_SIGNING_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           # -Installer：额外产出两个安装/更新程序（exe）。它们与便携版 zip 是两种目录布局，
           # 安装版平铺（双击快捷方式就能跑，不需要 DOTNET_ROOT）。
-          ./scripts/pack.ps1 -Configuration Release -IncludeLinuxServer -Installer
+          $requireSigning = $env:CLASSSHOUT_SIGNING_REQUIRED -eq 'true'
+          ./scripts/pack.ps1 -Configuration Release -IncludeLinuxServer -Installer -RequireSigning:$requireSigning
 
       - name: 看看打出来了什么
         shell: pwsh
@@ -169,6 +191,11 @@ jobs:
           name: release-assets
           path: dist/release/*
           if-no-files-found: error
+
+      - name: 清理签名私钥临时文件
+        if: always()
+        shell: pwsh
+        run: ./scripts/cleanup-release-signing.ps1
 
   # ---------- 3. macOS：只构建，不进发行版 ----------
   pack-macos:

@@ -67,6 +67,8 @@ internal static partial class Program
         }
         if (args.Contains("--extensions")) return await AssertExtensionsAsync();
         if (args.Contains("--maintenance")) return await AssertMaintenanceAsync();
+        if (args.Contains("--plugin-management")) return await AssertPluginManagementAsync();
+        await AssertPluginManagementAsync();
         await AssertMaintenanceAsync();
         await AssertExtensionsAsync();
         if (args.Contains("--live-receipt")) return await AssertLiveReceiptAsync();

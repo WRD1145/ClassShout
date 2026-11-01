@@ -196,7 +196,14 @@ Write-Host '================ 诊断与迁移界面交互 ================' -Fore
 & (Join-Path $root "tools/ClassShout.DesignPreview/bin/$Configuration/net10.0-windows/ClassShout.DesignPreview.exe") --maintenance-selftest
 $maintenanceExit = $LASTEXITCODE
 Write-Host "诊断与迁移界面退出码：$maintenanceExit"
-if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $singleExit -ne 0 -or $windowExit -ne 0 -or $teacherExtensionExit -ne 0 -or $maintenanceExit -ne 0 -or $webuiExit -ne 0 -or $logFailures -ne 0) {
+Write-Host '================ 插件管理界面交互 ================' -ForegroundColor Yellow
+& (Join-Path $root "tools/ClassShout.DesignPreview/bin/$Configuration/net10.0-windows/ClassShout.DesignPreview.exe") --plugin-management-selftest
+$pluginManagementExit = $LASTEXITCODE
+Write-Host "插件管理界面退出码：$pluginManagementExit"
+Write-Host '================ 统一签名保护策略 ================' -ForegroundColor Yellow
+& (Join-Path $PSScriptRoot 'test-release-signing.ps1')
+$signingPolicyExit = $LASTEXITCODE
+if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $singleExit -ne 0 -or $windowExit -ne 0 -or $teacherExtensionExit -ne 0 -or $maintenanceExit -ne 0 -or $pluginManagementExit -ne 0 -or $signingPolicyExit -ne 0 -or $webuiExit -ne 0 -or $logFailures -ne 0) {
     Write-Host '存在失败项。' -ForegroundColor Red
     exit 1
 }

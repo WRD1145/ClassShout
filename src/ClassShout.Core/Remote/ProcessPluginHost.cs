@@ -5,7 +5,7 @@ using ClassShout.Core.Net;
 namespace ClassShout.Core.Remote;
 
 /// <summary>显式启用的可信本机插件；独立进程 JSON 行协议，非安全沙箱。</summary>
-public sealed class ProcessPluginHost : IAsyncDisposable
+public sealed class ProcessPluginHost : IPluginRuntime
 {
     private readonly Process _process;
     private readonly CancellationTokenSource _stop = new();
@@ -13,6 +13,14 @@ public sealed class ProcessPluginHost : IAsyncDisposable
     private readonly Action<string> _log;
     private Task? _reader;
     private Task? _errors;
+    public event Action? Stopped;
+    public bool RequiresRestart => false;
+    public bool IsStarting => false;
+    public Task StartAsync() { Start(); return Task.CompletedTask; }
+    public bool IsRunning
+    {
+        get { try { return !_process.HasExited; } catch (InvalidOperationException) { return false; } }
+    }
 
     public ProcessPluginHost(ProcessPluginSettings settings,
         Func<string, string, string, Task<IpcResponse>> dispatch, Action<string> log)
@@ -87,6 +95,7 @@ public sealed class ProcessPluginHost : IAsyncDisposable
             try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); }
             catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
             _log("插件进程已退出；不会自动重启。");
+            Stopped?.Invoke();
         }
     }
 

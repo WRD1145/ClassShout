@@ -1,0 +1,22 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:remote="clr-namespace:ClassShout.Core.Remote;assembly=ClassShout.Core"
+             x:Class="ClassShout.Design.Controls.PluginManagerPanel">
+  <StackPanel Spacing="10">
+    <TextBlock Text="插件管理" FontWeight="SemiBold" FontSize="18" />
+    <TextBlock Text="从本地包安装托管插件，查看详情并管理启停。每个插件拥有独立程序集加载上下文和 DI 容器；仅启用可信插件，安装后默认禁用。" TextWrapping="Wrap" />
+    <WrapPanel>
+      <Button x:Name="Install" Classes="tonal" Content="从文件安装…" Click="OnInstall" Margin="0,0,6,0" />
+      <Button Classes="outlined" Content="刷新状态" Click="OnRefresh" />
+    </WrapPanel>
+    <TextBox x:Name="Search" Watermark="搜索已安装插件（名称 / 作者 / 标识）" TextChanged="OnSearch" />
+    <TextBlock x:Name="Summary" TextWrapping="Wrap" />
+    <StackPanel x:Name="Rows" Spacing="8" />
+    <StackPanel x:Name="Confirmation" IsVisible="False" Spacing="6">
+      <TextBlock x:Name="Preview" TextWrapping="Wrap" />
+      <Button x:Name="Confirm" Classes="tonal" Click="OnConfirm" />
+      <Button Classes="outlined" Content="取消" Click="OnCancel" />
+    </StackPanel>
+    <TextBlock x:Name="Details" TextWrapping="Wrap" />
+    <TextBlock x:Name="Status" TextWrapping="Wrap" />
+  </StackPanel>
+</UserControl>

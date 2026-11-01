@@ -6,44 +6,53 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace ClassShout.Classroom.ViewModels;
 
-public partial class ClassroomViewModel
+public partial class ClassroomViewModel : IPluginManagementContext
 {
-    private LocalExtensionSettings _extensions = LocalSettings.Load("extensions.json", static () => new LocalExtensionSettings());
+    private LocalIpcSettings _extensions = SeparatedExtensionSettings.LoadIpc("classroom");
     private LocalIpcServer? _ipcServer;
-    private readonly List<ProcessPluginHost> _pluginHosts = [];
+    private PluginManager? _pluginManager;
     private readonly Dictionary<string, DeliveryReceipt> _extensionReceipts = [];
     private readonly Dictionary<string, (string InternalId, string Text, bool Speak)> _extensionRequests = [];
     private readonly object _extensionLock = new();
     private static readonly JsonSerializerOptions ExtensionJson = new(JsonSerializerDefaults.Web);
+    public bool SupportsPlugins => true;
+    public bool CanManagePlugins => !IsSpeechLocked;
+    public PluginManager Plugins => _pluginManager ??= new("classroom", DispatchExtensionAsync,
+        message => Post(() => AddLog("插件", message)), action => Post(action), () => CanManagePlugins);
     public bool IpcEnabled { get => _extensions.IpcEnabled; set { _extensions.IpcEnabled = value; OnPropertyChanged(); } }
     public string ExtensionDirectory => LocalSettings.Directory;
-    public string ExtensionStatus { get; private set; } = "扩展默认关闭。令牌和插件清单位于本机 extensions.json。";
+    public string ExtensionStatus { get; private set; } = "IPC 默认关闭，配置文件为 classroom-ipc.json。";
 
     [RelayCommand]
     private async Task ApplyExtensionsAsync()
     {
-        var enabled = _extensions.IpcEnabled;
-        _extensions = LocalSettings.Load("extensions.json", static () => new LocalExtensionSettings());
-        _extensions.IpcEnabled = enabled;
-        if (!LocalSettings.Save("extensions.json", _extensions))
+        if (IsSpeechLocked) { ExtensionStatus = "请先解锁受保护的 IPC 设置。"; OnPropertyChanged(nameof(ExtensionStatus)); return; }
+        if (!LocalSettings.Save(SeparatedExtensionSettings.IpcFile("classroom"), _extensions))
         {
-            ExtensionStatus = "扩展配置保存失败，未应用。";
+            ExtensionStatus = "IPC 配置保存失败，未应用。";
             OnPropertyChanged(nameof(ExtensionStatus));
             return;
         }
-        await StopExtensionsAsync();
-        StartExtensions();
+        // 插件与 IPC 独立启停，应用监听开关不重启插件。
+        await StopIpcAsync();
+        StartIpc();
     }
 
     private void StartExtensions()
     {
-        if (_extensions.IpcEnabled)
+        StartIpc();
+        Plugins.StartEnabled();
+    }
+
+    private void StartIpc()
+    {
+        if (_extensions.IpcEnabled && _ipcServer is null)
         {
             try
             {
                 _ipcServer = new LocalIpcServer(_extensions.Token, DispatchExtensionAsync);
                 _ipcServer.Start();
-                ExtensionStatus = "IPC 已启动：127.0.0.1:45903；调用需要 extensions.json 中的令牌。";
+                ExtensionStatus = "IPC 已启动：127.0.0.1:45903；令牌保存在 classroom-ipc.json。";
             }
             catch (Exception ex) when (ex is ArgumentException or System.Net.Sockets.SocketException)
             {
@@ -52,28 +61,8 @@ public partial class ClassroomViewModel
             }
         }
         else ExtensionStatus = "IPC 已关闭。";
-        var ids = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var plugin in (_extensions.Plugins ?? []).Take(16))
-        {
-            if (plugin is null || !plugin.Enabled) continue;
-            if (string.IsNullOrWhiteSpace(plugin.Id) || plugin.Id.Length > 64
-                || plugin.Id.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-')) || !ids.Add(plugin.Id))
-            { AddLog("插件", "插件标识为空、过长或重复，未启动。"); continue; }
-            try
-            {
-                var id = plugin.Id;
-                // 插件只能调用自己的本地命令命名空间，不能拿到 IPC 或中继令牌。
-                var host = new ProcessPluginHost(plugin, (method, path, body) => DispatchExtensionAsync(method, path, body, "plugin:" + id + ":"),
-                    message => Post(() => AddLog("插件", $"{id}：{message}")));
-                host.Start();
-                _pluginHosts.Add(host);
-                AddLog("插件", $"已启动插件：{id}。");
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException or ArgumentException or System.ComponentModel.Win32Exception)
-            { AddLog("插件", $"无法启动插件：{plugin.Id}，请检查可执行路径和清单。"); }
-        }
         OnPropertyChanged(nameof(ExtensionStatus));
-        AddLog("扩展", ExtensionStatus);
+        AddLog("IPC", ExtensionStatus);
     }
 
     private Task<IpcResponse> DispatchExtensionAsync(string method, string path, string body)
@@ -143,11 +132,15 @@ public partial class ClassroomViewModel
         }
     }
 
-    private async Task StopExtensionsAsync()
+    private async Task StopIpcAsync()
     {
         if (_ipcServer is { } server) { _ipcServer = null; await server.DisposeAsync(); }
-        foreach (var host in _pluginHosts) await host.DisposeAsync();
-        _pluginHosts.Clear();
+    }
+
+    private async Task StopExtensionsAsync()
+    {
+        await StopIpcAsync();
+        if (_pluginManager is not null) await _pluginManager.DisposeAsync();
     }
 
     private sealed record ExtensionShout(string Id, string Text, bool Speak = false);
