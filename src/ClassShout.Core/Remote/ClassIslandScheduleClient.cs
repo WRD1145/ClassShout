@@ -8,16 +8,16 @@ public sealed class ClassIslandScheduleClient(HttpClient http, TeacherRelaySetti
 {
     private string Url(string uuid) => $"{settings.ServerUrl?.TrimEnd('/')}/api/auth/classrooms/{Uri.EscapeDataString(uuid)}/classisland";
 
-    public async Task<ClassIslandSchedule> ReadAsync(string uuid)
+    public async Task<ClassIslandSchedule> ReadAsync(string uuid, CancellationToken cancellationToken = default)
     {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, Url(uuid));
             request.Headers.TryAddWithoutValidation(RelayPaths.AuthTokenHeader, settings.AuthToken);
-            using var response = await http.SendAsync(request);
+            using var response = await http.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
                 return new ClassIslandSchedule { Error = $"服务器拒绝读取课表：HTTP {(int)response.StatusCode}，请检查登录和教室授权。" };
-            return await response.Content.ReadFromJsonAsync<ClassIslandSchedule>()
+            return await response.Content.ReadFromJsonAsync<ClassIslandSchedule>(cancellationToken: cancellationToken)
                 ?? new ClassIslandSchedule { Error = "服务器未返回课表。" };
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)

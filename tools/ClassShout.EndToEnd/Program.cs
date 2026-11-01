@@ -66,6 +66,8 @@ internal static partial class Program
             return rejected?.Contains("400") == true && accepted?.Contains("200") == true ? 0 : 1;
         }
         if (args.Contains("--extensions")) return await AssertExtensionsAsync();
+        if (args.Contains("--maintenance")) return await AssertMaintenanceAsync();
+        await AssertMaintenanceAsync();
         await AssertExtensionsAsync();
         if (args.Contains("--live-receipt")) return await AssertLiveReceiptAsync();
         var ciLiveIndex = Array.IndexOf(args, "--live-ci");

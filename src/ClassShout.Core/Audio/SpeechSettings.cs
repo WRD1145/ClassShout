@@ -28,6 +28,9 @@ public enum SpeechEngine
 /// </summary>
 public sealed class ClassroomSpeechSettings
 {
+    public int Volume { get; set; } = 100;
+    public int Rate { get; set; } = 1;
+    public string? SystemVoice { get; set; }
     public HttpTtsSettings Http { get; set; } = new();
     /// <summary>选择的引擎。默认系统语音 —— 它不依赖外网，一定能用。</summary>
     public SpeechEngine Engine { get; set; } = SpeechEngine.System;

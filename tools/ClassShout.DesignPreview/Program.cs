@@ -985,6 +985,7 @@ internal static partial class Program
             .SetupWithoutStarting();
 
         if (args.Contains("--teacher-extension-selftest")) return VerifyTeacherExtensionsRuntime();
+        if (args.Contains("--maintenance-selftest")) return VerifyMaintenanceRuntime();
 
         // 字体先验：解析不到就该立刻失败，不必等渲染完再看图猜
         var fontsPassed = VerifyBundledFonts();
@@ -1009,6 +1010,8 @@ internal static partial class Program
 
         var scenes = new Scene[]
         {
+            new("maintenance-classroom", () => new ClassShout.Design.Controls.MaintenancePanel { Margin = new Thickness(16), DataContext = new ClassroomViewModel() }, 620, 600, _ => null),
+            new("maintenance-teacher", () => new ClassShout.Design.Controls.MaintenancePanel { Margin = new Thickness(16), DataContext = new TeacherShellViewModel() }, 430, 700, _ => null),
             new("design-system",
                 () => new Showcase(), 880, 1560,
                 isDark => isDark ? Combine(CommonDark, GalleryExtraDark) : Combine(CommonLight, GalleryExtraLight)),
@@ -1179,7 +1182,7 @@ internal static partial class Program
 
             // 教师端「设备」页：服务器绑定、账号、以及语音转文字的密钥自填都在这里。            // 单独一个场景是因为它和首页内容完全不同，而配置类界面最容易排版走样。
             new("teacher-extension-settings",
-                () => new TeacherView { DataContext = new TeacherShellViewModel { ActivePage = TeacherPage.Devices } }, 430, 4600,
+                () => new TeacherView { DataContext = new TeacherShellViewModel { ActivePage = TeacherPage.Devices } }, 430, 5200,
                 _ => null),
             new("teacher-devices",
                 () =>
@@ -1624,7 +1627,7 @@ internal static partial class Program
                     vm.SelectedEngine = vm.EngineOptions.First(option => option.Value == ClassShout.Core.Audio.SpeechEngine.Http);
                     vm.HttpTtsEndpoint = "http://127.0.0.1:18109/speech";
                     vm.HttpTtsVoice = "local-voice";
-                    return new ClassroomSettings { DataContext = vm, Height = 4600 };
+                    return new ClassroomSettings { DataContext = vm, Height = 5200 };
                 }, 0, 0, _ => null),
 
             // 语音转文字卡片展开的样子。

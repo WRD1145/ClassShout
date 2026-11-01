@@ -176,6 +176,10 @@
         </md3:Md3Card>
 
         <md3:Md3Card Classes="outlined">
+          <md3:MaintenancePanel />
+        </md3:Md3Card>
+
+        <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="18" IsEnabled="{Binding !IsSpeechLocked}">
             <TextBlock Classes="cardTitle" Text="朗读设置" />
 

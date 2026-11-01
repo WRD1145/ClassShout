@@ -166,7 +166,7 @@ public partial class MainView : UserControl
     /// 「复制诊断信息」的文本。
     ///
     /// 只放排障时一定会被问到的几项，且**不放任何凭据**：
-    /// 服务器地址与绑定教室是排障必需的，但登录令牌一概不进这里 ——
+    /// 服务器地址可能嵌入凭据，因此只报告是否配置；登录令牌一概不进这里 ——
     /// 这份文本的用途是贴到别处给人看，写进去就等于泄露。
     /// </summary>
     private string BuildDiagnostics()
@@ -177,7 +177,7 @@ public partial class MainView : UserControl
         }
 
         var text = new System.Text.StringBuilder();
-        text.AppendLine($"服务器地址 ：{(vm.IsServerConfigured ? vm.SavedServerUrl : "（未配置）")}");
+        text.AppendLine($"服务器地址 ：{(vm.IsServerConfigured ? "已配置（地址隐藏，避免泄漏嵌入式凭据）" : "（未配置）")}");
         text.AppendLine($"账号       ：{(vm.IsSignedIn ? vm.SignedInName : "未登录")}");
         text.AppendLine($"绑定教室   ：{(vm.IsServerBound ? vm.ClassroomName : "未绑定")}");
         text.AppendLine($"服务器状态 ：{vm.ServerStatusText}");

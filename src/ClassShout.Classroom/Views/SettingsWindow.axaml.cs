@@ -104,7 +104,7 @@ public partial class SettingsWindow : Window
         text.AppendLine($"教室名     ：{vm.ClassroomName}");
         text.AppendLine($"本机地址   ：{vm.LocalAddressDisplay}");
         text.AppendLine($"教室 UUID  ：{vm.RelayUuid}");
-        text.AppendLine($"服务器地址 ：{(string.IsNullOrWhiteSpace(vm.RelayServerUrl) ? "（未配置）" : vm.RelayServerUrl)}");
+        text.AppendLine($"服务器地址 ：{(string.IsNullOrWhiteSpace(vm.RelayServerUrl) ? "（未配置）" : "已配置（地址隐藏，避免泄漏嵌入式凭据）")}");
         text.AppendLine($"服务器链路 ：{vm.RelayStatusText}");
         text.AppendLine($"顶栏状态   ：{vm.TeacherCountText}");
         text.AppendLine($"配置目录   ：{LocalSettings.Directory}");

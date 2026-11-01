@@ -149,6 +149,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     public ClassroomViewModel(int port = ShoutProtocol.DefaultTcpPort, int discoveryPort = ShoutProtocol.DefaultDiscoveryPort)
     {
+        _maintenancePort = port;
         _server = new ClassroomServer(port);
         _announcer = new ClassroomAnnouncer(discoveryPort);
 
@@ -257,7 +258,10 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         _selectedEngine = EngineOptions.FirstOrDefault(o => o.Value == _speechSettings.Engine) ?? EngineOptions[0];
         _speech.Engine = _selectedEngine.Value;
 
-        SelectedVoice = _speech.GetDefaultChineseVoice() ?? Voices.FirstOrDefault();
+        _selectedVoice = Voices.Contains(_speechSettings.SystemVoice ?? "") ? _speechSettings.SystemVoice
+            : _speech.GetDefaultChineseVoice() ?? Voices.FirstOrDefault();
+        _volume = Math.Clamp(_speechSettings.Volume, 0, 100);
+        _rate = Math.Clamp(_speechSettings.Rate, -6, 6);
 
         LocalAddress = $"{NetworkUtility.GetLocalIPv4()}:{port}";
 
@@ -722,7 +726,14 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         NotifyTeachers();
     }
 
-    partial void OnVolumeChanged(int value) => NotifyTeachers();
+    partial void OnVolumeChanged(int value)
+    {
+        _speechSettings.Volume = Math.Clamp(value, 0, 100);
+        LocalSettings.SaveSpeech(_speechSettings);
+        NotifyTeachers();
+    }
+    partial void OnRateChanged(int value) { _speechSettings.Rate = Math.Clamp(value, -6, 6); LocalSettings.SaveSpeech(_speechSettings); }
+    partial void OnSelectedVoiceChanged(string? value) { _speechSettings.SystemVoice = value; LocalSettings.SaveSpeech(_speechSettings); }
 
     // ======================== 设置口令（可选的本机 PIN） ========================
 

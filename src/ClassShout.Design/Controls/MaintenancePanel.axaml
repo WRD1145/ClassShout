@@ -1,0 +1,19 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="ClassShout.Design.Controls.MaintenancePanel">
+  <StackPanel Spacing="8">
+    <TextBlock Text="连接诊断与配置迁移" FontWeight="SemiBold" />
+    <TextBlock Text="检查各环节，不发送喊话；第三方 TTS 会合成一条测试语音，但不播放。报告不包含地址、密钥或原始日志。" TextWrapping="Wrap" />
+    <Button x:Name="Test" Classes="tonal" Content="一键测试连接" Click="OnTest" />
+    <TextBlock x:Name="Results" Text="尚未测试。" TextWrapping="Wrap" />
+    <Button x:Name="Report" Classes="outlined" Content="导出脱敏诊断报告" IsEnabled="False" Click="OnReport" />
+    <TextBlock Text="备份仅包含本端铃声、快捷语或 TTS 音色等白名单配置；不导出账户、令牌、密钥、TTS 地址或插件清单。" TextWrapping="Wrap" />
+    <Button x:Name="Export" Classes="outlined" Content="导出配置备份" Click="OnExport" />
+    <Button x:Name="Import" Classes="outlined" Content="选择配置备份…" Click="OnImport" />
+    <StackPanel x:Name="Confirmation" IsVisible="False" Spacing="6">
+      <TextBlock x:Name="Preview" TextWrapping="Wrap" />
+      <Button Classes="tonal" Content="确认覆盖并导入" Click="OnConfirm" />
+      <Button Classes="outlined" Content="取消导入" Click="OnCancel" />
+    </StackPanel>
+    <TextBlock x:Name="Status" TextWrapping="Wrap" />
+  </StackPanel>
+</UserControl>

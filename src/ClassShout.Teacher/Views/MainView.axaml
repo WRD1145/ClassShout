@@ -1948,6 +1948,9 @@
               </StackPanel>
             </md3:Md3Card>
 
+            <md3:Md3Card Classes="outlined">
+              <md3:MaintenancePanel />
+            </md3:Md3Card>
             <md3:Md3Card Classes="outlined" IsVisible="{Binding SupportsTeacherExtensions}">
               <StackPanel Spacing="8">
                 <TextBlock Text="教师端 IPC 与插件" Classes="bodyMedium" />
