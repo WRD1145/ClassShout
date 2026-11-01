@@ -129,7 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 准备统一签名材料
+      - name: 准备 Android 固定签名（Windows 证书可选）
         shell: pwsh
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}

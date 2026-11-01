@@ -9,29 +9,34 @@ function Initialize-ReleaseSigning {
     $script:ReleaseApkSigner = $null
     $windowsNames = @('WINDOWS_SIGNING_PFX_PATH','WINDOWS_SIGNING_PASSWORD')
     $androidNames = @('ANDROID_SIGNING_KEYSTORE_PATH','ANDROID_SIGNING_ALIAS','ANDROID_KEYSTORE_PASSWORD','ANDROID_KEY_PASSWORD')
-    $allNames = @($windowsNames) + $(if ($SkipAndroid) { @() } else { $androidNames })
-    $present = @($allNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
-    if ($Required -or $present.Count -gt 0) {
-        $missing = @($allNames | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+    $windowsPresent = @($windowsNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+    if ($windowsPresent.Count -eq 1) { throw '可选 Windows 签名配置不完整，请同时配置 PFX 和密码，或同时留空。' }
+    $androidPresent = @($androidNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+    if (-not $SkipAndroid -and ($Required -or $androidPresent.Count -gt 0)) {
+        $missing = @($androidNames | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
         if ($missing.Count -gt 0) { throw ('正式签名配置不完整，缺少：'+($missing -join '、')+'。未退回临时或调试签名。') }
-    } else {
-        Write-Warning '未配置正式签名，本次仅生成本地开发验收包，不得作为正式签名发行版发布。'
+    }
+    if ($windowsPresent.Count -eq 0) { Write-Warning '未配置可选 Windows 证书，桌面文件不做 Authenticode 签名。' }
+    if ($windowsPresent.Count -eq 2) {
+        if (-not $IsWindows) { throw 'Windows Authenticode 签名需要 Windows 打包节点。' }
+        $script:ReleaseSignTool = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+        if (-not $script:ReleaseSignTool) { throw '未找到 Windows SDK signtool.exe，不能执行正式签名。' }
+        $before = @(Get-ChildItem Cert:\CurrentUser\My | Select-Object -ExpandProperty Thumbprint)
+        $secure = ConvertTo-SecureString $env:WINDOWS_SIGNING_PASSWORD -AsPlainText -Force
+        $certificate = Import-PfxCertificate -FilePath $env:WINDOWS_SIGNING_PFX_PATH -CertStoreLocation Cert:\CurrentUser\My -Password $secure -ErrorAction Stop |
+            Where-Object HasPrivateKey | Select-Object -First 1
+        if (-not $certificate) { throw '签名 PFX 未包含可用私钥。' }
+        $script:ReleaseCertificate = $certificate
+        $script:RemoveImportedCertificate = $certificate.Thumbprint -notin $before
+        if ($certificate.NotAfter -le (Get-Date) -or $certificate.NotBefore -gt (Get-Date)) { throw 'Windows 签名证书不在有效期内。' }
+        if ('1.3.6.1.5.5.7.3.3' -notin @($certificate.EnhancedKeyUsageList | ForEach-Object ObjectId)) { throw 'Windows 证书没有代码签名用途。' }
+    }
+    if ($SkipAndroid) { return }
+    if ($androidPresent.Count -eq 0) {
+        Write-Warning '未配置固定 Android 签名，仅用于本地开发验收；不能保证跨机器或跨构建覆盖升级。'
         return
     }
-    if (-not $IsWindows) { throw 'Windows Authenticode 签名需要 Windows 打包节点。' }
-    $script:ReleaseSignTool = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-    if (-not $script:ReleaseSignTool) { throw '未找到 Windows SDK signtool.exe，不能执行正式签名。' }
-    $before = @(Get-ChildItem Cert:\CurrentUser\My | Select-Object -ExpandProperty Thumbprint)
-    $secure = ConvertTo-SecureString $env:WINDOWS_SIGNING_PASSWORD -AsPlainText -Force
-    $certificate = Import-PfxCertificate -FilePath $env:WINDOWS_SIGNING_PFX_PATH -CertStoreLocation Cert:\CurrentUser\My -Password $secure -ErrorAction Stop |
-        Where-Object HasPrivateKey | Select-Object -First 1
-    if (-not $certificate) { throw '签名 PFX 未包含可用私钥。' }
-    $script:ReleaseCertificate = $certificate
-    $script:RemoveImportedCertificate = $certificate.Thumbprint -notin $before
-    if ($certificate.NotAfter -le (Get-Date) -or $certificate.NotBefore -gt (Get-Date)) { throw 'Windows 签名证书不在有效期内。' }
-    if ('1.3.6.1.5.5.7.3.3' -notin @($certificate.EnhancedKeyUsageList | ForEach-Object ObjectId)) { throw 'Windows 证书没有代码签名用途。' }
-    if ($SkipAndroid) { return }
     $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { $env:ANDROID_SDK_ROOT }
     if (-not $sdk) { throw '未配置 Android SDK，无法验证 APK 签名。' }
     $script:ReleaseApkSigner = Get-ChildItem -LiteralPath (Join-Path $sdk 'build-tools') -Filter apksigner.bat -Recurse |

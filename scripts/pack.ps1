@@ -828,8 +828,14 @@ $LaunchHint
         (New-Object System.Text.UTF8Encoding($false)))
 
     Write-Host ''
-    if ($script:ReleaseCertificate) {
+    if ($script:ReleaseCertificate -and $script:AndroidCertificateDigest) {
         Write-Host "已签名资产（$releaseOut，附件名即文件名）：" -ForegroundColor Green
+    }
+    elseif ($script:AndroidCertificateDigest) {
+        Write-Host "Android 已用固定密钥签名；桌面未做 Authenticode 签名（$releaseOut）：" -ForegroundColor Green
+    }
+    elseif ($script:ReleaseCertificate -and $SkipAndroid) {
+        Write-Host "Windows 已签名；本次未打包 Android（$releaseOut）：" -ForegroundColor Green
     }
     else {
         Write-Host "本地未签名验收资产（$releaseOut；不能作为正式签名版发布）：" -ForegroundColor Yellow
