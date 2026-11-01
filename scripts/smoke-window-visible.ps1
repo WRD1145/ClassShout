@@ -108,9 +108,10 @@ function Send-WindowShout {
         Start-Sleep -Milliseconds 300
 
         # display=window：走"占满大字区"那条路（也就是画在主窗口里的那条）
+        $shoutId = Get-Date -Format 'yyyyMMddHHmmssfff'
         $shout = @{
             type      = 'textShout'
-            id        = (Get-Date -Format 'yyyyMMddHHmmssfff')
+            id        = $shoutId
             text      = $Text
             rate      = 0
             volume    = 100
@@ -121,7 +122,24 @@ function Send-WindowShout {
         } | ConvertTo-Json -Compress
 
         Write-ShoutFrame -Stream $stream -Kind 1 -Payload $utf8.GetBytes($shout)
-        Start-Sleep -Milliseconds 300
+        # 等待真实上屏回执再断开；固定等 300 毫秒会在繁忙时过早关闭并触发 RST。
+        $client.ReceiveTimeout = 10000
+        $displayed = $false
+        for ($attempt = 0; $attempt -lt 32; $attempt++) {
+            $frameHeader = [byte[]]::new(5)
+            $stream.ReadExactly($frameHeader, 0, 5)
+            $total = ([uint32]$frameHeader[0] * 16777216) + ([uint32]$frameHeader[1] * 65536) + ([uint32]$frameHeader[2] * 256) + [uint32]$frameHeader[3]
+            if ($total -lt 1 -or $total -gt 1048576) { throw '收到非法回执帧长度。' }
+            $payload = [byte[]]::new($total - 1)
+            $stream.ReadExactly($payload, 0, $payload.Length)
+            if ($frameHeader[4] -ne 1) { continue }
+            $reply = $utf8.GetString($payload) | ConvertFrom-Json
+            if ($reply.messageId -eq $shoutId -and $reply.deliveryStage -eq 'displayed') {
+                $displayed = $true
+                break
+            }
+        }
+        if (-not $displayed) { throw '没有收到这条消息的上屏回执。' }
     }
     finally {
         $stream.Dispose()
