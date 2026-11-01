@@ -1,5 +1,8 @@
 # JSON 行插件示例：stdout 只写协议，诊断请写 stderr；不需要 IPC 令牌。
 $ErrorActionPreference='Stop'
+[Console]::InputEncoding=[Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$OutputEncoding=[Console]::OutputEncoding
 $id=[guid]::NewGuid().ToString('N')
 @{method='POST';path='/v1/shouts';body=@{id=$id;text='ClassShout 示例插件已启动。';speak=$false}} | ConvertTo-Json -Compress -Depth 5 | Write-Output
 $accepted=[Console]::ReadLine() | ConvertFrom-Json

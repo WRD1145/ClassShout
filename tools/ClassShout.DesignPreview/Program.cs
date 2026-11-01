@@ -91,7 +91,7 @@ internal sealed class PreviewAudioRecorder : ClassShout.Core.Audio.IAudioRecorde
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-internal static class Program
+internal static partial class Program
 {
     /// <summary>
     /// 每个画面都必须出现的令牌。
@@ -951,7 +951,7 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        var outputDirectory = args.Length > 0 ? args[0] : "artifacts";
+        var outputDirectory = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : "artifacts";
         Directory.CreateDirectory(outputDirectory);
 
         // 把设置目录指到一个临时位置，让整轮预览从"全新安装"的状态出发。
@@ -983,6 +983,8 @@ internal static class Program
             })
             .UseSkia()
             .SetupWithoutStarting();
+
+        if (args.Contains("--teacher-extension-selftest")) return VerifyTeacherExtensionsRuntime();
 
         // 字体先验：解析不到就该立刻失败，不必等渲染完再看图猜
         var fontsPassed = VerifyBundledFonts();
@@ -1176,6 +1178,9 @@ internal static class Program
                 _ => null),
 
             // 教师端「设备」页：服务器绑定、账号、以及语音转文字的密钥自填都在这里。            // 单独一个场景是因为它和首页内容完全不同，而配置类界面最容易排版走样。
+            new("teacher-extension-settings",
+                () => new TeacherView { DataContext = new TeacherShellViewModel { ActivePage = TeacherPage.Devices } }, 430, 4600,
+                _ => null),
             new("teacher-devices",
                 () =>
                 {

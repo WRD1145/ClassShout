@@ -3351,6 +3351,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await StopTeacherExtensionsAsync();
         TeacherPlatform.StopRelayReceiver();
         _snackbarCts?.Cancel();
         _snackbarCts?.Dispose();

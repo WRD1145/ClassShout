@@ -25,6 +25,10 @@ public sealed class ProcessPluginHost : IAsyncDisposable
         {
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            // Windows 的默认代码页不一定是 UTF-8，必须与 JSON 行协议明确对齐。
+            StandardInputEncoding = new System.Text.UTF8Encoding(false),
+            StandardOutputEncoding = new System.Text.UTF8Encoding(false, true),
+            StandardErrorEncoding = new System.Text.UTF8Encoding(false),
             WorkingDirectory = Path.GetDirectoryName(settings.Executable),
         };
         foreach (var argument in settings.Arguments ?? []) start.ArgumentList.Add(argument);

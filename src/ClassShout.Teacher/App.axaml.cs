@@ -36,6 +36,7 @@ public partial class App : Application
             case IClassicDesktopStyleApplicationLifetime desktop:
                 // 桌面头：手机比例窗口，用于在 PC 上调试手机界面
                 desktop.MainWindow = new MainWindow { DataContext = _viewModel };
+                _viewModel.StartTeacherExtensions();
                 desktop.ShutdownRequested += (_, _) => DisposeViewModel();
                 break;
 

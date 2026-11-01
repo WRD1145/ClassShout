@@ -169,6 +169,9 @@ Write-Host ''
 Write-Host '================ 窗口式喊话把窗口唤出来 ================' -ForegroundColor Yellow
 & (Join-Path $PSScriptRoot 'smoke-window-visible.ps1') -ErrorAction Continue
 $windowExit = $LASTEXITCODE
+Write-Host '================ 教师端 IPC 与插件 ================' -ForegroundColor Yellow
+& (Join-Path $PSScriptRoot 'smoke-teacher-extensions.ps1') -ErrorAction Continue
+$teacherExtensionExit = $LASTEXITCODE
 Write-Host ''
 Write-Host '================ 控制台前端转义 ================' -ForegroundColor Yellow
 
@@ -188,7 +191,8 @@ if ($null -eq $logFailures) { $logFailures = 0 }
 Write-Host ''
 Write-Host "局域网退出码：$lanExit    中继退出码：$relayExit    托盘退出码：$trayExit    单实例退出码：$singleExit    窗口唤回退出码：$windowExit    前端退出码：$webuiExit    日志失败项：$logFailures" -ForegroundColor Cyan
 
-if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $singleExit -ne 0 -or $windowExit -ne 0 -or $webuiExit -ne 0 -or $logFailures -ne 0) {
+Write-Host "教师端扩展退出码：$teacherExtensionExit"
+if ($lanExit -ne 0 -or $relayExit -ne 0 -or $trayExit -ne 0 -or $singleExit -ne 0 -or $windowExit -ne 0 -or $teacherExtensionExit -ne 0 -or $webuiExit -ne 0 -or $logFailures -ne 0) {
     Write-Host '存在失败项。' -ForegroundColor Red
     exit 1
 }
