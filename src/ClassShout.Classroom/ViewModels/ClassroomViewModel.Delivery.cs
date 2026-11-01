@@ -22,6 +22,7 @@ public partial class ClassroomViewModel
     {
         if (string.IsNullOrWhiteSpace(id)) return;
         var at = DateTimeOffset.UtcNow;
+        if (UpdateExtensionReceipt(id, stage, at, detail)) return;
         try
         {
             if (sessionId is not null)

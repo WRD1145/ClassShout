@@ -18,6 +18,8 @@ namespace ClassShout.Classroom.Services;
 public sealed class EdgeTtsSynthesizer : ISpeechSynthesizer
 {
     private readonly EdgeTtsClient _client;
+    private readonly HttpTtsClient _httpVoice = new();
+    public HttpTtsSettings HttpSettings { get; set; } = new();
     private readonly ISpeechSynthesizer _systemVoice;
     // 走平台工厂：Windows 上是 NAudio，Linux 上是 aplay/paplay 管道。
     private readonly IAudioPlayer _player = ClassroomPlatform.CreatePlayer();
@@ -70,6 +72,33 @@ public sealed class EdgeTtsSynthesizer : ISpeechSynthesizer
 
         // 用户选了系统语音就直接走它，不必先试一次 Edge ——
         // 那样每次朗读都要多等一个网络往返的超时，而用户已经明确说了不用在线语音。
+        if (Engine == SpeechEngine.Http)
+        {
+            try
+            {
+                var wav = await _httpVoice.SynthesizeAsync(HttpSettings, text, options.Rate, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!WavCodec.TryDecode(wav, out var format, out var pcm)) throw new InvalidDataException("第三方音频解码失败。");
+                SetSpeaking(true);
+                try
+                {
+                    await PlayPcmAsync(format, pcm, options.Volume, cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    LastEngineText = "第三方 HTTP 语音";
+                }
+                finally { _player.Stop(); SetSpeaking(false); }
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) when (HttpSettings.FallbackToSystem && ex is HttpRequestException or IOException or InvalidOperationException or OperationCanceledException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!ClassroomPlatform.HasSystemSpeech) throw new InvalidOperationException("第三方语音失败，系统语音不可用。", ex);
+                LastEngineText = "系统语音（第三方服务失败）";
+                await _systemVoice.SpeakAsync(text, options, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+        }
         if (Engine != SpeechEngine.Edge)
         {
             if (!ClassroomPlatform.HasSystemSpeech) throw new InvalidOperationException("本机没有可用的系统朗读引擎。");
@@ -152,9 +181,7 @@ public sealed class EdgeTtsSynthesizer : ISpeechSynthesizer
                 return false;
             }
 
-            _player.Start(format);
-            _player.Write(audio.Pcm);
-            await _player.CompleteAsync().ConfigureAwait(false);
+            await PlayPcmAsync(format, audio.Pcm, 100, cancellationToken).ConfigureAwait(false);
 
             LastEngineText = "Edge 在线语音";
             return true;
@@ -164,6 +191,28 @@ public sealed class EdgeTtsSynthesizer : ISpeechSynthesizer
             _player.Stop();
             SetSpeaking(false);
         }
+    }
+
+    private async Task PlayPcmAsync(AudioFormat format, byte[] pcm, int volume, CancellationToken token)
+    {
+        // 流式播放器只有五秒缓冲；一次写入整段合成音会静默丢掉后半段。
+        if (volume != 100)
+        {
+            for (var i = 0; i + 1 < pcm.Length; i += 2)
+                System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(i),
+                    (short)(System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(pcm.AsSpan(i)) * Math.Clamp(volume, 0, 100) / 100));
+        }
+        _player.Start(format);
+        var chunkBytes = format.BytesForDuration(100);
+        for (var offset = 0; offset < pcm.Length; offset += chunkBytes)
+        {
+            token.ThrowIfCancellationRequested();
+            var count = Math.Min(chunkBytes, pcm.Length - offset);
+            _player.Write(pcm.AsSpan(offset, count));
+            if (offset + count < pcm.Length)
+                await Task.Delay(format.DurationMsOf(count), token).ConfigureAwait(false);
+        }
+        await _player.CompleteAsync().ConfigureAwait(false);
     }
 
     public void Stop()
@@ -200,5 +249,6 @@ public sealed class EdgeTtsSynthesizer : ISpeechSynthesizer
         _player.Dispose();
         _systemVoice.Dispose();
         _client.Dispose();
+        _httpVoice.Dispose();
     }
 }

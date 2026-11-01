@@ -216,7 +216,24 @@
                          Text="在线语音更自然，但需要教室电脑能上外网；连不上时会自动回落到系统语音，不会不发声。" />
             </StackPanel>
 
-            <!-- 系统语音：不在线引擎时才显示，免得两个音色列表同时摆着让人分不清哪个生效 -->
+            <StackPanel Spacing="6">
+              <TextBlock Classes="bodyMedium" Text="本机 IPC 与插件" />
+              <CheckBox Content="启用本机 HTTP IPC（需要令牌）" IsChecked="{Binding IpcEnabled}" />
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="插件是可信本机程序，默认关闭；在 extensions.json 中配置绝对路径并显式启用。独立进程不是安全沙箱。" />
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="{Binding ExtensionDirectory}" />
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="{Binding ExtensionStatus}" />
+              <Button Content="保存并应用扩展设置" Command="{Binding ApplyExtensionsCommand}" />
+            </StackPanel>
+            <StackPanel Spacing="6" IsVisible="{Binding IsHttpEngine}">
+              <TextBlock Classes="bodySmall" TextWrapping="Wrap" Text="服务接受 JSON：text、voice、rate、format，返回 16 位 PCM WAV。密钥保存在本机配置中。" />
+              <TextBox Watermark="HTTP / HTTPS 服务地址" Text="{Binding HttpTtsEndpoint}" />
+              <TextBox Watermark="音色标识（可选）" Text="{Binding HttpTtsVoice}" />
+              <TextBox Watermark="Bearer 密钥（可选）" PasswordChar="●" Text="{Binding HttpTtsKey}" />
+              <CheckBox Content="失败时回退系统语音" IsChecked="{Binding HttpTtsFallback}" />
+              <CheckBox Content="允许通过明文 HTTP 发送密钥" IsChecked="{Binding HttpTtsAllowInsecure}" />
+              <Button Content="保存第三方语音配置" Command="{Binding SaveHttpTtsCommand}" />
+            </StackPanel>
+            <!-- 系统音色用于离线朗读与失败回退。 -->
             <StackPanel Spacing="6" IsVisible="{Binding !IsEdgeEngine}">
               <TextBlock Classes="bodyMedium" Text="系统语音" />
               <ComboBox HorizontalAlignment="Stretch"
@@ -1014,7 +1031,7 @@
     <Border Grid.Row="2" Background="{DynamicResource Md3.SurfaceContainerLow}" Padding="20,12">
       <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                  Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                 Text="改动即时生效并自动保存。关掉本窗口不影响喊话接收。" />
+                 Text="带保存或应用按钮的项目需点击确认。其他改动即时保存；关闭本窗口不影响喊话接收。" />
     </Border>
 
   </Grid>

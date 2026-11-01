@@ -1612,6 +1612,16 @@ internal static class Program
                     return new ClassroomSettings { DataContext = vm, Height = 1050 };
                 }, 0, 0, _ => null),
 
+            new("classroom-extensions",
+                () =>
+                {
+                    var vm = new ClassroomViewModel();
+                    vm.SelectedEngine = vm.EngineOptions.First(option => option.Value == ClassShout.Core.Audio.SpeechEngine.Http);
+                    vm.HttpTtsEndpoint = "http://127.0.0.1:18109/speech";
+                    vm.HttpTtsVoice = "local-voice";
+                    return new ClassroomSettings { DataContext = vm, Height = 4600 };
+                }, 0, 0, _ => null),
+
             // 语音转文字卡片展开的样子。
             //
             // 单独来一张的理由和上面的置顶档位一样：开关关着时，那几行输入框

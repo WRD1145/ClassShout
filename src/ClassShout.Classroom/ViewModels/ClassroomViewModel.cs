@@ -165,6 +165,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         {
             Engine = _speechSettings.Engine,
             EdgeVoice = _speechSettings.EdgeVoice,
+            HttpSettings = _speechSettings.Http ?? new(),
         };
 
         // 本机没有系统朗读（Linux 上没装 spd-say / espeak）时必须说出来：
@@ -420,6 +421,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     [
         new(SpeechEngine.System, "系统语音（离线可用）"),
         new(SpeechEngine.Edge, "Edge 在线语音（更自然，需要外网）"),
+        new(SpeechEngine.Http, "第三方 HTTP 语音"),
     ];
 
     private SpeechEngineOption _selectedEngine = null!;
@@ -441,11 +443,12 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsEdgeEngine));
+            OnPropertyChanged(nameof(IsHttpEngine));
             OnPropertyChanged(nameof(SpeechEngineStatus));
 
             AddLog("朗读", value.Value == SpeechEngine.Edge
                 ? "已切换到 Edge 在线语音；连不上时会自动回落到系统语音。"
-                : "已切换到系统语音。");
+                : value.Value == SpeechEngine.Http ? "已切换到第三方 HTTP 语音。" : "已切换到系统语音。");
 
             if (value.Value == SpeechEngine.Edge && EdgeVoices.Count == 0)
             {
@@ -952,6 +955,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
     {
         StartBells();
         StartClassIslandSchedule();
+        StartExtensions();
         _server.ClassroomName = ClassroomName;
         _server.Start();
         IsServerRunning = true;
@@ -3006,6 +3010,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await StopExtensionsAsync();
         _bellTimer?.Stop();
         _ciScheduleTimer?.Stop();
         _ciScheduleDisposed = true;

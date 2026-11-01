@@ -22,7 +22,7 @@ namespace ClassShout.EndToEnd;
 ///   · 默认 —— 局域网直连：UDP 发现、TCP 握手、文字喊话、语音流、停止指令、系统 TTS、音频播放；
 ///   · 加 relay 开关 —— 公网中继：教室注册、教师绑定、跨网喊话、多班级隔离。
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     // 刻意不用默认端口，避免和正在运行的教室端应用抢端口
     private const int TcpPort = 45990;
@@ -57,6 +57,16 @@ internal static class Program
 
     private static async Task<int> RunAsync(string[] args)
     {
+        if (args.Contains("--plugin-fixture"))
+        {
+            Console.WriteLine("{\"method\":null,\"path\":null,\"body\":{}}");
+            var rejected = Console.ReadLine();
+            Console.WriteLine("{\"method\":\"GET\",\"path\":\"/v1/status\",\"body\":{}}");
+            var accepted = Console.ReadLine();
+            return rejected?.Contains("400") == true && accepted?.Contains("200") == true ? 0 : 1;
+        }
+        if (args.Contains("--extensions")) return await AssertExtensionsAsync();
+        await AssertExtensionsAsync();
         if (args.Contains("--live-receipt")) return await AssertLiveReceiptAsync();
         var ciLiveIndex = Array.IndexOf(args, "--live-ci");
         if (ciLiveIndex >= 0 && ciLiveIndex + 1 < args.Length) return await AssertLiveClassIslandAsync(args[ciLiveIndex + 1]);

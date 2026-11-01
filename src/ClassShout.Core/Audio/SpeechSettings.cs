@@ -16,6 +16,8 @@ public enum SpeechEngine
     /// 连不上时会自动回落到系统语音，不会让教室端变哑。
     /// </summary>
     Edge = 1,
+    /// <summary>自建或第三方 HTTP 语音服务。</summary>
+    Http = 2,
 }
 
 /// <summary>
@@ -26,6 +28,7 @@ public enum SpeechEngine
 /// </summary>
 public sealed class ClassroomSpeechSettings
 {
+    public HttpTtsSettings Http { get; set; } = new();
     /// <summary>选择的引擎。默认系统语音 —— 它不依赖外网，一定能用。</summary>
     public SpeechEngine Engine { get; set; } = SpeechEngine.System;
 
