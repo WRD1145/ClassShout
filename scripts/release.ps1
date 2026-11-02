@@ -123,7 +123,7 @@ try {
     }
     else {
         Write-Host '[打包] 开始…' -ForegroundColor Yellow
-        & (Join-Path $PSScriptRoot 'pack.ps1') -IncludeLinuxServer
+        & (Join-Path $PSScriptRoot 'pack.ps1') -IncludeLinuxServer -RequireSigning
         if ($LASTEXITCODE -ne 0) { throw "打包失败（退出码 $LASTEXITCODE）" }
     }
 

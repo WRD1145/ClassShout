@@ -171,9 +171,10 @@ jobs:
         env:
           MSBUILDDISABLENODEREUSE: '1'
           WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
-          ANDROID_SIGNING_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+          # 与仓库机密同名；keystore 文件路径由准备步骤通过 GITHUB_ENV 提供。
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           # -Installer：额外产出两个安装/更新程序（exe）。它们与便携版 zip 是两种目录布局，
           # 安装版平铺（双击快捷方式就能跑，不需要 DOTNET_ROOT）。

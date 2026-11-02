@@ -25,6 +25,12 @@
 .PARAMETER SkipAndroid
     跳过 Android 打包（本机未配置 Android SDK 时用）。
 
+.PARAMETER RequireSigning
+    Android 必须使用固定 keystore；Windows 证书可选。
+    环境变量：ANDROID_SIGNING_KEYSTORE_PATH、ANDROID_SIGNING_KEY_ALIAS、
+    ANDROID_SIGNING_STORE_PASSWORD、ANDROID_SIGNING_KEY_PASSWORD。
+    密码通过 env: 来源传递，不直接拼进 MSBuild 命令行。
+
 .PARAMETER IncludeLinuxServer
     额外为 linux-x64 发布一份中继服务器。服务器常部署在 Linux 上，
     而开发机通常是 Windows，单独出一个 Linux 包比事后手动发布省事。
@@ -53,7 +59,7 @@ param(
     # 安装版平铺（不需要 DOTNET_ROOT，双击快捷方式就能跑），详见 tools\ClassShout.Setup。
     [switch]$Installer,
 
-    # 正式流水线必须使用固定证书与 keystore，缺失时失败而非生成临时身份。
+    # 正式 Android 流水线必须使用固定 keystore，Windows 证书可选。
     [switch]$RequireSigning,
 
     [string]$OutputRoot = 'dist'

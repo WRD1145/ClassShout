@@ -8,7 +8,7 @@ function Initialize-ReleaseSigning {
     $script:ReleaseSignTool = $null
     $script:ReleaseApkSigner = $null
     $windowsNames = @('WINDOWS_SIGNING_PFX_PATH','WINDOWS_SIGNING_PASSWORD')
-    $androidNames = @('ANDROID_SIGNING_KEYSTORE_PATH','ANDROID_SIGNING_ALIAS','ANDROID_KEYSTORE_PASSWORD','ANDROID_KEY_PASSWORD')
+    $androidNames = @('ANDROID_SIGNING_KEYSTORE_PATH','ANDROID_SIGNING_KEY_ALIAS','ANDROID_SIGNING_STORE_PASSWORD','ANDROID_SIGNING_KEY_PASSWORD')
     $windowsPresent = @($windowsNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
     if ($windowsPresent.Count -eq 1) { throw '可选 Windows 签名配置不完整，请同时配置 PFX 和密码，或同时留空。' }
     $androidPresent = @($androidNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
@@ -43,14 +43,14 @@ function Initialize-ReleaseSigning {
         Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
     if (-not $script:ReleaseApkSigner) { throw '未找到 apksigner，不能校验正式 APK。' }
     $keytool = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME 'bin/keytool.exe' } else { (Get-Command keytool -ErrorAction Stop).Source }
-    $details = & $keytool '-J-Duser.language=en' -list -v -keystore $env:ANDROID_SIGNING_KEYSTORE_PATH -alias $env:ANDROID_SIGNING_ALIAS '-storepass:env' ANDROID_KEYSTORE_PASSWORD 2>&1
+    $details = & $keytool '-J-Duser.language=en' -list -v -keystore $env:ANDROID_SIGNING_KEYSTORE_PATH -alias $env:ANDROID_SIGNING_KEY_ALIAS '-storepass:env' ANDROID_SIGNING_STORE_PASSWORD 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'Android keystore 或 alias 验证失败，请检查签名配置。' }
     $text = $details -join "`n"
     if ($text -match '(?i)CN=Android Debug') { throw '正式发布禁止使用 Android 调试证书。' }
     if ($text -notmatch '(?im)^\s*SHA256:\s*([0-9A-F:]+)') { throw '无法读取 Android 签名证书指纹。' }
     $script:AndroidCertificateDigest = $Matches[1].Replace(':','').ToLowerInvariant()
     $script:AndroidSigningArguments = @('-p:AndroidKeyStore=true',('-p:AndroidSigningKeyStore='+$env:ANDROID_SIGNING_KEYSTORE_PATH),
-        ('-p:AndroidSigningKeyAlias='+$env:ANDROID_SIGNING_ALIAS),'-p:AndroidSigningStorePass=env:ANDROID_KEYSTORE_PASSWORD','-p:AndroidSigningKeyPass=env:ANDROID_KEY_PASSWORD')
+        ('-p:AndroidSigningKeyAlias='+$env:ANDROID_SIGNING_KEY_ALIAS),'-p:AndroidSigningStorePass=env:ANDROID_SIGNING_STORE_PASSWORD','-p:AndroidSigningKeyPass=env:ANDROID_SIGNING_KEY_PASSWORD')
 }
 
 function Sign-ReleaseWindowsFiles {
