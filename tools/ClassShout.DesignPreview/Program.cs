@@ -951,6 +951,12 @@ internal static partial class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--version-selftest")
+        {
+            var actual = ClassShout.Design.DeveloperMode.Version;
+            Console.WriteLine($"代码内置版本：{actual}；期望版本：{args[1]}");
+            return actual == args[1] ? 0 : 1;
+        }
         var outputDirectory = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : "artifacts";
         Directory.CreateDirectory(outputDirectory);
 

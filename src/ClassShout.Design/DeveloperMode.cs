@@ -7,8 +7,8 @@ namespace ClassShout.Design;
 /// <summary>
 /// 客户端版本信息与开发者模式的开关。
 ///
-/// 版本号取自入口程序集的 <see cref="AssemblyInformationalVersionAttribute"/> ——
-/// 与 Directory.Build.props 里的 &lt;Version&gt; 同源。开启源码链接后它的形式是
+/// 版本号使用构建时生成的代码常量，与 Directory.Build.props 中的 Version 同源。
+/// 提交哈希仍读取入口程序集的 <see cref="AssemblyInformationalVersionAttribute"/>，其形式是
 /// "1.2.3+提交哈希"，所以这里顺手把提交哈希也解出来：报问题时"是哪个提交"
 /// 往往比"哪个版本号"更有用。
 ///
@@ -64,13 +64,7 @@ public static class DeveloperMode
     {
         get
         {
-            var informational = InformationalVersion;
-            if (!string.IsNullOrWhiteSpace(informational))
-            {
-                return informational.Split('+')[0];
-            }
-
-            return Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "未知";
+            return ClassShoutBuildVersion.Value;
         }
     }
 

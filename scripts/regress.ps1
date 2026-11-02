@@ -37,6 +37,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "构建失败（退出码 $LASTEXITCODE），先修好再跑回归。"
 }
 
+$expectedVersion = ([xml](Get-Content (Join-Path $root 'Directory.Build.props') -Raw)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+& (Join-Path $root "tools/ClassShout.DesignPreview/bin/$Configuration/net10.0-windows/ClassShout.DesignPreview.exe") --version-selftest $expectedVersion
+if ($LASTEXITCODE -ne 0) { throw '代码内置版本与发布源不一致。' }
+
 $state = Join-Path ([System.IO.Path]::GetTempPath()) ('cs-regress-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $state -Force | Out-Null
 Write-Host "状态目录：$state" -ForegroundColor Cyan

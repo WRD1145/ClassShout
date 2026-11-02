@@ -46,4 +46,12 @@
     <AvaloniaResource Include="Assets\Fonts\LICENSE.txt" />
   </ItemGroup>
 
+  <!-- 直接编译版本常量，避免裁剪或入口程序集反射失败后显示未知版本。 -->
+  <Target Name="GenerateClassShoutBuildVersion" BeforeTargets="CoreCompile">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(Version)', '^\d+\.\d+\.\d+$'))" Text="构建版本必须为三段数字，不能生成未知版本。" />
+    <WriteLinesToFile File="$(IntermediateOutputPath)ClassShoutBuildVersion.g.cs" Lines="namespace ClassShout.Design { internal static class ClassShoutBuildVersion { internal const string Value = &quot;$(Version)&quot;%3B } }" Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)ClassShoutBuildVersion.g.cs" />
+    </ItemGroup>
+  </Target>
 </Project>

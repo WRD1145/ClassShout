@@ -66,15 +66,18 @@ jobs:
       - name: 读版本号
         id: read
         shell: bash
+        env:
+          VERSION_OVERRIDE: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
 
-          version="${{ github.event.inputs.version }}"
+          version="${VERSION_OVERRIDE:-}"
           if [ -z "$version" ]; then
-            version=$(grep -oP '(?<=<Version>)[^<]+' Directory.Build.props | head -1)
+            version=$(python3 -c 'import xml.etree.ElementTree as ET; print(next((n.text.strip() for n in ET.parse("Directory.Build.props").iter("Version") if n.text and n.text.strip()), ""))')
           fi
           # 容错：允许带 v 前缀
           version="${version#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号必须为三段数字" >&2; exit 1; }
 
           if [ -z "$version" ]; then
             echo "读不出 <Version>：Directory.Build.props 里那一行是不是被改坏了？" >&2
@@ -170,6 +173,7 @@ jobs:
         shell: pwsh
         env:
           MSBUILDDISABLENODEREUSE: '1'
+          CLASSSHOUT_RELEASE_VERSION: ${{ needs.version.outputs.version }}
           WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
           # 与仓库机密同名；keystore 文件路径由准备步骤通过 GITHUB_ENV 提供。
           ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
@@ -179,7 +183,7 @@ jobs:
           # -Installer：额外产出两个安装/更新程序（exe）。它们与便携版 zip 是两种目录布局，
           # 安装版平铺（双击快捷方式就能跑，不需要 DOTNET_ROOT）。
           $requireSigning = $env:CLASSSHOUT_SIGNING_REQUIRED -eq 'true'
-          ./scripts/pack.ps1 -Configuration Release -IncludeLinuxServer -Installer -RequireSigning:$requireSigning
+          ./scripts/pack.ps1 -Configuration Release -ReleaseVersion $env:CLASSSHOUT_RELEASE_VERSION -IncludeLinuxServer -Installer -RequireSigning:$requireSigning
 
       - name: 看看打出来了什么
         shell: pwsh
@@ -217,10 +221,12 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: 发布教师端桌面头（osx-arm64，未签名）
+        env:
+          CLASSSHOUT_RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
           dotnet publish src/ClassShout.Teacher.Desktop/ClassShout.Teacher.Desktop.csproj \
             -c Release -r osx-arm64 -f net10.0 --self-contained=false \
-            -o "dist/macos/ClassShout.Teacher"
+            -p:Version="$CLASSSHOUT_RELEASE_VERSION" -o "dist/macos/ClassShout.Teacher"
 
       - name: 打包成 zip（说明里写清是试验产物）
         run: |

@@ -62,7 +62,9 @@ param(
     # 正式 Android 流水线必须使用固定 keystore，Windows 证书可选。
     [switch]$RequireSigning,
 
-    [string]$OutputRoot = 'dist'
+    [string]$OutputRoot = 'dist',
+
+    [string]$ReleaseVersion = $env:CLASSSHOUT_RELEASE_VERSION
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,10 +75,13 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 
 try {
-    Initialize-ReleaseSigning -Required:$RequireSigning -SkipAndroid:$SkipAndroid
     # ---------- 读取版本号 ----------
     $propsContent = Get-Content (Join-Path $repoRoot 'Directory.Build.props') -Raw
-    $version = if ($propsContent -match '<Version>([^<]+)</Version>') { $Matches[1] } else { '0.0.0' }
+    $version = if ($ReleaseVersion) { $ReleaseVersion } else { ([xml]$propsContent).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1 }
+    if ($version -notmatch '^\d+\.\d+\.\d+$') { throw '无法确定有效发布版本，停止打包，禁止回退为 0.0.0。' }
+    $versionArgs = @("-p:Version=$version")
+    Write-Host "本次打包及代码内置版本：$version"
+    Initialize-ReleaseSigning -Required:$RequireSigning -SkipAndroid:$SkipAndroid
 
     $windowsOut = Join-Path $OutputRoot 'windows'
     $androidOut = Join-Path $OutputRoot 'android'
@@ -312,7 +317,7 @@ try {
             $args = @('-f', $item.Framework) + $publishArgs
         }
 
-        & dotnet publish $item.Project @args -o $out --nologo -v q
+        & dotnet publish $item.Project @args @versionArgs -o $out --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "$($item.Name) 发布失败（退出码 $LASTEXITCODE）"
         }
@@ -350,7 +355,7 @@ try {
         $serverLinuxOut = Join-Path $linuxOut 'server'
         New-Item -ItemType Directory -Force -Path $serverLinuxOut | Out-Null
 
-        & dotnet publish 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj' @linuxArgs -o $serverLinuxOut --nologo -v q
+        & dotnet publish 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj' @linuxArgs @versionArgs -o $serverLinuxOut --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "Linux 服务器发布失败（退出码 $LASTEXITCODE）"
         }
@@ -372,7 +377,7 @@ try {
 
         $classroomLinuxArgs = @('-f', 'net10.0') + $linuxArgs
 
-        & dotnet publish 'src\ClassShout.Classroom\ClassShout.Classroom.csproj' @classroomLinuxArgs -o $classroomLinuxOut --nologo -v q
+        & dotnet publish 'src\ClassShout.Classroom\ClassShout.Classroom.csproj' @classroomLinuxArgs @versionArgs -o $classroomLinuxOut --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "Linux 教室端发布失败（退出码 $LASTEXITCODE）"
         }
@@ -410,7 +415,7 @@ try {
         # 通用包：包含 csproj 里声明的全部 ABI
         Write-Host '  正在打包通用 APK（arm64 + x64）…'
         $universalDir = Join-Path $OutputRoot 'obj\universal'
-        & dotnet publish $androidProject -c $Configuration -o $universalDir @script:AndroidSigningArguments --nologo -v q
+        & dotnet publish $androidProject -c $Configuration -o $universalDir @versionArgs "-p:ApplicationDisplayVersion=$version" @script:AndroidSigningArguments --nologo -v q
         if ($LASTEXITCODE -ne 0) {
             throw "Android 通用包发布失败（退出码 $LASTEXITCODE）"
         }
@@ -433,7 +438,7 @@ try {
                 Write-Host "  正在打包 $abi…"
                 $abiDir = Join-Path $OutputRoot "obj\$abi"
                 & dotnet publish $androidProject -c $Configuration -o $abiDir `
-                    "-p:AndroidAbi=$abi" @script:AndroidSigningArguments --nologo -v q
+                    "-p:AndroidAbi=$abi" @versionArgs "-p:ApplicationDisplayVersion=$version" @script:AndroidSigningArguments --nologo -v q
 
                 if ($LASTEXITCODE -ne 0) {
                     if ($RequireSigning) { throw "$abi 正式打包失败，禁止跳过后发布不完整结果。" }
@@ -733,7 +738,7 @@ $LaunchHint
             Remove-Item $payloadDir -Recurse -Force -ErrorAction SilentlyContinue
 
             & dotnet publish $app.Project -c $Configuration -r $Runtime -f $app.Framework `
-                --self-contained=true -p:DebugType=none -o $payloadDir --nologo -v q
+                --self-contained=true -p:DebugType=none @versionArgs -o $payloadDir --nologo -v q
 
             if ($LASTEXITCODE -ne 0) {
                 throw "$($app.Title) 的安装包内容发布失败（退出码 $LASTEXITCODE）"
@@ -774,7 +779,7 @@ $LaunchHint
             $infoPathFull = (Resolve-Path $infoPath).Path
 
             & dotnet publish 'tools\ClassShout.Setup\ClassShout.Setup.csproj' -c $Configuration `
-                -p:PayloadZip="$payloadZipFull" -p:PayloadInfo="$infoPathFull" `
+                -p:PayloadZip="$payloadZipFull" -p:PayloadInfo="$infoPathFull" @versionArgs `
                 -o $setupPublish --nologo -v q
 
             if ($LASTEXITCODE -ne 0) {
