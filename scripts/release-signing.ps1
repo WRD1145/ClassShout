@@ -75,10 +75,10 @@ function Assert-ReleaseApkSignature {
     $details = & $script:ReleaseApkSigner verify --verbose --print-certs $Path 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'APK 签名校验失败。' }
     $text = $details -join "`n"
-    # 新工具在 v3.1 签名中按 Android SDK 范围输出证书，不一定使用 Signer #1。
-    $signers = [regex]::Matches($text,'(?im)^Signer (?:#(?<index>\d+)|\(minSdkVersion=\d+(?: \(dev release=true\))?, maxSdkVersion=\d+\)) certificate SHA-256 digest:[ \t]*(?<digest>[0-9a-f]{64})[ \t]*\r?$')
+    # 同时兼容编号、v3.1 SDK 范围和 Build-tools 37 的签名方案前缀。
+    $signers = [regex]::Matches($text,'(?im)^(?:Signer (?:#(?<index>\d+)|\(minSdkVersion=\d+(?: \(dev release=true\))?, maxSdkVersion=\d+\))|V[1-4](?:\.\d+)? Signer:) certificate SHA-256 digest:[ \t]*(?<digest>[0-9a-f]{64})[ \t]*\r?$')
     $count = [regex]::Matches($text,'(?im)^Number of signers:[ \t]*(?<count>\d+)[ \t]*\r?$')
-    $certificateLines = [regex]::Matches($text,'(?im)^Signer [^\r\n]+ certificate SHA-256 digest:')
+    $certificateLines = [regex]::Matches($text,'(?im)^(?!Source Stamp Signer(?:[ :]))[^\r\n]+ certificate SHA-256 digest:')
     $actual = @($signers | ForEach-Object { $_.Groups['digest'].Value.ToLowerInvariant() })
     $reportedCounts = @($count | ForEach-Object { $_.Groups['count'].Value })
     $wrongIdentity = @($signers | Where-Object { ($_.Groups['index'].Success -and $_.Groups['index'].Value -ne '1') -or $_.Groups['digest'].Value.ToLowerInvariant() -ne $script:AndroidCertificateDigest }).Count -gt 0
