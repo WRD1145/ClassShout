@@ -41,12 +41,14 @@ public sealed class PayloadInfo
 /// 装到 %LOCALAPPDATA% 下**不需要管理员**：教室里那台电脑常常不给管理员权限，
 /// 而"装不上"是这类工具最容易被放弃的地方。卸载走「应用和功能」里那一栏。
 /// </summary>
-public static class Program
+public static partial class Program
 {
-    private const string UninstallKeyRoot = @"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+    private static string UninstallKeyRoot => TestRegistryRoot ?? @"Software\Microsoft\Windows\CurrentVersion\Uninstall";
 
-    private static readonly PayloadInfo Info = LoadInfo();
+    private static PayloadInfo Info = LoadInfo();
+    private static bool SuppressLaunch;
 
+    [STAThread]
     public static int Main(string[] args)
     {
         try
@@ -58,6 +60,7 @@ public static class Program
             // 输出被重定向到不支持的句柄时，不值得因此退出
         }
 
+        if (Has(args, "selftest")) return SetupSelfTest.Run();
         if (Has(args, "help", "h", "?"))
         {
             PrintHelp();
@@ -68,16 +71,12 @@ public static class Program
         // `/update /silent` 两个都以 / 开头，于是被当成"没有命令"→ 走成安装；
         // 而安装不会先关掉正在运行的实例，覆盖文件时就撞在"文件被占用"上。
         var command = ResolveCommand(args);
+        SuppressLaunch = Has(args, "norestart");
+        if (!Has(args, "silent", "quiet")) return RunGui(command);
 
         try
         {
-            return command switch
-            {
-                "install" or "setup" or "i" => Install(quiet: Has(args, "silent", "quiet")),
-                "update" or "u" => Update(quiet: Has(args, "silent", "quiet")),
-                "uninstall" or "x" or "remove" => Uninstall(quiet: Has(args, "silent", "quiet")),
-                _ => Unsupported(command),
-            };
+            return ExecuteAction(command, quiet: true);
         }
         catch (Exception ex)
         {
@@ -146,7 +145,7 @@ public static class Program
 
     private static int Install(bool quiet)
     {
-        var target = quiet ? DefaultInstallDir() : AskInstallDir(DefaultInstallDir());
+        var target = RequestedTarget ?? (quiet ? DefaultInstallDir() : AskInstallDir(DefaultInstallDir()));
 
         if (target is null)
         {
@@ -155,6 +154,7 @@ public static class Program
         }
 
         var existing = ReadInstalledVersion(target);
+        RejectDowngrade(existing);
 
         if (existing is not null)
         {
@@ -179,7 +179,7 @@ public static class Program
     /// </summary>
     private static int Update(bool quiet)
     {
-        var target = ExistingInstallDir();
+        var target = RequestedTarget ?? ExistingInstallDir();
 
         if (target is null)
         {
@@ -187,6 +187,7 @@ public static class Program
             return Install(quiet);
         }
 
+        RejectDowngrade(ReadInstalledVersion(target));
         CloseRunningInstances(target);
 
         return ExtractPayload(target, quiet) ? Finish(target, quiet, isUpdate: true) : 1;
@@ -196,120 +197,16 @@ public static class Program
 
     private static int Uninstall(bool quiet)
     {
-        var target = ExistingInstallDir() ?? DefaultInstallDir();
-
-        if (!Directory.Exists(target))
-        {
-            Console.WriteLine($"没找到安装目录（{target}），可能已经卸载过了。");
-            Unregister();
-            return 0;
-        }
-
-        foreach (var process in AppProcesses(target))
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-            {
-                // 已经退出了
-            }
-        }
-
-        if (!quiet)
-        {
-            Console.WriteLine();
-            Console.WriteLine($"将从 {target} 删除 {Info.Title}。");
-            Console.Write("确认？（y/N） ");
-
-            if (!string.Equals(Console.ReadLine()?.Trim(), "y", StringComparison.OrdinalIgnoreCase))
-            {
-                Console.WriteLine("已取消。");
-                return 0;
-            }
-        }
-
-        try
-        {
-            Directory.Delete(target, recursive: true);
-            Console.WriteLine("程序文件已删除。");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Console.WriteLine($"有文件删不掉（{ex.Message}）。关掉程序后再试一次，或手动删除 {target}。");
-        }
-
-        DeleteShortcuts();
-        Unregister();
-
-        Console.WriteLine();
-        Console.WriteLine($"{Info.Title} 已卸载。");
-        Console.WriteLine(@"设置还在 %LOCALAPPDATA%\ClassShout 下，要一并清掉请手动删除那个目录。");
-
-        WaitForExit(quiet);
-        return 0;
+        var target = RequestedTarget ?? ExistingInstallDir() ?? DefaultInstallDir();
+        return RemoveManagedInstallation(target);
     }
 
     // ======================== 解包 ========================
 
-    private static bool ExtractPayload(string target, bool quiet)
-    {
-        using var payload = OpenResource("payload.zip");
-
-        if (payload is null)
-        {
-            Fail("这个安装包里没有程序（payload.zip 缺失）—— 构建时忘了传 PayloadZip？");
-            return false;
-        }
-
-        Directory.CreateDirectory(target);
-
-        var entries = 0;
-
-        try
-        {
-            using var archive = new ZipArchive(payload, ZipArchiveMode.Read);
-
-            foreach (var entry in archive.Entries)
-            {
-                if (string.IsNullOrEmpty(entry.Name))
-                {
-                    continue; // 目录条目：写文件时会顺带建出来
-                }
-
-                var destination = Path.Combine(target, entry.FullName.Replace('/', '\\'));
-
-                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-
-                try
-                {
-                    entry.ExtractToFile(destination, overwrite: true);
-                    entries++;
-                }
-                catch (IOException ex)
-                {
-                    Fail($"写不进 {entry.FullName}：{ex.Message} —— 程序是不是还在运行？");
-                    return false;
-                }
-            }
-        }
-        catch (InvalidDataException ex)
-        {
-            Fail($"payload.zip 读不出来（{ex.Message}）—— 安装包可能损坏了，重新下载一份。");
-            return false;
-        }
-
-        if (!quiet)
-        {
-            Console.WriteLine($"已解开 {entries} 个文件 → {target}");
-        }
-
-        return true;
-    }
+    private static bool ExtractPayload(string target, bool quiet) => ExtractManagedPayload(target);
 
     private static Stream? OpenResource(string name)
-        => Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
+        => name == "payload.zip" && TestPayload is not null ? TestPayload() : Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
 
     private static PayloadInfo LoadInfo()
     {
@@ -345,18 +242,32 @@ public static class Program
             return 1;
         }
 
-        CreateShortcuts(exePath, target);
-        Register(target, exePath);
+        if (!SkipOsIntegration)
+        {
+            CacheMaintenanceProgram();
+            CreateShortcuts(exePath, target);
+            Register(target, exePath);
+        }
 
         Console.WriteLine();
-        Console.WriteLine(isUpdate
+        Console.WriteLine(CurrentAction == "repair" ? $"{Info.Title} 已修复，版本仍为 {Info.Version}。" : isUpdate
             ? $"{Info.Title} 已更新到 {Info.Version}。"
             : $"{Info.Title} {Info.Version} 已装好。");
         Console.WriteLine($"  安装位置：{target}");
         Console.WriteLine(@"  开始菜单：ClassShout");
         Console.WriteLine(@"  卸载：设置 → 应用 → 已安装的应用 里找它");
 
-        if (isUpdate)
+        if (IntegrationFailed)
+        {
+            Console.WriteLine("程序文件已写入，但快捷方式或安装登记未完成，请再次运行修复。");
+            return 1;
+        }
+
+        if (GuiMode)
+        {
+            if (LaunchRequested) TryStart(exePath, target);
+        }
+        else if (isUpdate && !SuppressLaunch)
         {
             // 点的是"更新"，更新完直接拉起新版本；不该再让用户点一次启动
             TryStart(exePath, target);
@@ -372,7 +283,7 @@ public static class Program
         }
 
         WaitForExit(quiet);
-        return 0;
+        return IntegrationFailed ? 1 : 0;
     }
 
     private static void TryStart(string exePath, string target)
@@ -392,10 +303,10 @@ public static class Program
     }
 
     private static string StartMenuDir
-        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "ClassShout");
+        => TestIntegrationRoot is { } root ? Path.Combine(root, "menu") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "ClassShout");
 
     private static string DesktopShortcut
-        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), $"{Info.Title}.lnk");
+        => Path.Combine(TestIntegrationRoot is { } root ? root : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), $"{Info.Title}.lnk");
 
     private static void CreateShortcuts(string exePath, string target)
     {
@@ -406,7 +317,7 @@ public static class Program
             CreateShortcut(Path.Combine(StartMenuDir, $"{Info.Title}.lnk"), exePath, target);
             CreateShortcut(
                 Path.Combine(StartMenuDir, $"卸载 {Info.Title}.lnk"),
-                exePath,
+                MaintenanceProgram,
                 target,
                 arguments: "/uninstall");
 
@@ -420,7 +331,7 @@ public static class Program
         catch (Exception ex) when (ex is COMException or IOException or UnauthorizedAccessException
                                        or InvalidOperationException)
         {
-            // 快捷方式建不出来不该让安装失败：开始菜单里没有，用户还能去安装目录双击
+            IntegrationFailed = true;
             Console.WriteLine($"快捷方式没建成功（{ex.Message}），可以直接运行 {exePath}。");
         }
     }
@@ -458,7 +369,9 @@ public static class Program
 
     private static void DeleteShortcuts()
     {
-        TryDeleteDir(StartMenuDir);
+        // 只删除当前端的快捷方式，另一端的开始菜单项必须保留。
+        foreach (var name in new[] { $"{Info.Title}.lnk", $"卸载 {Info.Title}.lnk" })
+            if (File.Exists(Path.Combine(StartMenuDir, name))) File.Delete(Path.Combine(StartMenuDir, name));
 
         try
         {
@@ -470,21 +383,6 @@ public static class Program
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Console.WriteLine($"桌面快捷方式没删掉（{ex.Message}）。");
-        }
-    }
-
-    private static void TryDeleteDir(string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Console.WriteLine($"开始菜单项没删掉（{ex.Message}）。");
         }
     }
 
@@ -501,14 +399,16 @@ public static class Program
             key.SetValue("Publisher", "ClassShout");
             key.SetValue("InstallLocation", target);
             key.SetValue("DisplayIcon", exePath);
-            key.SetValue("UninstallString", $"\"{exePath}\" /uninstall");
-            key.SetValue("QuietUninstallString", $"\"{exePath}\" /uninstall /silent");
-            key.SetValue("NoModify", 1, RegistryValueKind.DWord);
-            key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
-            key.SetValue("EstimatedSize", DirectorySize(target) / 1024, RegistryValueKind.DWord);
+            key.SetValue("UninstallString", $"\"{MaintenanceProgram}\" /uninstall");
+            key.SetValue("QuietUninstallString", $"\"{MaintenanceProgram}\" /uninstall /silent");
+            key.SetValue("ModifyPath", $"\"{MaintenanceProgram}\"");
+            key.SetValue("NoModify", 0, RegistryValueKind.DWord);
+            key.SetValue("NoRepair", 0, RegistryValueKind.DWord);
+            key.SetValue("EstimatedSize", (int)Math.Min(int.MaxValue, DirectorySize(target) / 1024), RegistryValueKind.DWord);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
         {
+            IntegrationFailed = true;
             // 登记不上只影响"应用和功能"里那一栏，程序照样能跑
             Console.WriteLine($"没写进「应用和功能」（{ex.Message}）—— 卸载时请用开始菜单里的卸载项。");
         }
@@ -523,6 +423,7 @@ public static class Program
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
         {
+            IntegrationFailed = true;
             Console.WriteLine($"卸载登记没删干净（{ex.Message}），「应用和功能」里可能还会看到它。");
         }
     }
@@ -531,9 +432,11 @@ public static class Program
     {
         try
         {
-            return new DirectoryInfo(path)
-                .EnumerateFiles("*", SearchOption.AllDirectories)
-                .Sum(file => file.Length);
+            return ReadRecord(path, false)?.Files.Sum(relative =>
+            {
+                var file = new FileInfo(OwnedFile(path, relative));
+                return file.Exists ? file.Length : 0;
+            }) ?? 0;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -543,21 +446,7 @@ public static class Program
 
     // ======================== 已装版本 ========================
 
-    private static string? ReadInstalledVersion(string target)
-    {
-        try
-        {
-            using var key = Registry.CurrentUser.OpenSubKey($@"{UninstallKeyRoot}\ClassShout-{Info.AppId}");
-
-            return string.Equals(key?.GetValue("InstallLocation") as string, target, StringComparison.OrdinalIgnoreCase)
-                ? key?.GetValue("DisplayVersion") as string
-                : null;
-        }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            return null;
-        }
-    }
+    private static string? ReadInstalledVersion(string target) => ReadManagedVersion(target);
 
     /// <summary>
     /// 已安装的目录：先看登记，再退回默认目录（有人手动拷过去、或者登记被清掉了）。
@@ -569,7 +458,7 @@ public static class Program
             using var key = Registry.CurrentUser.OpenSubKey($@"{UninstallKeyRoot}\ClassShout-{Info.AppId}");
 
             if (key?.GetValue("InstallLocation") is string location
-                && File.Exists(Path.Combine(location, Info.Exe)))
+                && Directory.Exists(location) && (ReadManagedVersion(location) is not null || ReadRecord(location, false) is not null))
             {
                 return location;
             }
@@ -581,7 +470,7 @@ public static class Program
 
         var fallback = DefaultInstallDir();
 
-        return File.Exists(Path.Combine(fallback, Info.Exe)) ? fallback : null;
+        return ReadManagedVersion(fallback) is not null ? fallback : null;
     }
 
     private static string DefaultInstallDir()
@@ -643,7 +532,7 @@ public static class Program
             {
                 var path = process.MainModule?.FileName;
 
-                if (path is not null && path.StartsWith(target, StringComparison.OrdinalIgnoreCase))
+                if (path is not null && string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
                 {
                     result.Add(process);
                 }

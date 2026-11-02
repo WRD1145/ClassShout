@@ -204,6 +204,13 @@ Write-Host '================ 插件管理界面交互 ================' -Foregro
 & (Join-Path $root "tools/ClassShout.DesignPreview/bin/$Configuration/net10.0-windows/ClassShout.DesignPreview.exe") --plugin-management-selftest
 $pluginManagementExit = $LASTEXITCODE
 Write-Host "插件管理界面退出码：$pluginManagementExit"
+Write-Host '================ 原生安装器 GUI 与修复 ================' -ForegroundColor Yellow
+$setupProcess = Start-Process -FilePath (Join-Path $root "tools/ClassShout.Setup/bin/$Configuration/net10.0-windows/win-x64/ClassShout.Setup.exe") -ArgumentList '--selftest' -WorkingDirectory $root -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $state 'setup-selftest.log') -RedirectStandardError (Join-Path $state 'setup-selftest.stderr.log')
+if (-not $setupProcess.WaitForExit(90000)) { Stop-Process -Id $setupProcess.Id; throw '安装器自检超过 90 秒，已停止本次测试进程。' }
+$setupExit = $setupProcess.ExitCode
+Get-Content (Join-Path $state 'setup-selftest.log')
+Get-Content (Join-Path $state 'setup-selftest.stderr.log')
+if ($setupExit -ne 0) { throw "原生安装器 GUI 自检失败：$setupExit" }
 Write-Host '================ 统一签名保护策略 ================' -ForegroundColor Yellow
 & (Join-Path $PSScriptRoot 'test-release-signing.ps1')
 $signingPolicyExit = $LASTEXITCODE

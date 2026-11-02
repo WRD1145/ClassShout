@@ -10,6 +10,7 @@
     <Project Path="src/ClassShout.Teacher/ClassShout.Teacher.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/ClassShout.Setup/ClassShout.Setup.csproj" />
     <Project Path="tools/ClassShout.PluginFixture.A/ClassShout.PluginFixture.A.csproj" />
     <Project Path="tools/ClassShout.PluginFixture.B/ClassShout.PluginFixture.B.csproj" />
     <Project Path="tools/ClassShout.PluginFixture.DependencyA/ClassShout.PluginFixture.DependencyA.csproj" />

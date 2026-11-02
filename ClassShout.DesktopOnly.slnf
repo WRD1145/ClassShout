@@ -10,6 +10,7 @@
       "src\\ClassShout.Teacher.Desktop\\ClassShout.Teacher.Desktop.csproj",
       "src\\ClassShout.Classroom\\ClassShout.Classroom.csproj",
       "tools\\ClassShout.DesignPreview\\ClassShout.DesignPreview.csproj",
+      "tools\\ClassShout.Setup\\ClassShout.Setup.csproj",
       "examples\\plugins\\HelloPlugin\\HelloPlugin.csproj",
       "tools\\ClassShout.PluginFixture.A\\ClassShout.PluginFixture.A.csproj",
       "tools\\ClassShout.PluginFixture.B\\ClassShout.PluginFixture.B.csproj",
