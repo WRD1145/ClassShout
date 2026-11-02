@@ -29,6 +29,32 @@ try {
     $log = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'prepare-release-signing.ps1') -AllowUnsignedDryRun 2>&1
     Check '部分配置不能退回未签名包' ($LASTEXITCODE -ne 0)
     Check '异常不回显密码内容' (-not (($log -join "`n").Contains('SIGNING_SECRET_CANARY')))
+    $fakeSigner=Join-Path $state 'apksigner-fixture.ps1'
+    [IO.File]::WriteAllText($fakeSigner,'Get-Content (Join-Path $PSScriptRoot "signer.txt"); $global:LASTEXITCODE=[int](Get-Content (Join-Path $PSScriptRoot "exit-code.txt"))')
+    $script:ReleaseApkSigner=$fakeSigner
+    $script:AndroidCertificateDigest='a'*64
+    foreach($case in @(
+        @{Name='相同证书允许发布';Text=('Signer #1 certificate SHA-256 digest: '+('a'*64));Allowed=$true},
+        @{Name='工具验证失败即使指纹相同也拒绝发布';Text=('Signer #1 certificate SHA-256 digest: '+('a'*64));ExitCode=1;Allowed=$false},
+        @{Name='报告多签名者即使仅一个指纹也拒绝发布';Text=('Signer #1 certificate SHA-256 digest: '+('a'*64));SignerCount=2;Allowed=$false},
+        @{Name='缺少签名者数量不能冒充单身份';Text=('Signer #1 certificate SHA-256 digest: '+('a'*64));NoCount=$true;Allowed=$false},
+        @{Name='不同证书拒绝发布';Text=('Signer #1 certificate SHA-256 digest: '+('b'*64));Allowed=$false},
+        @{Name='多个签名者拒绝发布';Text=("Signer #1 certificate SHA-256 digest: "+('a'*64)+"`nSigner #2 certificate SHA-256 digest: "+('a'*64));Allowed=$false},
+        @{Name='新版 SDK 范围证书允许发布';Text=('Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: '+('a'*64));Allowed=$true},
+        @{Name='多个 SDK 范围使用同一固定身份允许发布';Text=("Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: "+('a'*64)+"`nSigner (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: "+('a'*64));Allowed=$true},
+        @{Name='不同 SDK 范围换用其他证书拒绝发布';Text=("Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: "+('a'*64)+"`nSigner (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: "+('b'*64));Allowed=$false},
+        @{Name='开发 SDK 范围同一身份允许发布';Text=('Signer (minSdkVersion=33 (dev release=true), maxSdkVersion=2147483647) certificate SHA-256 digest: '+('a'*64));Allowed=$true},
+        @{Name='未知格式不能跳过证书检查';Text=("Signer #1 certificate SHA-256 digest: "+('a'*64)+"`nSigner unknown certificate SHA-256 digest: "+('b'*64));Allowed=$false},
+        @{Name='缺少签名指纹拒绝发布';Text='Number of signers: 1';Allowed=$false},
+        @{Name='截断指纹拒绝发布';Text='Signer #1 certificate SHA-256 digest: aa';Allowed=$false}
+    )){
+        $prefix=if($case.NoCount){''}else{"Number of signers: $(if($case.SignerCount){$case.SignerCount}else{1})`n"}
+        [IO.File]::WriteAllText((Join-Path $state 'signer.txt'),($prefix+$case.Text))
+        [IO.File]::WriteAllText((Join-Path $state 'exit-code.txt'),$(if($case.ExitCode){[string]$case.ExitCode}else{'0'}))
+        $allowed=$true
+        try{Assert-ReleaseApkSignature -Path 'fixture.apk'|Out-Null}catch{$allowed=$false}
+        Check $case.Name ($allowed -eq $case.Allowed)
+    }
     $env:WINDOWS_SIGNING_PASSWORD=$null
     $env:ANDROID_SIGNING_KEYSTORE_BASE64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('仅用于验证材料准备，不是真实私钥'))
     $env:ANDROID_SIGNING_KEY_ALIAS='fixture'

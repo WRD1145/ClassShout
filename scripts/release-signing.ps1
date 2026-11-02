@@ -75,10 +75,20 @@ function Assert-ReleaseApkSignature {
     $details = & $script:ReleaseApkSigner verify --verbose --print-certs $Path 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'APK 签名校验失败。' }
     $text = $details -join "`n"
-    if ([regex]::Matches($text,'(?im)Signer #\d+ certificate SHA-256 digest:').Count -ne 1 -or $text -notmatch '(?im)Signer #1 certificate SHA-256 digest:\s*([0-9a-f]+)' -or $Matches[1].ToLowerInvariant() -ne $script:AndroidCertificateDigest) {
-        throw 'APK 签名身份与固定 keystore 不一致，禁止发布。'
+    # 新工具在 v3.1 签名中按 Android SDK 范围输出证书，不一定使用 Signer #1。
+    $signers = [regex]::Matches($text,'(?im)^Signer (?:#(?<index>\d+)|\(minSdkVersion=\d+(?: \(dev release=true\))?, maxSdkVersion=\d+\)) certificate SHA-256 digest:[ \t]*(?<digest>[0-9a-f]{64})[ \t]*\r?$')
+    $count = [regex]::Matches($text,'(?im)^Number of signers:[ \t]*(?<count>\d+)[ \t]*\r?$')
+    $certificateLines = [regex]::Matches($text,'(?im)^Signer [^\r\n]+ certificate SHA-256 digest:')
+    $actual = @($signers | ForEach-Object { $_.Groups['digest'].Value.ToLowerInvariant() })
+    $reportedCounts = @($count | ForEach-Object { $_.Groups['count'].Value })
+    $wrongIdentity = @($signers | Where-Object { ($_.Groups['index'].Success -and $_.Groups['index'].Value -ne '1') -or $_.Groups['digest'].Value.ToLowerInvariant() -ne $script:AndroidCertificateDigest }).Count -gt 0
+    if ($count.Count -ne 1 -or $count[0].Groups['count'].Value -ne '1' -or $signers.Count -eq 0 -or $signers.Count -ne $certificateLines.Count -or $wrongIdentity) {
+        # 仅输出公钥证书指纹，不回显密钥、密码或原始工具输出。
+        Write-Host "固定 keystore 证书 SHA-256：$script:AndroidCertificateDigest"
+        Write-Host "APK 证书 SHA-256：$($actual -join '、')；识别证书条目：$($signers.Count)；工具报告签名者数量：$($reportedCounts -join '、')"
+        throw 'APK 签名身份与固定 keystore 不一致或签名者信息无法确认，禁止发布。'
     }
-    Write-Host 'APK 签名与固定 keystore 一致，验证通过。'
+    Write-Host "APK 签名与固定 keystore 一致，验证通过（证书条目 $($signers.Count)，签名者 1，SHA-256：$script:AndroidCertificateDigest）。"
 }
 
 function Complete-ReleaseSigning {

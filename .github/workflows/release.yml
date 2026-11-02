@@ -185,6 +185,15 @@ jobs:
           $requireSigning = $env:CLASSSHOUT_SIGNING_REQUIRED -eq 'true'
           ./scripts/pack.ps1 -Configuration Release -ReleaseVersion $env:CLASSSHOUT_RELEASE_VERSION -IncludeLinuxServer -Installer -RequireSigning:$requireSigning
 
+      - name: 保留签名失败的 APK 以便核查
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-signature-diagnostic
+          path: dist/obj/universal/*-Signed.apk
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: 看看打出来了什么
         shell: pwsh
         run: |
