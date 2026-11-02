@@ -1019,6 +1019,13 @@ internal static partial class Program
         {
             new("plugin-manager-classroom", () => CreatePluginManagementPreview(false), 620, 1250, _ => null),
             new("plugin-manager-teacher", () => CreatePluginManagementPreview(true), 430, 1150, _ => null),
+            new("classroom-plugin-settings", () =>
+            {
+                var view = new ClassroomSettings { DataContext = new ClassroomViewModel(), Width = 620, Height = 1000 };
+                view.FindControl<TabControl>("SettingsPages")!.SelectedIndex = 1;
+                return view;
+            }, 620, 1000, _ => null),
+            new("teacher-plugin-settings", () => new TeacherView { DataContext = new TeacherShellViewModel { ActivePage = TeacherPage.Plugins } }, 480, 1000, _ => null),
             new("maintenance-classroom", () => new ClassShout.Design.Controls.MaintenancePanel { Margin = new Thickness(16), DataContext = new ClassroomViewModel() }, 620, 600, _ => null),
             new("maintenance-teacher", () => new ClassShout.Design.Controls.MaintenancePanel { Margin = new Thickness(16), DataContext = new TeacherShellViewModel() }, 430, 700, _ => null),
             new("design-system",

@@ -45,7 +45,9 @@
     </Border>
 
     <!-- ==================== 设置项 ==================== -->
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20,18">
+    <TabControl Grid.Row="1" x:Name="SettingsPages">
+      <TabItem Header="常规">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20,18">
       <StackPanel Spacing="16">
 
         <md3:Md3Card Classes="outlined">
@@ -188,10 +190,6 @@
             <TextBlock Text="{Binding ExtensionStatus}" TextWrapping="Wrap" />
             <Button Classes="outlined" Content="保存 IPC 设置" Command="{Binding ApplyExtensionsCommand}" />
           </StackPanel>
-        </md3:Md3Card>
-
-        <md3:Md3Card Classes="outlined">
-          <md3:PluginManagerPanel />
         </md3:Md3Card>
 
         <md3:Md3Card Classes="outlined">
@@ -1038,6 +1036,16 @@
         </md3:Md3Card>
       </StackPanel>
     </ScrollViewer>
+      </TabItem>
+      <TabItem Header="插件" x:Name="PluginsPage">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20,18">
+          <StackPanel Spacing="12">
+            <TextBlock Text="插件管理受设置口令保护；如已锁定，请先在「常规」页解锁。切换页面不影响插件运行。" TextWrapping="Wrap" />
+            <md3:Md3Card Classes="outlined"><md3:PluginManagerPanel /></md3:Md3Card>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
 
     <Border Grid.Row="2" Background="{DynamicResource Md3.SurfaceContainerLow}" Padding="20,12">
       <TextBlock Classes="bodySmall" TextWrapping="Wrap"

@@ -1963,7 +1963,11 @@
             </md3:Md3Card>
 
             <md3:Md3Card Classes="outlined" IsVisible="{Binding SupportsTeacherExtensions}">
-              <md3:PluginManagerPanel />
+              <StackPanel Spacing="8">
+                <TextBlock Text="插件" Classes="bodyMedium" />
+                <TextBlock Text="在独立页面安装、查看并管理本机插件。切换页面不影响插件运行。" TextWrapping="Wrap" />
+                <Button Content="管理插件" Classes="tonal" Command="{Binding NavigatePluginsCommand}" />
+              </StackPanel>
             </md3:Md3Card>
             <!--
               「关于」：版本号、运行环境，以及藏在版本号后面的开发者模式。
@@ -1976,6 +1980,12 @@
           </StackPanel>
         </ScrollViewer>
 
+        <ScrollViewer IsVisible="{Binding IsPluginsPage}">
+          <StackPanel Spacing="14" Margin="16">
+            <Button Content="返回设备设置" Classes="outlined" HorizontalAlignment="Left" Command="{Binding NavigateDevicesCommand}" />
+            <md3:Md3Card Classes="outlined"><md3:PluginManagerPanel /></md3:Md3Card>
+          </StackPanel>
+        </ScrollViewer>
       </Panel>
 
       <!-- ==================== 底部导航 ==================== -->
@@ -2022,7 +2032,7 @@
           </RadioButton>
           <RadioButton Grid.Column="4" Theme="{StaticResource Md3NavItem}"
                        GroupName="Md3Nav" Tag="设备"
-                       IsChecked="{Binding IsDevicesPage, Mode=OneWay}"
+                       IsChecked="{Binding IsSettingsSection, Mode=OneWay}"
                        Command="{Binding NavigateDevicesCommand}">
             <md3:Md3Icon Kind="CastConnected" Size="24" />
           </RadioButton>

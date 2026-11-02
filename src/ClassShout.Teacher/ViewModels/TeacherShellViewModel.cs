@@ -33,6 +33,7 @@ public enum TeacherPage
     Call,
 
     Devices,
+    Plugins,
 }
 
 /// <summary>一条运行日志。</summary>
@@ -302,7 +303,7 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     // ======================== 导航 ========================
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsTextPage), nameof(IsVoicePage), nameof(IsStudentsPage), nameof(IsCallPage), nameof(IsDevicesPage))]
+    [NotifyPropertyChangedFor(nameof(IsTextPage), nameof(IsVoicePage), nameof(IsStudentsPage), nameof(IsCallPage), nameof(IsDevicesPage), nameof(IsPluginsPage), nameof(IsSettingsSection))]
     private TeacherPage _activePage = TeacherPage.Text;
 
     public bool IsTextPage => ActivePage == TeacherPage.Text;
@@ -314,6 +315,8 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
     public bool IsCallPage => ActivePage == TeacherPage.Call;
 
     public bool IsDevicesPage => ActivePage == TeacherPage.Devices;
+    public bool IsPluginsPage => ActivePage == TeacherPage.Plugins;
+    public bool IsSettingsSection => IsDevicesPage || IsPluginsPage;
 
     // ======================== 教室发现 ========================
 
@@ -1936,6 +1939,12 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
 
     [RelayCommand]
     private void NavigateDevices() => ActivePage = TeacherPage.Devices;
+
+    [RelayCommand]
+    private void NavigatePlugins()
+    {
+        if (SupportsTeacherExtensions) ActivePage = TeacherPage.Plugins;
+    }
 
     /// <summary>扫描局域网内的教室端。</summary>
     [RelayCommand]
