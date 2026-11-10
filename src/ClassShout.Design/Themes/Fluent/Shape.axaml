@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <CornerRadius x:Key="Md3.Shape.None">0</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.ExtraSmall">4</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Small">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Medium">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Large">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.ExtraLarge">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Full">9999</CornerRadius>
+
+
+  <CornerRadius x:Key="Md3.Shape.Button">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Card">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.TextField">4</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Chip">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Dialog">8</CornerRadius>
+  <CornerRadius x:Key="Md3.Shape.Sheet">28,28,0,0</CornerRadius>
+
+</ResourceDictionary>

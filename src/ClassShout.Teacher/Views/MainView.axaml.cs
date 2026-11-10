@@ -20,6 +20,28 @@ public partial class MainView : UserControl
     public MainView()
     {
         InitializeComponent();
+        if (OperatingSystem.IsWindows())
+        {
+            var shell = this.FindControl<Grid>("ShellLayout")!;
+            var navigation = this.FindControl<Border>("ShellNavigation")!;
+            var items = this.FindControl<Grid>("NavigationItems")!;
+            shell.ColumnDefinitions = new ColumnDefinitions("192,*");
+            shell.RowDefinitions = new RowDefinitions("Auto,Auto,*");
+            foreach (var child in shell.Children)
+                Grid.SetColumn(child, child == navigation ? 0 : 1);
+            Grid.SetRow(navigation, 0);
+            Grid.SetRowSpan(navigation, 3);
+            navigation.Padding = new Thickness(8, 14);
+            items.ColumnDefinitions.Clear();
+            items.RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto");
+            for (var index = 0; index < items.Children.Count; index++)
+            {
+                var item = (RadioButton)items.Children[index];
+                Grid.SetColumn(item, 0);
+                Grid.SetRow(item, index);
+                item.Theme = (Avalonia.Styling.ControlTheme)Resources["DesktopNavItem"]!;
+            }
+        }
 
         // 先对齐界面状态，再接回调 —— 反过来的话，初始化赋值会被当成"用户改了颜色"，
         // 白白触发一次保存。

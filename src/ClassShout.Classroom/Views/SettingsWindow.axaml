@@ -10,8 +10,8 @@
         x:Class="ClassShout.Classroom.Views.SettingsWindow"
         x:DataType="vm:ClassroomViewModel"
         Title="ClassShout 教室端 · 设置"
-        Width="520" Height="820"
-        MinWidth="440" MinHeight="520"
+        Width="1040" Height="820"
+        MinWidth="680" MinHeight="520"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Md3.Surface}">
 
@@ -45,7 +45,7 @@
     </Border>
 
     <!-- ==================== 设置项 ==================== -->
-    <TabControl Grid.Row="1" x:Name="SettingsPages">
+    <TabControl Grid.Row="1" x:Name="SettingsPages" Classes="settingsNavigation">
       <TabItem Header="常规">
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20,18">
       <StackPanel Spacing="16">
@@ -192,6 +192,12 @@
           </StackPanel>
         </md3:Md3Card>
 
+      </StackPanel>
+    </ScrollViewer>
+      </TabItem>
+      <TabItem Header="语音" x:Name="AudioPage">
+        <ScrollViewer Padding="20,18">
+          <StackPanel Spacing="10">
         <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="18" IsEnabled="{Binding !IsSpeechLocked}">
             <TextBlock Classes="cardTitle" Text="朗读设置" />
@@ -351,6 +357,12 @@
           </StackPanel>
         </md3:Md3Card>
 
+      </StackPanel>
+    </ScrollViewer>
+      </TabItem>
+      <TabItem Header="连接">
+        <ScrollViewer Padding="20,18">
+          <StackPanel Spacing="10">
         <!-- ==================== 跨局域网（中继服务器） ==================== -->
         <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="12" IsEnabled="{Binding !IsRelayLocked}">
@@ -483,6 +495,12 @@
           </StackPanel>
         </md3:Md3Card>
 
+      </StackPanel>
+    </ScrollViewer>
+      </TabItem>
+      <TabItem Header="显示与回复" x:Name="DisplayPage">
+        <ScrollViewer Padding="20,18">
+          <StackPanel Spacing="10">
         <!-- ==================== 喊话默认怎么显示 ==================== -->
         <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="14" IsEnabled="{Binding !IsDisplayLocked}">
@@ -808,6 +826,12 @@
           </StackPanel>
         </md3:Md3Card>
 
+      </StackPanel>
+    </ScrollViewer>
+      </TabItem>
+      <TabItem Header="系统与更新">
+        <ScrollViewer Padding="20,18">
+          <StackPanel Spacing="10">
         <md3:Md3Card Classes="outlined">
           <StackPanel Spacing="8" IsEnabled="{Binding !IsBackgroundLocked}">
             <TextBlock Classes="cardTitle" Text="后台运行" />
@@ -825,7 +849,7 @@
                   <TextBlock Classes="bodyMedium" Text="开机自启" />
                   <TextBlock Classes="bodySmall" TextWrapping="Wrap"
                              Foreground="{DynamicResource Md3.OnSurfaceVariant}"
-                             Text="在「启动」文件夹里放一个快捷方式，登录 Windows 后自动打开教室端。" />
+                             Text="登录 Windows 后自动启动教室端，并收进通知区域。" />
                 </StackPanel>
                 <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
                               IsChecked="{Binding AutoStart}" />
@@ -874,6 +898,7 @@
           <StackPanel Spacing="14">
             <!-- 明暗：跟随系统 / 浅色 / 深色。与主题色是两件事，所以两个控件分开 -->
             <md3:ThemeModePicker x:Name="AppearanceMode" />
+            <md3:FontScalePicker />
             <md3:ThemePicker x:Name="Appearance" />
           </StackPanel>
         </md3:Md3Card>

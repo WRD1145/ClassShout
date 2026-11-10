@@ -16,13 +16,23 @@ public partial class App : Application
 {
     private TeacherShellViewModel? _viewModel;
 
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize()
+    {
+        AvaloniaXamlLoader.Load(this);
+        Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://ClassShout.Design/"))
+        {
+            Source = new Uri(OperatingSystem.IsWindows()
+                ? "avares://ClassShout.Design/FluentDesktopTheme.axaml"
+                : "avares://ClassShout.Design/Md3Theme.axaml"),
+        });
+    }
 
     public override void OnFrameworkInitializationCompleted()
     {
         // 恢复用户选过的主题色（个性化）。必须在创建视图之前：
         // 控件主题靠 DynamicResource 读这些色角色，晚了就缓存成旧配色了。
         var appearance = LocalSettings.LoadAppearance().Normalized();
+        ClassShout.Design.Theming.InterfaceTypography.Apply(this, appearance.FontScalePercent);
 
         ClassShout.Design.Theming.Md3Appearance.Apply(this, appearance.SeedColor);
 

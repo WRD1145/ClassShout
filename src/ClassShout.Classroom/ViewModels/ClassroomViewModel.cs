@@ -2655,7 +2655,7 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
         var current = Environment.ProcessPath;
         var target = StartupShortcut.Describe();
 
-        if (current is null || string.Equals(target, current, StringComparison.OrdinalIgnoreCase))
+        if (current is null || (string.Equals(target, current, StringComparison.OrdinalIgnoreCase) && StartupShortcut.HasTrayArgument()))
         {
             return;
         }

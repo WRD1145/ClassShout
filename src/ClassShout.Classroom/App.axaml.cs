@@ -15,7 +15,16 @@ public partial class App : Application
     private TrayPresence? _tray;
     private SingleInstance? _singleInstance;
 
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize()
+    {
+        AvaloniaXamlLoader.Load(this);
+        Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://ClassShout.Design/"))
+        {
+            Source = new Uri(OperatingSystem.IsWindows()
+                ? "avares://ClassShout.Design/FluentDesktopTheme.axaml"
+                : "avares://ClassShout.Design/Md3Theme.axaml"),
+        });
+    }
 
     public override void OnFrameworkInitializationCompleted()
     {
@@ -23,6 +32,7 @@ public partial class App : Application
         // 换色是往 Application.Resources 里换一块资源字典，而控件一旦构造完就把
         // 一部分颜色值缓存下来了；能提前就提前，免得界面出现"一半新一半旧"。
         var appearance = LocalSettings.LoadAppearance().Normalized();
+        ClassShout.Design.Theming.InterfaceTypography.Apply(this, appearance.FontScalePercent);
 
         ClassShout.Design.Theming.Md3Appearance.Apply(this, appearance.SeedColor);
 
@@ -66,7 +76,12 @@ public partial class App : Application
 
             // 自动连接放在窗口出来之后：连服务器要等应答，卡在构造里会让教室端白屏几秒。
             // 失败不弹框 —— 原因落在日志与「跨局域网喊话」那张卡上，与手动连接一致。
-            window.Opened += (_, _) => _viewModel.BeginAutoConnect();
+            void BeginAutoConnect(object? sender, EventArgs args)
+            {
+                window.Opened -= BeginAutoConnect;
+                _viewModel.BeginAutoConnect();
+            }
+            window.Opened += BeginAutoConnect;
 
             // 收到"窗口式"喊话时，如果窗口正缩在托盘里（或最小化），把它唤出来。
             //
@@ -97,6 +112,15 @@ public partial class App : Application
             // 关闭窗口 → 缩到托盘继续接收喊话。装不上就维持"关闭即退出"，
             // 总好过一个关不掉的窗口。
             _tray = TrayPresence.TryInstall(window, desktop);
+            if (_tray is not null && OperatingSystem.IsWindows() &&
+                desktop.Args?.Contains(StartupShortcut.TrayArgument, StringComparer.OrdinalIgnoreCase) == true)
+            {
+                // 自启时不创建可见窗口，但仍立即启动接收和自动连接。
+                desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                desktop.MainWindow = null;
+                window.Opened -= BeginAutoConnect;
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => _viewModel.BeginAutoConnect());
+            }
             _viewModel.Logs.Insert(0, new LogEntry(
                 DateTime.Now,
                 "信息",

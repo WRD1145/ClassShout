@@ -23,6 +23,30 @@
         点击后由命令改状态、状态再回流，方向和 MVVM 一致。
         文字标签走 Tag 传递，这样 Content 槽位留给图标。
       -->
+      <ControlTheme x:Key="DesktopNavItem" TargetType="RadioButton">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Name="NavigationRow" Padding="12,8" CornerRadius="4" Background="Transparent">
+              <Grid ColumnDefinitions="32,*">
+                <ContentPresenter Content="{TemplateBinding Content}" />
+                <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{TemplateBinding Tag}" />
+              </Grid>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover /template/ Border#NavigationRow">
+          <Setter Property="Background" Value="{DynamicResource Md3.SurfaceContainerHigh}" />
+        </Style>
+        <Style Selector="^:checked /template/ Border#NavigationRow">
+          <Setter Property="Background" Value="{DynamicResource Md3.SecondaryContainer}" />
+        </Style>
+        <Style Selector="^:focus-visible /template/ Border#NavigationRow">
+          <Setter Property="BorderBrush" Value="{DynamicResource Md3.Primary}" />
+          <Setter Property="BorderThickness" Value="1" />
+        </Style>
+      </ControlTheme>
+
       <ControlTheme x:Key="Md3NavItem" TargetType="RadioButton">
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -32,7 +56,7 @@
             <Border Background="Transparent" Padding="0,6">
               <StackPanel HorizontalAlignment="Center" Spacing="4">
                 <Border Name="PART_Indicator"
-                        CornerRadius="16" Padding="22,4"
+                        CornerRadius="{DynamicResource Md3.Shape.Large}" Padding="22,4"
                         HorizontalAlignment="Center"
                         Background="Transparent">
                   <ContentPresenter Name="PART_ContentPresenter"
@@ -69,7 +93,7 @@
   </UserControl.Styles>
 
   <Panel>
-    <Grid RowDefinitions="Auto,Auto,*,Auto">
+    <Grid x:Name="ShellLayout" RowDefinitions="Auto,Auto,*,Auto">
 
       <!-- ==================== 顶栏 ==================== -->
       <Border Grid.Row="0" Background="{DynamicResource Md3.SurfaceContainer}" Padding="20,14">
@@ -1248,6 +1272,7 @@
 
             <Button Width="132" Height="132" Padding="0"
                     HorizontalAlignment="Center"
+                    Classes="voiceAction"
                     Classes.recording="{Binding Voice.IsRecording}"
                     Command="{Binding Voice.ToggleCommand}">
               <Panel>
@@ -1789,6 +1814,7 @@
               <StackPanel Spacing="14">
                 <!-- 明暗：跟随系统 / 浅色 / 深色。与主题色是两件事，所以两个控件分开 -->
                 <md3:ThemeModePicker x:Name="AppearanceMode" />
+                <md3:FontScalePicker />
                 <md3:ThemePicker x:Name="Appearance" />
               </StackPanel>
             </md3:Md3Card>
@@ -1989,8 +2015,8 @@
       </Panel>
 
       <!-- ==================== 底部导航 ==================== -->
-      <Border Grid.Row="3" Background="{DynamicResource Md3.SurfaceContainer}" Padding="10,4">
-        <Grid ColumnDefinitions="*,*,*,*,*">
+      <Border x:Name="ShellNavigation" Grid.Row="3" Background="{DynamicResource Md3.SurfaceContainer}" Padding="10,4">
+        <Grid x:Name="NavigationItems" ColumnDefinitions="*,*,*,*,*">
           <RadioButton Grid.Column="0" Theme="{StaticResource Md3NavItem}"
                        GroupName="Md3Nav" Tag="文字"
                        IsChecked="{Binding IsTextPage, Mode=OneWay}"

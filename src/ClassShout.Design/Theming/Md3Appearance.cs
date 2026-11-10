@@ -124,6 +124,13 @@ public static class Md3Appearance
 
         foreach (var (key, color) in roles)
         {
+            // Windows 自选强调色不替换 Fluent 的中性页面和文字配色。
+            if (OperatingSystem.IsWindows() &&
+                (key.StartsWith("Md3.Surface", StringComparison.Ordinal) ||
+                 key.StartsWith("Md3.OnSurface", StringComparison.Ordinal) ||
+                 key is "Md3.Background" or "Md3.OnBackground" or "Md3.Outline" or "Md3.OutlineVariant"))
+                continue;
+
             dictionary[key] = key.StartsWith("SystemAccentColor", StringComparison.Ordinal)
                 ? color
                 : new ImmutableSolidColorBrush(color);

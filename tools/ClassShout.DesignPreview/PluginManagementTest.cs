@@ -115,7 +115,7 @@ internal static partial class Program
             var settings = new ClassShout.Classroom.Views.SettingsWindow { DataContext = vm };
             settings.Show(); Dispatcher.UIThread.RunJobs();
             var tabs = settings.FindControl<TabControl>("SettingsPages")!;
-            tabs.SelectedIndex = 1; Dispatcher.UIThread.RunJobs(); settings.UpdateLayout();
+            tabs.SelectedItem = settings.FindControl<TabItem>("PluginsPage"); Dispatcher.UIThread.RunJobs(); settings.UpdateLayout();
             Check("教室端有独立插件设置标签", settings.FindControl<TabItem>("PluginsPage")!.Header?.ToString() == "插件" && settings.GetVisualDescendants().OfType<PluginManagerPanel>().Any());
             tabs.SelectedIndex = 0; Dispatcher.UIThread.RunJobs(); settings.Close();
             Check("离开独立设置页沿用同一运行实例", ReferenceEquals(manager, vm.Plugins) && vm.Plugins.Items.Single().Running && File.ReadAllText(marker) == pid);

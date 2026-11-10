@@ -115,6 +115,9 @@ public sealed class TrayPresence : IDisposable
             return;
         }
 
+        // 从未显示的自启窗口不能直接作为模态对话框的所有者。
+        if (!_window.IsVisible)
+            Restore();
         var prompt = new PinPromptWindow();
         prompt.Configure("退出教室端", "这台教室端设置了退出保护。请输入 PIN 后再退出 —— 退出之后，老师在教师端里就找不到这间教室了。");
 

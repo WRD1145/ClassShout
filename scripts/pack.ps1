@@ -78,7 +78,7 @@ try {
     # ---------- 读取版本号 ----------
     $propsContent = Get-Content (Join-Path $repoRoot 'Directory.Build.props') -Raw
     $version = if ($ReleaseVersion) { $ReleaseVersion } else { ([xml]$propsContent).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1 }
-    if ($version -notmatch '^\d+\.\d+\.\d+$') { throw '无法确定有效发布版本，停止打包，禁止回退为 0.0.0。' }
+    if ($version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') { throw '无法确定有效发布版本，停止打包，禁止回退为 0.0.0。' }
     $versionArgs = @("-p:Version=$version")
     Write-Host "本次打包及代码内置版本：$version"
     Initialize-ReleaseSigning -Required:$RequireSigning -SkipAndroid:$SkipAndroid
@@ -712,7 +712,7 @@ $LaunchHint
         $setupApps = @(
             @{
                 Id = 'classroom'
-                Title = 'ClassShout 教室端'
+                Title = 'ClassShout教室端'
                 Folder = 'Classroom'
                 Exe = 'ClassShout.Classroom.exe'
                 Project = 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'
@@ -721,7 +721,7 @@ $LaunchHint
             },
             @{
                 Id = 'teacher'
-                Title = 'ClassShout 教师端'
+                Title = 'ClassShout教师端'
                 Folder = 'Teacher'
                 Exe = 'ClassShout.Teacher.Desktop.exe'
                 Project = 'src\ClassShout.Teacher.Desktop\ClassShout.Teacher.Desktop.csproj'

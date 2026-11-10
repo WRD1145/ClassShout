@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Fluent/Color.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Fluent/Shape.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Tokens/Elevation.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Tokens/Motion.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Tokens/State.axaml" />
+        <ResourceInclude Source="avares://ClassShout.Design/Themes/Controls/Surfaces.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+  <StyleInclude Source="avares://ClassShout.Design/Themes/Tokens/Typography.axaml" />
+  <Style Selector=":is(TopLevel)">
+    <Setter Property="FontFamily" Value="{DynamicResource Md3.FontFamily}" />
+    <Setter Property="Background" Value="{DynamicResource Md3.Surface}" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurface}" />
+  </Style>
+  <Style Selector="TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurface}" />
+  </Style>
+  <Style Selector="Button.block">
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+  </Style>
+  <Style Selector="TabControl.settingsNavigation">
+    <Setter Property="TabStripPlacement" Value="Left" />
+  </Style>
+  <Style Selector="TabControl.settingsNavigation TabItem">
+    <Setter Property="MinWidth" Value="160" />
+    <Setter Property="HorizontalContentAlignment" Value="Left" />
+  </Style>
+  <Style Selector="Button.text">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.voiceAction">
+    <Setter Property="Background" Value="{DynamicResource Md3.Primary}" />
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+  <Style Selector="Button.voiceAction.recording">
+    <Setter Property="Background" Value="{DynamicResource Md3.Error}" />
+  </Style>
+  <Style Selector="Button.voiceAction:disabled">
+    <Setter Property="Opacity" Value="0.65" />
+  </Style>
+</Styles>

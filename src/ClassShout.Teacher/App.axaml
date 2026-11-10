@@ -4,12 +4,7 @@
              x:Class="ClassShout.Teacher.App">
 
   <Application.Styles>
-    <!--
-      与教室端保持同一套主题组合：Fluent 底座在前，Md3 主题在后。
-      明暗由教师端「设备 → 个性化」决定，默认跟随系统。
-    -->
     <fa:FluentAvaloniaTheme PreferSystemTheme="False" />
-    <StyleInclude Source="avares://ClassShout.Design/Md3Theme.axaml" />
   </Application.Styles>
 
 </Application>

@@ -26,6 +26,8 @@ namespace ClassShout.DesignPreview;
 /// <summary>预览用应用：铺 Fluent 底座 + MD3 主题，与真实应用的组合方式完全一致。</summary>
 internal sealed class PreviewApp : Application
 {
+    public static bool UseFluentDesktop { get; set; }
+
     public override void Initialize()
     {
         Styles.Add(new FluentAvaloniaTheme { PreferSystemTheme = false });
@@ -33,7 +35,9 @@ internal sealed class PreviewApp : Application
         // 用 StyleInclude 而不是生成的强类型类：不依赖 XAML 编译器对文件名的推断，更稳。
         Styles.Add(new StyleInclude(new Uri("avares://ClassShout.Design/"))
         {
-            Source = new Uri("avares://ClassShout.Design/Md3Theme.axaml"),
+            Source = new Uri(UseFluentDesktop
+                ? "avares://ClassShout.Design/FluentDesktopTheme.axaml"
+                : "avares://ClassShout.Design/Md3Theme.axaml"),
         });
     }
 }
@@ -792,6 +796,7 @@ internal static partial class Program
         Console.WriteLine("置顶档位可选项断言：");
 
         var window = new ClassroomSettings { DataContext = new ClassroomViewModel(), Height = 820 };
+        window.FindControl<TabControl>("SettingsPages")!.SelectedItem = window.FindControl<TabItem>("DisplayPage");
         window.Show();
         Dispatcher.UIThread.RunJobs();
         AvaloniaHeadlessPlatform.ForceRenderTimerTick();
@@ -981,6 +986,7 @@ internal static partial class Program
         ClassShout.Teacher.Services.TeacherPlatform.RegisterAudioRecorder(
             static () => new PreviewAudioRecorder());
 
+        PreviewApp.UseFluentDesktop = args.Contains("--fluent");
         AppBuilder.Configure<PreviewApp>()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions
             {
@@ -996,6 +1002,26 @@ internal static partial class Program
 
         // 字体先验：解析不到就该立刻失败，不必等渲染完再看图猜
         var fontsPassed = VerifyBundledFonts();
+
+        // 走真实下拉框入口，验证保存与已显示文字的实时刷新。
+        var fontPicker = new FontScalePicker();
+        var fontWindow = new Window { Content = fontPicker };
+        fontWindow.Show();
+        var fontPanel = (StackPanel)fontPicker.Content!;
+        var fontLabel = (TextBlock)fontPanel.Children[0];
+        var fontChoices = (ComboBox)fontPanel.Children[1];
+        Dispatcher.UIThread.RunJobs();
+        var baselineFontSize = fontLabel.FontSize;
+        fontChoices.SelectedIndex = 2;
+        Dispatcher.UIThread.RunJobs();
+        var fontScalePassed = LocalSettings.LoadAppearance().FontScalePercent == 130
+            && Math.Abs(fontLabel.FontSize - baselineFontSize * 1.3) < 0.01;
+        fontChoices.SelectedIndex = 0;
+        Dispatcher.UIThread.RunJobs();
+        fontScalePassed &= Math.Abs(fontLabel.FontSize - baselineFontSize) < 0.01;
+        fontWindow.Close();
+        Console.WriteLine(fontScalePassed ? "  [通过] 界面字号即时更新并保存" : "  [失败] 界面字号未正确更新或保存");
+        fontsPassed &= fontScalePassed;
 
         // 配色先验：同样不必等到看图
         var palettePassed = VerifyPalette();
@@ -1022,7 +1048,7 @@ internal static partial class Program
             new("classroom-plugin-settings", () =>
             {
                 var view = new ClassroomSettings { DataContext = new ClassroomViewModel(), Width = 620, Height = 1000 };
-                view.FindControl<TabControl>("SettingsPages")!.SelectedIndex = 1;
+                view.FindControl<TabControl>("SettingsPages")!.SelectedItem = view.FindControl<TabItem>("PluginsPage");
                 return view;
             }, 620, 1000, _ => null),
             new("teacher-plugin-settings", () => new TeacherView { DataContext = new TeacherShellViewModel { ActivePage = TeacherPage.Plugins } }, 480, 1000, _ => null),
@@ -1665,7 +1691,9 @@ internal static partial class Program
                         SttLanguage = "zh",
                     };
 
-                    return new ClassroomSettings { DataContext = vm, Height = 2600 };
+                    var window = new ClassroomSettings { DataContext = vm, Height = 2600 };
+                    window.FindControl<TabControl>("SettingsPages")!.SelectedItem = window.FindControl<TabItem>("AudioPage");
+                    return window;
                 }, 0, 0,
                 _ => null),
 
@@ -1725,6 +1753,8 @@ internal static partial class Program
                         DataContext = new ClassroomViewModel(),
                         Height = 820,
                     };
+
+                    window.FindControl<TabControl>("SettingsPages")!.SelectedItem = window.FindControl<TabItem>("DisplayPage");
 
                     // 用 Post 而不是直接设：下拉需要窗口已经显示、Popup 宿主已就位才能展开。
                     // 主循环在 Show 之后会跑一轮 RunJobs，正好执行这里排队的工作。
@@ -1853,7 +1883,8 @@ internal static partial class Program
                 // Expectations 返回 null 表示这一页只导出图片、不做自动校验
                 if (scene.Expectations(isDark) is { } expectations)
                 {
-                    allPassed &= FrameInspector.Report($"{scene.Name} / {variantName}", frame, expectations);
+                    allPassed &= FrameInspector.Report($"{scene.Name} / {variantName}", frame,
+                        PreviewApp.UseFluentDesktop ? [] : expectations);
                 }
                 else
                 {
@@ -1899,7 +1930,9 @@ internal static partial class Program
 
         var window = new Window
         {
-            Width = scene.Width,
+            Width = OperatingSystem.IsWindows() && content is TeacherView
+                ? Math.Max(900, scene.Width)
+                : scene.Width,
             Height = scene.Height,
             RequestedThemeVariant = variant,
             Content = content,

@@ -31,6 +31,8 @@ public sealed class AppearanceSettings
     /// <summary>是否做过自定义。界面据此决定选中哪张色卡。</summary>
     public bool IsCustomized => !string.IsNullOrWhiteSpace(SeedColor);
 
+    public int FontScalePercent { get; set; } = 100;
+
     /// <summary>
     /// 明暗：跟随系统 / 浅色 / 深色。
     ///
@@ -43,6 +45,7 @@ public sealed class AppearanceSettings
     /// <summary>收拾手改坏的值（JSON 里可能写了 3、-1，或者旧版本根本没有这个字段）。</summary>
     public AppearanceSettings Normalized() => new()
     {
+        FontScalePercent = FontScalePercent is 100 or 115 or 130 ? FontScalePercent : 100,
         SeedColor = string.IsNullOrWhiteSpace(SeedColor) ? null : SeedColor.Trim(),
         Theme = Enum.IsDefined(Theme) ? Theme : ThemeMode.System,
     };

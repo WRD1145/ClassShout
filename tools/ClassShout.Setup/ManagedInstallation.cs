@@ -35,7 +35,7 @@ public static partial class Program
         if (!System.Text.RegularExpressions.Regex.IsMatch(Info.AppId, "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$") ||
             !System.Text.RegularExpressions.Regex.IsMatch(Info.Folder, "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$") ||
             !System.Text.RegularExpressions.Regex.IsMatch(Info.Exe, "^[a-zA-Z0-9][a-zA-Z0-9._-]*\\.exe$") ||
-            !System.Text.RegularExpressions.Regex.IsMatch(Info.Version, "^\\d+\\.\\d+\\.\\d+$") || Info.Version == "0.0.0")
+            !System.Text.RegularExpressions.Regex.IsMatch(Info.Version, "^\\d+\\.\\d+\\.\\d+(\\.\\d+)?$") || SameVersion(Info.Version, "0.0.0"))
             throw new InvalidDataException("安装包信息缺失或版本无效，请重新下载完整安装包。");
     }
     private static string MaintenanceProgram => TestIntegrationRoot is { } root ? Path.Combine(root, "maintenance", Info.Version, "ClassShout.Setup.exe") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClassShout", "Maintenance", Info.AppId, Info.Version, "ClassShout.Setup.exe");
@@ -43,7 +43,13 @@ public static partial class Program
     internal static bool SameVersion(string? a, string? b) => ParseVersion(a) is { } first && ParseVersion(b) is { } second && first == second;
     private static Version? ParseVersion(string? value) => Version.TryParse(value?.Split('+')[0], out var version)
         ? new Version(version.Major, version.Minor, Math.Max(0, version.Build), Math.Max(0, version.Revision)) : null;
-    internal static bool IsDowngrade(string? existing) => ParseVersion(existing) is { } installed && ParseVersion(Info.Version) is { } incoming && installed > incoming;
+    internal static bool IsDowngrade(string? existing)
+    {
+        // 四段编号重置时，允许已登记的三段版本迁移到新编号。
+        if (Info.Version.Count(c => c == '.') == 3 && existing?.Count(c => c == '.') == 2)
+            return false;
+        return ParseVersion(existing) is { } installed && ParseVersion(Info.Version) is { } incoming && installed > incoming;
+    }
     private static void RejectDowngrade(string? existing)
     {
         if (IsDowngrade(existing)) throw new InvalidOperationException("已安装较新版本，请使用较新的安装包；不能用旧包覆盖。");

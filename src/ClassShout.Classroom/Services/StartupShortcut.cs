@@ -22,6 +22,7 @@ public static class StartupShortcut
 {
     /// <summary>快捷方式文件名。用中文名，因为它就摆在启动文件夹里给人看。</summary>
     private const string ShortcutName = "ClassShout 教室端.lnk";
+    public const string TrayArgument = "--startup-tray";
 
     /// <summary>只有 Windows 走启动文件夹这条路。Linux 部署用 systemd，见 README。</summary>
     public static bool IsSupported => OperatingSystem.IsWindows();
@@ -65,6 +66,7 @@ public static class StartupShortcut
 
             var link = (IShellLinkW)new ShellLinkComObject();
             link.SetPath(ExecutablePath);
+            link.SetArguments(TrayArgument);
             link.SetWorkingDirectory(AppContext.BaseDirectory);
             link.SetDescription("ClassShout 教室端（开机自动启动）");
 
@@ -114,7 +116,9 @@ public static class StartupShortcut
     /// <summary>
     /// 开机自启实际指向的路径；读不到返回 null。仅用于自检与排错。
     /// </summary>
-    public static string? Describe()
+    public static bool HasTrayArgument() => Describe(arguments: true) == TrayArgument;
+
+    public static string? Describe(bool arguments = false)
     {
         if (!IsEnabled)
         {
@@ -127,7 +131,10 @@ public static class StartupShortcut
             ((IPersistFile)link).Load(ShortcutPath, 0);
 
             var buffer = new StringBuilder(1024);
-            link.GetPath(buffer, buffer.Capacity, IntPtr.Zero, 0);
+            if (arguments)
+                link.GetArguments(buffer, buffer.Capacity);
+            else
+                link.GetPath(buffer, buffer.Capacity, IntPtr.Zero, 0);
             return buffer.ToString();
         }
         catch (Exception ex) when (ex is COMException or IOException or InvalidCastException or PlatformNotSupportedException)

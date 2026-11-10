@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <SolidColorBrush x:Key="Md3.Primary" Color="#005FB8" />
+      <SolidColorBrush x:Key="Md3.OnPrimary" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.PrimaryContainer" Color="#D9ECFF" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryContainer" Color="#002B51" />
+      <SolidColorBrush x:Key="Md3.Secondary" Color="#625B71" />
+      <SolidColorBrush x:Key="Md3.OnSecondary" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.SecondaryContainer" Color="#DFEEFC" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryContainer" Color="#002B51" />
+      <SolidColorBrush x:Key="Md3.Tertiary" Color="#7D5260" />
+      <SolidColorBrush x:Key="Md3.OnTertiary" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.TertiaryContainer" Color="#FFD8E4" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryContainer" Color="#31111D" />
+      <SolidColorBrush x:Key="Md3.Error" Color="#B3261E" />
+      <SolidColorBrush x:Key="Md3.OnError" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.ErrorContainer" Color="#F9DEDC" />
+      <SolidColorBrush x:Key="Md3.OnErrorContainer" Color="#410E0B" />
+      <SolidColorBrush x:Key="Md3.Surface" Color="#F3F3F3" />
+      <SolidColorBrush x:Key="Md3.OnSurface" Color="#1A1A1A" />
+      <SolidColorBrush x:Key="Md3.SurfaceVariant" Color="#EAEAEA" />
+      <SolidColorBrush x:Key="Md3.OnSurfaceVariant" Color="#4A4A4A" />
+      <SolidColorBrush x:Key="Md3.Background" Color="#F3F3F3" />
+      <SolidColorBrush x:Key="Md3.OnBackground" Color="#1A1A1A" />
+      <SolidColorBrush x:Key="Md3.SurfaceDim" Color="#E5E5E5" />
+      <SolidColorBrush x:Key="Md3.SurfaceBright" Color="#FAFAFA" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerLowest" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerLow" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainer" Color="#F9F9F9" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerHigh" Color="#EEEEEE" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerHighest" Color="#E5E5E5" />
+      <SolidColorBrush x:Key="Md3.Outline" Color="#757575" />
+      <SolidColorBrush x:Key="Md3.OutlineVariant" Color="#D1D1D1" />
+      <SolidColorBrush x:Key="Md3.InverseSurface" Color="#322F35" />
+      <SolidColorBrush x:Key="Md3.InverseOnSurface" Color="#F5EFF7" />
+      <SolidColorBrush x:Key="Md3.InversePrimary" Color="#D0BCFF" />
+      <SolidColorBrush x:Key="Md3.PrimaryFixed" Color="#EADDFF" />
+      <SolidColorBrush x:Key="Md3.PrimaryFixedDim" Color="#D0BCFF" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryFixed" Color="#21005D" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryFixedVariant" Color="#4F378B" />
+      <SolidColorBrush x:Key="Md3.SecondaryFixed" Color="#E8DEF8" />
+      <SolidColorBrush x:Key="Md3.SecondaryFixedDim" Color="#CCC2DC" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryFixed" Color="#1D192B" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryFixedVariant" Color="#4A4458" />
+      <SolidColorBrush x:Key="Md3.TertiaryFixed" Color="#FFD8E4" />
+      <SolidColorBrush x:Key="Md3.TertiaryFixedDim" Color="#EFB8C8" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryFixed" Color="#31111D" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryFixedVariant" Color="#633B48" />
+      <SolidColorBrush x:Key="Md3.Scrim" Color="#000000" Opacity="0.32" />
+      <SolidColorBrush x:Key="Md3.Shadow" Color="#000000" />
+      <Color x:Key="SystemAccentColor">#005FB8</Color>
+      <Color x:Key="SystemAccentColorLight1">#005FB8</Color>
+      <Color x:Key="SystemAccentColorLight2">#005FB8</Color>
+      <Color x:Key="SystemAccentColorLight3">#005FB8</Color>
+      <Color x:Key="SystemAccentColorDark1">#005FB8</Color>
+      <Color x:Key="SystemAccentColorDark2">#005FB8</Color>
+      <Color x:Key="SystemAccentColorDark3">#005FB8</Color>
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Dark">
+      <SolidColorBrush x:Key="Md3.Primary" Color="#60CDFF" />
+      <SolidColorBrush x:Key="Md3.OnPrimary" Color="#003447" />
+      <SolidColorBrush x:Key="Md3.PrimaryContainer" Color="#004364" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryContainer" Color="#CCEEFF" />
+      <SolidColorBrush x:Key="Md3.Secondary" Color="#CCC2DC" />
+      <SolidColorBrush x:Key="Md3.OnSecondary" Color="#332D41" />
+      <SolidColorBrush x:Key="Md3.SecondaryContainer" Color="#004364" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryContainer" Color="#CCEEFF" />
+      <SolidColorBrush x:Key="Md3.Tertiary" Color="#EFB8C8" />
+      <SolidColorBrush x:Key="Md3.OnTertiary" Color="#492532" />
+      <SolidColorBrush x:Key="Md3.TertiaryContainer" Color="#633B48" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryContainer" Color="#FFD8E4" />
+      <SolidColorBrush x:Key="Md3.Error" Color="#F2B8B5" />
+      <SolidColorBrush x:Key="Md3.OnError" Color="#601410" />
+      <SolidColorBrush x:Key="Md3.ErrorContainer" Color="#8C1D18" />
+      <SolidColorBrush x:Key="Md3.OnErrorContainer" Color="#F9DEDC" />
+      <SolidColorBrush x:Key="Md3.Surface" Color="#202020" />
+      <SolidColorBrush x:Key="Md3.OnSurface" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.SurfaceVariant" Color="#303030" />
+      <SolidColorBrush x:Key="Md3.OnSurfaceVariant" Color="#CCCCCC" />
+      <SolidColorBrush x:Key="Md3.Background" Color="#202020" />
+      <SolidColorBrush x:Key="Md3.OnBackground" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="Md3.SurfaceDim" Color="#181818" />
+      <SolidColorBrush x:Key="Md3.SurfaceBright" Color="#2C2C2C" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerLowest" Color="#181818" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerLow" Color="#272727" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainer" Color="#2C2C2C" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerHigh" Color="#333333" />
+      <SolidColorBrush x:Key="Md3.SurfaceContainerHighest" Color="#3D3D3D" />
+      <SolidColorBrush x:Key="Md3.Outline" Color="#999999" />
+      <SolidColorBrush x:Key="Md3.OutlineVariant" Color="#474747" />
+      <SolidColorBrush x:Key="Md3.InverseSurface" Color="#E6E0E9" />
+      <SolidColorBrush x:Key="Md3.InverseOnSurface" Color="#322F35" />
+      <SolidColorBrush x:Key="Md3.InversePrimary" Color="#6750A4" />
+      <SolidColorBrush x:Key="Md3.PrimaryFixed" Color="#EADDFF" />
+      <SolidColorBrush x:Key="Md3.PrimaryFixedDim" Color="#D0BCFF" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryFixed" Color="#21005D" />
+      <SolidColorBrush x:Key="Md3.OnPrimaryFixedVariant" Color="#4F378B" />
+      <SolidColorBrush x:Key="Md3.SecondaryFixed" Color="#E8DEF8" />
+      <SolidColorBrush x:Key="Md3.SecondaryFixedDim" Color="#CCC2DC" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryFixed" Color="#1D192B" />
+      <SolidColorBrush x:Key="Md3.OnSecondaryFixedVariant" Color="#4A4458" />
+      <SolidColorBrush x:Key="Md3.TertiaryFixed" Color="#FFD8E4" />
+      <SolidColorBrush x:Key="Md3.TertiaryFixedDim" Color="#EFB8C8" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryFixed" Color="#31111D" />
+      <SolidColorBrush x:Key="Md3.OnTertiaryFixedVariant" Color="#633B48" />
+      <SolidColorBrush x:Key="Md3.Scrim" Color="#000000" Opacity="0.48" />
+      <SolidColorBrush x:Key="Md3.Shadow" Color="#000000" />
+      <Color x:Key="SystemAccentColor">#60CDFF</Color>
+      <Color x:Key="SystemAccentColorLight1">#60CDFF</Color>
+      <Color x:Key="SystemAccentColorLight2">#60CDFF</Color>
+      <Color x:Key="SystemAccentColorLight3">#60CDFF</Color>
+      <Color x:Key="SystemAccentColorDark1">#60CDFF</Color>
+      <Color x:Key="SystemAccentColorDark2">#60CDFF</Color>
+      <Color x:Key="SystemAccentColorDark3">#60CDFF</Color>
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

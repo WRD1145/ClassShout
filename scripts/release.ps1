@@ -61,8 +61,8 @@ $tagPushed = $false
 try {
     # ---------- 前置检查：先把"还没开始就已经错了"的事挡掉 ----------
 
-    if ($Version -notmatch '^v\d+\.\d+\.\d+$') {
-        throw "版本标签格式不对：$Version（应形如 v1.1.1）"
+    if ($Version -notmatch '^v\d+\.\d+\.\d+\.\d+$') {
+        throw "版本标签格式不对：$Version（应形如 v1.1.1.0）"
     }
 
     $propsContent = Get-Content 'Directory.Build.props' -Raw

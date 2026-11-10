@@ -6,7 +6,7 @@
         xmlns:remote="using:ClassShout.Core.Remote"
         x:Class="ClassShout.Classroom.Views.MainWindow"
         x:DataType="vm:ClassroomViewModel"
-        Title="ClassShout 教室端"
+        Title="ClassShout教室端"
         Width="1320" Height="860"
         MinWidth="1000" MinHeight="660"
         WindowStartupLocation="CenterScreen"
