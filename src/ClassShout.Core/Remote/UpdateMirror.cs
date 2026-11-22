@@ -273,11 +273,11 @@ public static class UpdateProxy
         // 1) Windows：读系统代理设置。代理软件（Clash / v2ray 等）的"系统代理"开关
         //    写的就是这里，而 .NET 自带的解析根本不读它。
         //    自检会注入一份假的读取器，所以这里走的是委托而不是直接调用。
-        if (OperatingSystem.IsWindows())
+        // 注入的读取器不访问注册表，让 Linux 自检也能验证 Windows 代理解析。
+        if (OperatingSystem.IsWindows() || windowsProxyReader is not null)
         {
+#pragma warning disable CA1416 // 非 Windows 仅运行注入的测试读取器，不访问注册表。
             var readWindows = windowsProxyReader ?? ReadWindowsSystemProxy;
-
-#pragma warning disable CA1416 // 上面那行已经挡过平台；分析器看不出一份委托背后是不是 Windows 专有实现
             var (enabled, server, bypass) = readWindows();
 #pragma warning restore CA1416
 

@@ -20,9 +20,9 @@ public partial class App : Application
         AvaloniaXamlLoader.Load(this);
         Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://ClassShout.Design/"))
         {
-            Source = new Uri(OperatingSystem.IsWindows()
-                ? "avares://ClassShout.Design/FluentDesktopTheme.axaml"
-                : "avares://ClassShout.Design/Md3Theme.axaml"),
+            Source = new Uri(OperatingSystem.IsAndroid()
+                ? "avares://ClassShout.Design/Md3Theme.axaml"
+                : "avares://ClassShout.Design/FluentDesktopTheme.axaml"),
         });
     }
 
@@ -59,6 +59,7 @@ public partial class App : Application
             }
 
             _viewModel = new ClassroomViewModel();
+            _viewModel.Update.RequestShutdown = () => desktop.Shutdown();
 
             try
             {

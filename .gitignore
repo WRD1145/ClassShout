@@ -16,3 +16,7 @@ relay-config.json
 relay-users.json
 relay-state.json
 relay-bindings.json
+
+# Python 打包脚本缓存
+__pycache__/
+*.pyc

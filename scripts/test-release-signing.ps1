@@ -68,9 +68,18 @@ try {
     $log = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'prepare-release-signing.ps1') 2>&1
     $owned=Join-Path $runner 'classshout-signing-123-1'
     Check 'Android 配置完整时无需 Windows 证书' ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath (Join-Path $owned 'android.keystore')) -and -not (Test-Path -LiteralPath (Join-Path $owned 'windows.pfx')))
+    if (-not $IsWindows -and (Test-Path -LiteralPath $owned)) {
+        Check 'Linux 签名目录仅当前用户可访问' ([IO.File]::GetUnixFileMode($owned) -eq ([IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute))
+        Check 'Linux 私钥文件仅当前用户可读写' ([IO.File]::GetUnixFileMode((Join-Path $owned 'android.keystore')) -eq ([IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite))
+    }
     $env:CLASSSHOUT_SIGNING_DIRECTORY=$owned
     $log = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'cleanup-release-signing.ps1') 2>&1
     if($LASTEXITCODE -ne 0){throw '材料准备测试的清理失败。'}
+    foreach ($name in @('ANDROID_SIGNING_KEYSTORE_BASE64','ANDROID_SIGNING_KEY_ALIAS','ANDROID_SIGNING_STORE_PASSWORD','ANDROID_SIGNING_KEY_PASSWORD')) { [Environment]::SetEnvironmentVariable($name,$null) }
+    $log = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'prepare-release-signing.ps1') -SkipAndroid 2>&1
+    Check '桌面 ARM 构建不要求 Android 私钥' ($LASTEXITCODE -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $owned 'android.keystore')))
+    $log = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'cleanup-release-signing.ps1') 2>&1
+    if ($LASTEXITCODE -ne 0) { throw '桌面材料准备测试清理失败。' }
     $desktopAllowed=$true
     try {Initialize-ReleaseSigning -Required -SkipAndroid}catch{$desktopAllowed=$false}
     Check '仅桌面打包不强制要求 Windows 证书' $desktopAllowed

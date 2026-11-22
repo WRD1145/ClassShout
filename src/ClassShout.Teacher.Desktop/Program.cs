@@ -1,6 +1,7 @@
 using Avalonia;
 using ClassShout.Teacher.Desktop.Services;
 using ClassShout.Teacher.Services;
+using ClassShout.Design.Theming;
 
 namespace ClassShout.Teacher.Desktop;
 
@@ -9,6 +10,12 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        if (ClassShout.Core.Remote.DesktopUpdate.TryHandleArguments(args, "teacher", out var updateExit))
+        {
+            Environment.ExitCode = updateExit;
+            return;
+        }
+
         // 在 Avalonia 起来之前注册平台能力。
         // 这是共享 UI 层与桌面平台之间唯一的耦合点，Android 头做的是同一件事。
         TeacherPlatform.DeviceName = $"{Environment.MachineName}（PC）";
@@ -37,5 +44,6 @@ internal static class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<ClassShout.Teacher.App>()
             .UsePlatformDetect()
+            .WithClassShoutFonts()
             .LogToTrace();
 }

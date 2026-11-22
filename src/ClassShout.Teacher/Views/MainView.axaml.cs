@@ -20,7 +20,7 @@ public partial class MainView : UserControl
     public MainView()
     {
         InitializeComponent();
-        if (OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsAndroid())
         {
             var shell = this.FindControl<Grid>("ShellLayout")!;
             var navigation = this.FindControl<Border>("ShellNavigation")!;

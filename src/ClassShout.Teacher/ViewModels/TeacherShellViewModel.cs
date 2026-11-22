@@ -158,9 +158,11 @@ public partial class TeacherShellViewModel : ObservableObject, IAsyncDisposable
         // 手机按 .apk 后缀挑）。
         Update = new ClassShout.Design.UpdateCardViewModel(_http, LocalSettings.LoadUpdate(), ClassShout.Design.PlatformLinks.OpenAsync)
         {
+            DesktopAppId = OperatingSystem.IsAndroid() ? null : "teacher",
             CurrentVersion = ClassShout.Design.DeveloperMode.Version,
             BuildDescription = ClassShout.Design.DeveloperMode.BuildDescription,
-            PreferredAssetName = OperatingSystem.IsAndroid() ? null : "ClassShout.Teacher-win-x64.zip",
+            PreferredAssetName = OperatingSystem.IsAndroid() ? null : OperatingSystem.IsWindows()
+                ? $"ClassShout.Teacher-{DesktopUpdate.Runtime}.zip" : $"ClassShout.Teacher-{DesktopUpdate.Runtime}.tar.gz",
             PreferredAssetSuffix = OperatingSystem.IsAndroid() ? ".apk" : null,
         };
 

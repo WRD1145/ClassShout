@@ -80,7 +80,7 @@ public sealed class UpdateChecker
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly UpdateSettings _settings;
+    private UpdateSettings _settings;
 
     /// <summary>自检用的处理器工厂；为空时按代理设置自己建（正常运行就是这条）。</summary>
     private readonly Func<ProxyResolution, HttpMessageHandler>? _handlerFactory;
@@ -104,6 +104,9 @@ public sealed class UpdateChecker
 
     /// <summary>当前设置下实际会走的代理（界面显示用）。</summary>
     public ProxyResolution CurrentProxy => _proxyResolver(_settings.ProxyMode, _settings.ProxyUrl);
+
+    /// <summary>界面保存镜像或代理后立即生效，避免继续使用构造时的旧快照。</summary>
+    public void Configure(UpdateSettings settings) => _settings = settings.Normalized();
 
     /// <summary>
     /// 用当前选中的镜像，问一次"最新的是哪一版"。
@@ -252,6 +255,28 @@ public sealed class UpdateChecker
             };
 
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
+    }
+
+    /// <summary>沿用镜像和代理，限流式下载；上限同时适用于无 Content-Length 的响应。</summary>
+    public async Task DownloadAsync(string url, string destination, long limit, CancellationToken cancellationToken = default)
+    {
+        using var http = BuildClient(CurrentProxy);
+        http.Timeout = TimeSpan.FromMinutes(15);
+        http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "ClassShout-Updater");
+        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength > limit) throw new IOException("更新下载超过大小限制。");
+        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        var buffer = new byte[81920];
+        long total = 0;
+        int count;
+        while ((count = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            total += count;
+            if (total > limit) throw new IOException("更新下载超过大小限制。");
+            await output.WriteAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>版本号去掉前缀 v。</summary>

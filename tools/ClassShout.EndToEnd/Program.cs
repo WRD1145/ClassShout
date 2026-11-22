@@ -68,6 +68,8 @@ internal static partial class Program
         if (args.Contains("--extensions")) return await AssertExtensionsAsync();
         if (args.Contains("--maintenance")) return await AssertMaintenanceAsync();
         if (args.Contains("--plugin-management")) return await AssertPluginManagementAsync();
+        AssertDesktopUpdates();
+        await AssertDesktopUpdateCardAsync();
         await AssertPluginManagementAsync();
         await AssertMaintenanceAsync();
         await AssertExtensionsAsync();
@@ -484,7 +486,7 @@ internal static partial class Program
         // ---------- 6. 音频播放链路 ----------
         try
         {
-            using var player = new NAudioLoopbackPlayer();
+            using var player = ClassroomPlatform.CreatePlayer();
             player.Start(format);
             foreach (var chunk in sentChunks.Take(5))
             {
@@ -492,7 +494,7 @@ internal static partial class Program
             }
 
             await player.CompleteAsync();
-            Check("音频播放链路可用（NAudio 送入并播完 100 毫秒）", true, "未抛异常");
+            Check("音频播放链路可用（本机后端送入并播完 100 毫秒）", true, "未抛异常");
         }
         catch (Exception ex)
         {
@@ -500,12 +502,17 @@ internal static partial class Program
         }
 
         // ---------- 7. 系统 TTS ----------
-        using var speech = new WindowsSpeechSynthesizer();
+        using var speech = ClassroomPlatform.CreateSystemSpeech();
         var voices = speech.GetVoices();
         var chineseVoice = speech.GetDefaultChineseVoice();
 
+#if WINDOWS
         Check("系统已安装语音合成引擎", voices.Count > 0, $"共 {voices.Count} 个语音");
         Check("存在中文语音", chineseVoice is not null, chineseVoice ?? "未找到中文语音");
+#else
+        // Linux 命令行后端不枚举音色，不把空列表误判成缺少语音引擎。
+        Check("系统已安装命令行语音合成后端", ClassroomPlatform.HasSystemSpeech, "检测 spd-say / espeak-ng / espeak");
+#endif
 
         if (runTts && chineseVoice is not null)
         {
@@ -6625,7 +6632,7 @@ internal static partial class Program
             malformed.All(f => !f.IsSupported),
             string.Join("，", malformed.Select(f => f.ToString())));
 
-        using var player = new NAudioLoopbackPlayer();
+        using var player = ClassroomPlatform.CreatePlayer();
         var rejected = true;
 
         foreach (var format in malformed)

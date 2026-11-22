@@ -1278,10 +1278,10 @@
               <Panel>
                 <md3:Md3Icon Kind="Microphone" Size="52"
                              IsVisible="{Binding !Voice.IsRecording}"
-                             IconBrush="{DynamicResource Md3.OnPrimary}" />
+                             IconBrush="{Binding $parent[Button].Foreground}" />
                 <md3:Md3Icon Kind="Send" Size="52"
                              IsVisible="{Binding Voice.IsRecording}"
-                             IconBrush="{DynamicResource Md3.OnError}" />
+                             IconBrush="{Binding $parent[Button].Foreground}" />
               </Panel>
             </Button>
 
@@ -1855,7 +1855,7 @@
                            Text="{Binding Update.Notes}" />
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Button Classes="tonal small" Content="下载新版"
+                  <Button Classes="tonal small" Content="{Binding Update.DownloadButtonText}"
                           IsVisible="{Binding Update.HasDownload}"
                           Command="{Binding Update.OpenDownloadCommand}" />
                   <Button Classes="outlined small" Content="打开发行版页面"

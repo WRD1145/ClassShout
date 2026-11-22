@@ -12,7 +12,9 @@
   -->
   <PropertyGroup>
     <RootNamespace>ClassShout.Classroom</RootNamespace>
-    <TargetFrameworks>net10.0-windows;net10.0</TargetFrameworks>
+    <!-- Linux 开发机只构建本机目标，Windows CI 继续构建两种发布目标。 -->
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows'))">net10.0-windows;net10.0</TargetFrameworks>
+    <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net10.0</TargetFrameworks>
     <UseWindowsForms>false</UseWindowsForms>
     <UseWPF>false</UseWPF>
   </PropertyGroup>

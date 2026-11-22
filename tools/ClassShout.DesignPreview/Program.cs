@@ -191,6 +191,19 @@ internal static partial class Program
         var manager = FontManager.Current;
         var passed = true;
 
+        // 窗口构造阶段的诊断文字先于主题样式取默认字体，必须直接命中内置资源。
+        if (!manager.TryGetGlyphTypeface(Typeface.Default, out var defaultGlyph)
+            || !defaultGlyph.FamilyName.Contains("HarmonyOS", StringComparison.Ordinal)
+            || !defaultGlyph.TryGetGlyph('课', out _))
+        {
+            Console.WriteLine("  [失败] 启动默认字体未命中内置中文字体。");
+            passed = false;
+        }
+        else
+        {
+            Console.WriteLine("  [通过] 启动默认字体命中内置中文字体。");
+        }
+
         // 取值来源刻意是"一个真实窗口上的 FontFamily"，而不是自己拼一个字体链字符串：
         // Md3Theme.axaml 里 TopLevel 的 FontFamily 绑的就是 Md3.FontFamily 令牌，
         // 所以窗口上的值正是界面实际在用的那一个。
@@ -986,7 +999,7 @@ internal static partial class Program
         ClassShout.Teacher.Services.TeacherPlatform.RegisterAudioRecorder(
             static () => new PreviewAudioRecorder());
 
-        PreviewApp.UseFluentDesktop = args.Contains("--fluent");
+        PreviewApp.UseFluentDesktop = !args.Contains("--md3");
         AppBuilder.Configure<PreviewApp>()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions
             {
@@ -994,6 +1007,7 @@ internal static partial class Program
                 UseHeadlessDrawing = false,
             })
             .UseSkia()
+            .WithClassShoutFonts()
             .SetupWithoutStarting();
 
         if (args.Contains("--teacher-extension-selftest")) return VerifyTeacherExtensionsRuntime();
@@ -1930,7 +1944,7 @@ internal static partial class Program
 
         var window = new Window
         {
-            Width = OperatingSystem.IsWindows() && content is TeacherView
+            Width = !OperatingSystem.IsAndroid() && content is TeacherView
                 ? Math.Max(900, scene.Width)
                 : scene.Width,
             Height = scene.Height,

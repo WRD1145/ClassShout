@@ -1,6 +1,7 @@
 using Avalonia;
 using ClassShout.Classroom.Services;
 using ClassShout.Core.Audio;
+using ClassShout.Design.Theming;
 
 namespace ClassShout.Classroom;
 
@@ -9,6 +10,8 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (ClassShout.Core.Remote.DesktopUpdate.TryHandleArguments(args, "classroom", out var updateExit)) return updateExit;
+
         // 运维诊断：Linux 教室端上最常见的问题是"没装 alsa-utils"或"本机没有语音合成"，
         // 而那时的表现只有一个——不发声，从界面上完全看不出原因。
         // 这两个开关是为了让运维能一条命令问清楚"这台机器到底能用什么"，
@@ -132,5 +135,6 @@ internal static class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            .WithClassShoutFonts()
             .LogToTrace();
 }

@@ -190,13 +190,14 @@ public partial class ClassroomViewModel : ObservableObject, IAsyncDisposable
             LocalSettings.LoadUpdate(),
             ClassShout.Design.PlatformLinks.OpenAsync)
         {
+            DesktopAppId = "classroom",
             CurrentVersion = ClassShout.Design.DeveloperMode.Version,
             BuildDescription = ClassShout.Design.DeveloperMode.BuildDescription,
 
             // 教室端在 Windows 上是压缩包（1.10.0 起不再单文件），Linux 上是 tar.gz
             PreferredAssetName = OperatingSystem.IsWindows()
-                ? "ClassShout.Classroom-win-x64.zip"
-                : "ClassShout.Classroom-linux-x64.tar.gz",
+                ? $"ClassShout.Classroom-{DesktopUpdate.Runtime}.zip"
+                : $"ClassShout.Classroom-{DesktopUpdate.Runtime}.tar.gz",
             PreferredAssetSuffix = null,
         };
 

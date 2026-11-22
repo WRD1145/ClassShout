@@ -7,10 +7,8 @@
 #   · 也可以在 Actions 页面手动点一下（workflow_dispatch）：可以只打包不发布（dry_run），
 #     用来验证"这台机器上能不能打出来"，不会产生任何发行版。
 #
-# 为什么整套打包都在一个 Windows job 里跑：`scripts/pack.ps1` 本来就在开发机上
-# 一次产出 Windows（三个应用）+ Linux（服务器、教室端）+ Android APK，并且已经在
-# 本地反复验证过。CI 复用它，比在 yml 里再抄一遍发布参数靠谱 —— 两边一旦分叉，
-# 就会出现"本地能发、CI 发出来的少了点什么"。
+# Windows/Android 在 Windows 节点打包，Linux 在 Ubuntu 节点使用原生工具打包。
+# 各节点先生成校验清单，发布前逐一验证后合并，避免漏传新格式或混入旧产物。
 #
 # 平台说明（重要）：
 #   · Windows / Linux / Android —— 这一条流水线完整产出，和手动 release.ps1 的附件一致。
@@ -35,6 +33,10 @@ on:
         description: 手动指定版本（例如 1.18.1），留空则读 Directory.Build.props
         type: string
         required: false
+      run_tests:
+        description: 运行完整回归与原生安装验收（较慢）
+        type: boolean
+        default: false
       allow_unsigned_dry_run:
         description: 仅在 dry_run 时允许未签名验收包，绝不发布
         type: boolean
@@ -170,7 +172,7 @@ jobs:
 
       # 打包脚本自己会：依赖框架发布 + 把私有运行时摆进 runtime\ + 生成 zip/tar.gz
       # + 算 SHA256SUMS。CI 不重复这些细节。
-      - name: 打包（Windows / Linux / Android）
+      - name: 打包（Windows / Android）
         shell: pwsh
         env:
           MSBUILDDISABLENODEREUSE: '1'
@@ -184,7 +186,7 @@ jobs:
           # -Installer：额外产出两个安装/更新程序（exe）。它们与便携版 zip 是两种目录布局，
           # 安装版平铺（双击快捷方式就能跑，不需要 DOTNET_ROOT）。
           $requireSigning = $env:CLASSSHOUT_SIGNING_REQUIRED -eq 'true'
-          ./scripts/pack.ps1 -Configuration Release -ReleaseVersion $env:CLASSSHOUT_RELEASE_VERSION -IncludeLinuxServer -Installer -RequireSigning:$requireSigning
+          ./scripts/pack.ps1 -Configuration Release -ReleaseVersion $env:CLASSSHOUT_RELEASE_VERSION -Installer -RequireSigning:$requireSigning
 
       - name: 保留签名失败的 APK 以便核查
         if: failure()
@@ -194,6 +196,13 @@ jobs:
           path: dist/obj/universal/*-Signed.apk
           if-no-files-found: ignore
           retention-days: 3
+
+      - name: 验证 Windows 更新包并实际启动
+        if: github.event.inputs.run_tests == 'true'
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ needs.version.outputs.version }}
+        run: ./scripts/test-windows-update-packages.ps1
 
       - name: 看看打出来了什么
         shell: pwsh
@@ -216,7 +225,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-assets
+          name: release-assets-windows
           path: dist/release/*
           if-no-files-found: error
 
@@ -224,6 +233,101 @@ jobs:
         if: always()
         shell: pwsh
         run: ./scripts/cleanup-release-signing.ps1
+
+  # Windows ARM64 使用原生节点，避免只交叉编译却从未启动。
+  pack-windows-arm64:
+    needs: version
+    if: needs.version.outputs.should_release == 'true' || github.event.inputs.dry_run == 'true'
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: 准备可选 Windows 签名
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+        run: ./scripts/prepare-release-signing.ps1 -SkipAndroid
+      - name: 打包 Windows ARM64
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: ./scripts/pack.ps1 -Runtime win-arm64 -SkipAndroid -Installer -RequireSigning -ReleaseVersion $env:RELEASE_VERSION
+      - name: 验证 ARM64 更新包并实际启动
+        if: github.event.inputs.run_tests == 'true'
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ needs.version.outputs.version }}
+        run: ./scripts/test-windows-update-packages.ps1 -Runtime win-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-windows-arm64
+          path: dist/release/*
+          if-no-files-found: error
+      - name: 清理临时签名材料
+        if: always()
+        shell: pwsh
+        run: ./scripts/cleanup-release-signing.ps1
+
+  # Linux 格式由 Linux 原生工具生成，打包和启动验收在同一节点完成。
+  pack-linux:
+    needs: version
+    if: needs.version.outputs.should_release == 'true' || github.event.inputs.dry_run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: 安装 Linux 打包和验收依赖
+        run: sudo apt-get update && sudo apt-get install -y rpm dpkg-dev squashfs-tools xvfb libfontconfig1 libx11-6 libice6 libsm6 espeak-ng alsa-utils
+      - name: 固定 AppImage 工具
+        run: bash scripts/install-appimagetool.sh "$RUNNER_TEMP/appimagetool.AppImage"
+      - name: Linux 真实回归与启动验收
+        if: github.event.inputs.run_tests == 'true'
+        run: |
+          printf 'pcm.!default { type null }\n' > "$HOME/.asoundrc"
+          dbus-run-session -- xvfb-run -a bash scripts/regress-linux.sh
+      - name: 生成 tar.gz、update、AppImage、deb、rpm
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python3 scripts/pack-linux.py --app classroom --architecture "${{ matrix.architecture }}" --version "$RELEASE_VERSION" --appimagetool "$RUNNER_TEMP/appimagetool.AppImage"
+          dotnet publish src/ClassShout.RelayServer -c Release -f net10.0 -r linux-${{ matrix.architecture }} --self-contained=true -p:Version="$RELEASE_VERSION" -o dist/linux-native/ClassShout.RelayServer
+          tar -czf dist/linux-native/release/ClassShout.RelayServer-linux-${{ matrix.architecture }}.tar.gz -C dist/linux-native ClassShout.RelayServer
+          cd dist/linux-native/release
+          sha256sum -- * | grep -v '  SHA256SUMS.txt$' > ../checksums.tmp
+          mv ../checksums.tmp SHA256SUMS.txt
+      - name: 验收所有 Linux 格式
+        if: github.event.inputs.run_tests == 'true'
+        run: dbus-run-session -- xvfb-run -a python3 scripts/test-linux-packages.py dist/linux-native/release --architecture "${{ matrix.architecture }}"
+      - name: Ubuntu 实际安装 deb
+        if: github.event.inputs.run_tests == 'true'
+        run: |
+          sudo apt-get install -y ./dist/linux-native/release/ClassShout.Classroom-linux-${{ matrix.architecture }}.deb
+          classshout-classroom --diagnose
+      - name: Fedora 实际安装 rpm（隔离容器）
+        if: github.event.inputs.run_tests == 'true'
+        run: |
+          docker run --rm -v "$PWD/dist/linux-native/release:/packages:ro" fedora:44 sh -c 'dnf -y install /packages/ClassShout.Classroom-linux-${{ matrix.architecture }}.rpm && classshout-classroom --diagnose'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-linux-${{ matrix.architecture }}
+          path: dist/linux-native/release/*
+          if-no-files-found: error
 
   # ---------- 3. macOS：只构建，不进发行版 ----------
   pack-macos:
@@ -274,7 +378,7 @@ jobs:
 
   # ---------- 4. 建发行版 ----------
   release:
-    needs: [version, pack]
+    needs: [version, pack, pack-windows-arm64, pack-linux]
     if: needs.version.outputs.should_release == 'true' && github.event.inputs.dry_run != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -288,8 +392,22 @@ jobs:
       # 下载到同名目录会把四个图标混进附件里一起发出去。
       - uses: actions/download-artifact@v4
         with:
-          name: release-assets
-          path: release-assets
+          name: release-assets-windows
+          path: artifacts-windows-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets-windows-arm64
+          path: artifacts-windows-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets-linux-x64
+          path: artifacts-linux-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets-linux-arm64
+          path: artifacts-linux-arm64
+      - name: 验证并合并平台附件
+        run: python3 scripts/merge-release-assets.py --output release-assets artifacts-windows-x64 artifacts-windows-arm64 artifacts-linux-x64 artifacts-linux-arm64
 
       - name: 核对附件
         shell: bash
@@ -299,12 +417,15 @@ jobs:
           cd release-assets
           sha256sum -c SHA256SUMS.txt
           # 少一个附件就等于发了个半成品：这里显式点名要哪几个
-          for f in ClassShout.Classroom-win-x64.zip ClassShout.Classroom-linux-x64.tar.gz \
-                   ClassShout.RelayServer-win-x64.zip ClassShout.RelayServer-linux-x64.tar.gz \
-                   ClassShout.Teacher-win-x64.zip \
-                   ClassShout.Classroom-win-x64-setup.exe ClassShout.Teacher-win-x64-setup.exe \
-                   SHA256SUMS.txt; do
-            [ -f "$f" ] || { echo "缺少附件：$f" >&2; exit 1; }
+          for arch in x64 arm64; do
+            for f in "ClassShout.Classroom-win-$arch.zip" "ClassShout.Teacher-win-$arch.zip" "ClassShout.RelayServer-win-$arch.zip" \
+                     "ClassShout.Classroom-win-$arch-setup.exe" "ClassShout.Teacher-win-$arch-setup.exe" \
+                     "ClassShout.Classroom-win-$arch-update.zip" "ClassShout.Teacher-win-$arch-update.zip" \
+                     "ClassShout.Classroom-linux-$arch.tar.gz" "ClassShout.RelayServer-linux-$arch.tar.gz" \
+                     "ClassShout.Classroom-linux-$arch-update.zip" "ClassShout.Classroom-linux-$arch.AppImage" \
+                     "ClassShout.Classroom-linux-$arch.deb" "ClassShout.Classroom-linux-$arch.rpm"; do
+              [ -f "$f" ] || { echo "缺少附件：$f" >&2; exit 1; }
+            done
           done
           ls classshout-teacher-*.apk >/dev/null || { echo '缺少 APK' >&2; exit 1; }
 

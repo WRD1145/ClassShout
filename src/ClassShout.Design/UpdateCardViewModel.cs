@@ -28,6 +28,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     private bool _isBusy;
     private bool _isTesting;
     private UpdateAsset? _download;
+    private UpdateAsset? _checksum;
     private string? _pageUrl;
     private string _testSummary = string.Empty;
 
@@ -63,6 +64,13 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         AddMirrorCommand = new SimpleCommand(AddMirror, () => NewLabel.Trim().Length > 0);
 
         RefreshMirrors();
+        if (!OperatingSystem.IsAndroid()) _ = Task.Run(DesktopUpdate.CleanupOldStages);
+        try
+        {
+            if (!OperatingSystem.IsAndroid() && File.Exists(DesktopUpdate.ResultPath))
+                Status = new FileInfo(DesktopUpdate.ResultPath).Length <= 8192 ? File.ReadAllText(DesktopUpdate.ResultPath) : "上次更新结果过长，请查看本地日志。";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* 读取旧更新结果失败不影响使用。 */ }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -86,6 +94,12 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     /// 而"我要的是哪个包"这件事跟版本号无关 —— 精确匹配会因为版本号变了就找不到。
     /// </summary>
     public string? PreferredAssetSuffix { get; set; }
+
+    /// <summary>桌面端优先下载并安装更新包；Android 继续交给系统 APK 安装。</summary>
+    public string? DesktopAppId { get; set; }
+    public Action? RequestShutdown { get; set; }
+    public string DownloadButtonText => DesktopAppId is not null && _download?.Name.EndsWith("-update.zip", StringComparison.Ordinal) == true
+        ? "下载更新并重启" : "下载新版";
 
     /// <summary>镜像列表（内置的 + 自己加的），界面直接绑它。</summary>
     public ObservableCollection<MirrorRow> Mirrors { get; } = [];
@@ -192,6 +206,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
             }
 
             _settings.ProxyMode = value.Mode;
+            _checker.Configure(_settings);
             LocalSettings.SaveUpdate(_settings);
             Raise();
             Raise(nameof(ProxyHintText));
@@ -211,6 +226,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
             }
 
             _settings.ProxyUrl = value;
+            _checker.Configure(_settings);
             LocalSettings.SaveUpdate(_settings);
             Raise();
             Raise(nameof(ProxyHintText));
@@ -317,6 +333,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         LatestVersion = string.Empty;
         Notes = string.Empty;
         _download = null;
+        _checksum = null;
         _pageUrl = null;
         RaiseResults();
 
@@ -347,6 +364,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
                 LatestVersion = result.LatestVersion ?? string.Empty;
                 Notes = Summarize(result.Notes);
                 _download = PickAsset(result);
+                _checksum = result.FindAsset("SHA256SUMS.txt");
 
                 Status = _download is not null
                     ? $"发现新版本 v{result.LatestVersion}（{result.MirrorLabel} · {result.LatencyMs} ms · {result.ProxyDescription}）"
@@ -482,10 +500,48 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
     /// <summary>打开下载地址（镜像已在检查时换算好）。</summary>
     public async Task OpenDownloadAsync()
     {
-        if (_download is null || _openUrl is null)
+        if (_download is null || IsBusy)
         {
             return;
         }
+
+        if (DesktopAppId is { } appId && _download.Name == DesktopUpdate.AssetName(appId))
+        {
+            if (DesktopUpdate.InstallationHint(AppContext.BaseDirectory) is { } hint) { Status = hint; return; }
+            if (_checksum is null || RequestShutdown is null) { Status = "发行版缺少校验清单或更新服务不可用，未执行更新。"; return; }
+            IsBusy = true;
+            var state = Path.Combine(Path.GetTempPath(), "classshout-update-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(state);
+            try
+            {
+                Status = "正在下载并校验更新包，请稍候…";
+                var checksumPath = Path.Combine(state, "SHA256SUMS.txt");
+                await _checker.DownloadAsync(_checksum.Url, checksumPath, 128 * 1024).ConfigureAwait(true);
+                var records = File.ReadAllLines(checksumPath).Select(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                    .Where(parts => parts.Length == 2 && parts[1] == _download.Name).ToArray();
+                if (records.Length != 1 || !System.Text.RegularExpressions.Regex.IsMatch(records[0][0], "^[a-fA-F0-9]{64}$"))
+                    throw new IOException("更新包没有唯一有效的 SHA-256 校验记录。");
+                var archive = Path.Combine(state, "update.zip");
+                await _checker.DownloadAsync(_download.Url, archive, 512L * 1024 * 1024).ConfigureAwait(true);
+                using (var input = File.OpenRead(archive))
+                    if (!Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(input)).Equals(records[0][0], StringComparison.OrdinalIgnoreCase))
+                        throw new IOException("更新包 SHA-256 不匹配，已取消。");
+                var payload = Path.Combine(state, "payload");
+                await Task.Run(() => DesktopUpdate.Extract(archive, payload, appId, LatestVersion)).ConfigureAwait(true);
+                await Task.Run(() => DesktopUpdate.Launch(payload, AppContext.BaseDirectory, appId, LatestVersion)).ConfigureAwait(true);
+                Status = "更新包校验通过，正在退出并应用更新…";
+                RequestShutdown();
+            }
+            catch (Exception ex)
+            {
+                Status = "更新失败：" + ex.Message;
+                try { Directory.Delete(state, true); } catch (Exception cleanupError) when (cleanupError is IOException or UnauthorizedAccessException) { }
+            }
+            finally { IsBusy = false; }
+            return;
+        }
+
+        if (_openUrl is null) return;
 
         await _openUrl(_download.Url).ConfigureAwait(true);
         Status = $"已在浏览器里打开 {_download.Name} 的下载地址（走的是「{_settings.SelectedMirror.Label}」）。";
@@ -517,6 +573,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
 
     private void RefreshMirrors()
     {
+        _checker.Configure(_settings);
         Mirrors.Clear();
 
         foreach (var mirror in _settings.Mirrors)
@@ -555,6 +612,20 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
 
     private UpdateAsset? PickAsset(UpdateCheckResult result)
     {
+        if (DesktopAppId is { } appId && DesktopUpdate.InstallationHint(AppContext.BaseDirectory) is null
+            && result.FindAsset(DesktopUpdate.AssetName(appId)) is { } update) return update;
+        if (DesktopAppId is { } desktopId)
+        {
+            var product = desktopId == "classroom" ? "Classroom" : "Teacher";
+            if (Environment.GetEnvironmentVariable("APPIMAGE") is { Length: > 0 })
+                return result.FindAsset($"ClassShout.{product}-{DesktopUpdate.Runtime}.AppImage");
+            var marker = Path.Combine(AppContext.BaseDirectory, "classshout-package-manager");
+            if (File.Exists(marker))
+            {
+                var kind = File.ReadAllText(marker).Trim();
+                if (kind is "deb" or "rpm") return result.FindAsset($"ClassShout.{product}-{DesktopUpdate.Runtime}.{kind}");
+            }
+        }
         var exact = PreferredAssetName is { Length: > 0 }
             ? result.FindAsset(PreferredAssetName)
             : null;
@@ -568,6 +639,7 @@ public sealed class UpdateCardViewModel : INotifyPropertyChanged
         Raise(nameof(CanDownload));
         Raise(nameof(CanOpenPage));
         Raise(nameof(HasDownload));
+        Raise(nameof(DownloadButtonText));
         Raise(nameof(IsCustomProxy));
 
         // 光让属性变化还不够：按钮能不能点是命令的 CanExecute 说了算，

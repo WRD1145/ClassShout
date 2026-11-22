@@ -38,12 +38,15 @@
   </Style>
   <Style Selector="Button.voiceAction">
     <Setter Property="Background" Value="{DynamicResource Md3.Primary}" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnPrimary}" />
     <Setter Property="CornerRadius" Value="8" />
   </Style>
   <Style Selector="Button.voiceAction.recording">
     <Setter Property="Background" Value="{DynamicResource Md3.Error}" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnError}" />
   </Style>
   <Style Selector="Button.voiceAction:disabled">
     <Setter Property="Opacity" Value="0.65" />
+    <Setter Property="Foreground" Value="{DynamicResource Md3.OnSurfaceVariant}" />
   </Style>
 </Styles>

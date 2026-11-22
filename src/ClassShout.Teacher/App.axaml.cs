@@ -21,9 +21,9 @@ public partial class App : Application
         AvaloniaXamlLoader.Load(this);
         Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://ClassShout.Design/"))
         {
-            Source = new Uri(OperatingSystem.IsWindows()
-                ? "avares://ClassShout.Design/FluentDesktopTheme.axaml"
-                : "avares://ClassShout.Design/Md3Theme.axaml"),
+            Source = new Uri(OperatingSystem.IsAndroid()
+                ? "avares://ClassShout.Design/Md3Theme.axaml"
+                : "avares://ClassShout.Design/FluentDesktopTheme.axaml"),
         });
     }
 
@@ -44,6 +44,7 @@ public partial class App : Application
         switch (ApplicationLifetime)
         {
             case IClassicDesktopStyleApplicationLifetime desktop:
+                _viewModel.Update.RequestShutdown = () => desktop.Shutdown();
                 // 桌面头：手机比例窗口，用于在 PC 上调试手机界面
                 desktop.MainWindow = new MainWindow { DataContext = _viewModel };
                 _viewModel.StartTeacherExtensions();

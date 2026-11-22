@@ -45,6 +45,7 @@ param(
     [ValidateSet('Release', 'Debug')]
     [string]$Configuration = 'Release',
 
+    [ValidateSet('win-x64', 'win-arm64')]
     [string]$Runtime = 'win-x64',
 
     [switch]$FrameworkDependent,
@@ -75,6 +76,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 
 try {
+    $linuxRuntime = $Runtime.Replace("win-", "linux-")
     # ---------- 读取版本号 ----------
     $propsContent = Get-Content (Join-Path $repoRoot 'Directory.Build.props') -Raw
     $version = if ($ReleaseVersion) { $ReleaseVersion } else { ([xml]$propsContent).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1 }
@@ -340,14 +342,14 @@ try {
     # ---------- 中继服务器（Linux） ----------
     if ($IncludeLinuxServer) {
         Write-Host ''
-        Write-Host '[Linux] 发布 linux-x64（服务器 + 教室端）' -ForegroundColor Yellow
+        Write-Host "[Linux] 发布 $linuxRuntime（服务器 + 教室端）" -ForegroundColor Yellow
 
         $linuxOut = Join-Path $OutputRoot 'linux'
 
         # 同样不再单文件；两个应用各一个子目录（理由同 Windows）
         $linuxArgs = @(
             '-c', $Configuration
-            '-r', 'linux-x64'
+            '-r', $linuxRuntime
             '--self-contained=false'
             '-p:DebugType=none'
         )
@@ -361,7 +363,7 @@ try {
         }
 
         if (-not $FrameworkDependent) {
-            Install-PrivateRuntime -AppDir $serverLinuxOut -Rid 'linux-x64' -Project 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj'
+            Install-PrivateRuntime -AppDir $serverLinuxOut -Rid $linuxRuntime -Project 'src\ClassShout.RelayServer\ClassShout.RelayServer.csproj'
         }
 
         # Web SDK 会带出几个只对 IIS 有意义的文件，独立运行时用不到，清掉免得干扰部署
@@ -383,7 +385,7 @@ try {
         }
 
         if (-not $FrameworkDependent) {
-            Install-PrivateRuntime -AppDir $classroomLinuxOut -Rid 'linux-x64' -Project 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'
+            Install-PrivateRuntime -AppDir $classroomLinuxOut -Rid $linuxRuntime -Project 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'
         }
 
         Get-ChildItem $classroomLinuxOut -File |
@@ -666,29 +668,29 @@ $LaunchHint
 
     # 附件名一经发布就不要再改：README、历史发行版、别人的脚本都按它引用。
     New-AppArchive -SourceDir (Join-Path $windowsOut 'classroom') -RootName 'ClassShout.Classroom' `
-        -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-win-x64.zip') `
+        -TargetPath (Join-Path $releaseOut "ClassShout.Classroom-$Runtime.zip") `
         -LaunchName 'ClassShout.Classroom.exe' `
         -LaunchHint '教室端：首次启动若弹防火墙提示，勾选「专用网络」并允许。'
 
     New-AppArchive -SourceDir (Join-Path $windowsOut 'teacher') -RootName 'ClassShout.Teacher' `
-        -TargetPath (Join-Path $releaseOut 'ClassShout.Teacher-win-x64.zip') `
+        -TargetPath (Join-Path $releaseOut "ClassShout.Teacher-$Runtime.zip") `
         -LaunchName 'ClassShout.Teacher.Desktop.exe' `
         -LaunchHint '教师端（桌面）：手机上请装同一次发布里的 APK。'
 
     New-AppArchive -SourceDir (Join-Path $windowsOut 'server') -RootName 'ClassShout.RelayServer' `
-        -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-win-x64.zip') `
+        -TargetPath (Join-Path $releaseOut "ClassShout.RelayServer-$Runtime.zip") `
         -LaunchName 'ClassShout.RelayServer.exe' `
         -LaunchHint '中继服务器：常驻部署见文档「中继服务器」一节。'
 
     if ($IncludeLinuxServer) {
         New-AppArchive -SourceDir (Join-Path $OutputRoot 'linux\server') -RootName 'ClassShout.RelayServer' `
-            -TargetPath (Join-Path $releaseOut 'ClassShout.RelayServer-linux-x64.tar.gz') `
+            -TargetPath (Join-Path $releaseOut "ClassShout.RelayServer-$linuxRuntime.tar.gz") `
             -LaunchName 'ClassShout.RelayServer' `
             -LaunchHint '中继服务器（Linux）：解压后 chmod +x ClassShout.RelayServer 与 run.sh；用 run.sh 启动（它会设好 DOTNET_ROOT）。' `
             -Gzip
 
         New-AppArchive -SourceDir (Join-Path $OutputRoot 'linux\classroom') -RootName 'ClassShout.Classroom' `
-            -TargetPath (Join-Path $releaseOut 'ClassShout.Classroom-linux-x64.tar.gz') `
+            -TargetPath (Join-Path $releaseOut "ClassShout.Classroom-$linuxRuntime.tar.gz") `
             -LaunchName 'ClassShout.Classroom' `
             -LaunchHint '教室端（Linux）：解压后 chmod +x ClassShout.Classroom 与 run.sh（用 run.sh 启动）；朗读需要有 spd-say 或 espeak-ng。' `
             -Gzip
@@ -717,7 +719,7 @@ $LaunchHint
                 Exe = 'ClassShout.Classroom.exe'
                 Project = 'src\ClassShout.Classroom\ClassShout.Classroom.csproj'
                 Framework = 'net10.0-windows'
-                Asset = 'ClassShout.Classroom-win-x64-setup.exe'
+                Asset = "ClassShout.Classroom-$Runtime-setup.exe"
             },
             @{
                 Id = 'teacher'
@@ -726,7 +728,7 @@ $LaunchHint
                 Exe = 'ClassShout.Teacher.Desktop.exe'
                 Project = 'src\ClassShout.Teacher.Desktop\ClassShout.Teacher.Desktop.csproj'
                 Framework = 'net10.0'
-                Asset = 'ClassShout.Teacher-win-x64-setup.exe'
+                Asset = "ClassShout.Teacher-$Runtime-setup.exe"
             }
         )
 
@@ -749,6 +751,10 @@ $LaunchHint
                 Remove-Item -Force -ErrorAction SilentlyContinue
 
             Sign-ReleaseWindowsFiles -Directory $payloadDir
+            & python (Join-Path $PSScriptRoot 'create-update-package.py') --source $payloadDir `
+                --output (Join-Path $releaseOut ("ClassShout."+$(if ($app.Id -eq 'classroom') {'Classroom'} else {'Teacher'})+"-$Runtime-update.zip")) `
+                --app $app.Id --version $version --runtime $Runtime
+            if ($LASTEXITCODE -ne 0) { throw 'Windows 更新包生成失败。' }
             # 2) 压成一个 zip 内嵌进安装程序。
             #    顶层不带目录：解开时直接落在安装目录里。
             $payloadZip = Join-Path $setupOut "$($app.Id)-payload.zip"
@@ -778,7 +784,7 @@ $LaunchHint
             $payloadZipFull = (Resolve-Path $payloadZip).Path
             $infoPathFull = (Resolve-Path $infoPath).Path
 
-            & dotnet publish 'tools\ClassShout.Setup\ClassShout.Setup.csproj' -c $Configuration `
+            & dotnet publish 'tools\ClassShout.Setup\ClassShout.Setup.csproj' -c $Configuration -r $Runtime `
                 -p:PayloadZip="$payloadZipFull" -p:PayloadInfo="$infoPathFull" @versionArgs `
                 -o $setupPublish --nologo -v q
 
@@ -807,6 +813,22 @@ $LaunchHint
 
             Remove-Item $payloadDir -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item $setupPublish -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # 未选择安装器时，也必须产出两个自包含更新包。
+    if (-not $Installer) {
+        foreach ($app in @(
+            @{Id='classroom'; Product='Classroom'; Framework='net10.0-windows'; Project='src/ClassShout.Classroom/ClassShout.Classroom.csproj'},
+            @{Id='teacher'; Product='Teacher'; Framework='net10.0'; Project='src/ClassShout.Teacher.Desktop/ClassShout.Teacher.Desktop.csproj'}
+        )) {
+            $payloadDir = Join-Path $OutputRoot ("update-payload-"+$app.Id)
+            & dotnet publish $app.Project -c $Configuration -r $Runtime -f $app.Framework --self-contained=true -p:DebugType=none @versionArgs -o $payloadDir --nologo -v q
+            if ($LASTEXITCODE -ne 0) { throw 'Windows 更新内容发布失败。' }
+            Sign-ReleaseWindowsFiles -Directory $payloadDir
+            & python (Join-Path $PSScriptRoot 'create-update-package.py') --source $payloadDir --output (Join-Path $releaseOut ("ClassShout."+$app.Product+"-$Runtime-update.zip")) --app $app.Id --version $version --runtime $Runtime
+            if ($LASTEXITCODE -ne 0) { throw 'Windows 更新包生成失败。' }
+            Remove-Item $payloadDir -Recurse -Force
         }
     }
 
