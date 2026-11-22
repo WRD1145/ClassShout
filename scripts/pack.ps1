@@ -751,7 +751,7 @@ $LaunchHint
                 Remove-Item -Force -ErrorAction SilentlyContinue
 
             Sign-ReleaseWindowsFiles -Directory $payloadDir
-            & python (Join-Path $PSScriptRoot 'create-update-package.py') --source $payloadDir `
+            & python -X utf8 (Join-Path $PSScriptRoot 'create-update-package.py') --source $payloadDir `
                 --output (Join-Path $releaseOut ("ClassShout."+$(if ($app.Id -eq 'classroom') {'Classroom'} else {'Teacher'})+"-$Runtime-update.zip")) `
                 --app $app.Id --version $version --runtime $Runtime
             if ($LASTEXITCODE -ne 0) { throw 'Windows 更新包生成失败。' }
@@ -826,7 +826,7 @@ $LaunchHint
             & dotnet publish $app.Project -c $Configuration -r $Runtime -f $app.Framework --self-contained=true -p:DebugType=none @versionArgs -o $payloadDir --nologo -v q
             if ($LASTEXITCODE -ne 0) { throw 'Windows 更新内容发布失败。' }
             Sign-ReleaseWindowsFiles -Directory $payloadDir
-            & python (Join-Path $PSScriptRoot 'create-update-package.py') --source $payloadDir --output (Join-Path $releaseOut ("ClassShout."+$app.Product+"-$Runtime-update.zip")) --app $app.Id --version $version --runtime $Runtime
+            & python -X utf8 (Join-Path $PSScriptRoot 'create-update-package.py') --source $payloadDir --output (Join-Path $releaseOut ("ClassShout."+$app.Product+"-$Runtime-update.zip")) --app $app.Id --version $version --runtime $Runtime
             if ($LASTEXITCODE -ne 0) { throw 'Windows 更新包生成失败。' }
             Remove-Item $payloadDir -Recurse -Force
         }
